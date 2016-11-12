@@ -1028,6 +1028,10 @@ class GalleryBooru( Gallery ):
         image_url = urlparse.urljoin( url_base, image_url )
         
         tags = []
+
+        if 'e621' in url_base:
+            # Dumb hack to get IDs
+            tags.append('id:' + url_base.split('/')[-2])
         
         for ( tag_classname, namespace ) in tag_classnames_to_namespaces.items():
             
