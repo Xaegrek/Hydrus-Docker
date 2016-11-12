@@ -401,7 +401,7 @@ class HTTPConnection( object ):
         
         ( self._scheme, self._host, self._port ) = location
         
-        self._timeout = 30
+        self._timeout = 300
         
         self.lock = threading.Lock()
         
