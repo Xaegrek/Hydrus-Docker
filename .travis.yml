@@ -8,7 +8,7 @@ addons:
       - python2.7-dev 
       - python-numpy 
       - python-opencv 
-      - python-wx3
+      - python-wxgtk3
 
 before_install:
   - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then brew update ; fi
