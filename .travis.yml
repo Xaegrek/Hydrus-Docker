@@ -7,8 +7,7 @@ before_install:
   - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then brew upgrade ; fi
   - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then brew install opencv wxpython ; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get update ; fi
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get -y upgrade ; fi
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get install python2.7-dev python-numpy python-opencv python-wxgtk3 ; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get -y install python2.7-dev python-numpy python-opencv python-wxgtk3 ; fi
 
 install:
   - pip install -r requirements.txt
