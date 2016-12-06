@@ -11,7 +11,7 @@ import ClientGUIDialogs
 import ClientDownloading
 import ClientGUIOptionsPanels
 import ClientGUIPredicates
-import ClientGUIScrolledPanels
+import ClientGUIScrolledPanelsEdit
 import ClientGUITopLevelWindows
 import ClientImporting
 import ClientMedia
@@ -3063,7 +3063,7 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         with ClientGUITopLevelWindows.DialogEdit( self, 'file import status' ) as dlg:
             
-            panel = ClientGUIScrolledPanels.EditSeedCachePanel( dlg, HydrusGlobals.client_controller, dupe_seed_cache )
+            panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( dlg, HydrusGlobals.client_controller, dupe_seed_cache )
             
             dlg.SetPanel( panel )
             
@@ -3492,16 +3492,16 @@ class DialogManageRatings( ClientGUIDialogs.Dialog ):
                 
                 rating_state = control.GetRatingState()
                 
-                if rating_state != original_rating_state:
+                if rating_state == ClientRatings.NULL:
                     
-                    if rating_state == ClientRatings.NULL:
-                        
-                        rating = None
-                        
-                    else:
-                        
-                        rating = control.GetRating()
-                        
+                    rating = None
+                    
+                else:
+                    
+                    rating = control.GetRating()
+                    
+                
+                if rating != original_rating:
                     
                     content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( rating, hashes ) )
                     
@@ -3511,7 +3511,7 @@ class DialogManageRatings( ClientGUIDialogs.Dialog ):
             
             return service_keys_to_content_updates
             
-        #
+        
     
 class DialogManageRegexFavourites( ClientGUIDialogs.Dialog ):
     
@@ -5561,7 +5561,7 @@ class DialogManageSubscriptions( ClientGUIDialogs.Dialog ):
             
             with ClientGUITopLevelWindows.DialogEdit( self, 'file import status' ) as dlg:
                 
-                panel = ClientGUIScrolledPanels.EditSeedCachePanel( dlg, HydrusGlobals.client_controller, dupe_seed_cache )
+                panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( dlg, HydrusGlobals.client_controller, dupe_seed_cache )
                 
                 dlg.SetPanel( panel )
                 
@@ -5677,7 +5677,10 @@ class DialogManageTagCensorship( ClientGUIDialogs.Dialog ):
         
         page = self._tag_services.GetCurrentPage()
         
-        page.SetTagBoxFocus()
+        if page is not None:
+            
+            page.SetTagBoxFocus()
+            
         
     
     def EventOK( self, event ):
@@ -5695,7 +5698,10 @@ class DialogManageTagCensorship( ClientGUIDialogs.Dialog ):
         
         page = self._tag_services.GetCurrentPage()
         
-        wx.CallAfter( page.SetTagBoxFocus )
+        if page is not None:
+            
+            wx.CallAfter( page.SetTagBoxFocus )
+            
         
     
     class _Panel( wx.Panel ):
@@ -5846,7 +5852,10 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
         
         page = self._tag_repositories.GetCurrentPage()
         
-        page.SetTagBoxFocus()
+        if page is not None:
+            
+            page.SetTagBoxFocus()
+            
         
     
     def EventMenu( self, event ):
@@ -5884,7 +5893,10 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
         
         page = self._tag_repositories.GetCurrentPage()
         
-        wx.CallAfter( page.SetTagBoxFocus )
+        if page is not None:
+            
+            wx.CallAfter( page.SetTagBoxFocus )
+            
         
     
     class _Panel( wx.Panel ):
@@ -6432,7 +6444,10 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
         
         page = self._tag_repositories.GetCurrentPage()
         
-        page.SetTagBoxFocus()
+        if page is not None:
+            
+            page.SetTagBoxFocus()
+            
         
     
     def EventMenu( self, event ):
@@ -6470,7 +6485,10 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
         
         page = self._tag_repositories.GetCurrentPage()
         
-        wx.CallAfter( page.SetTagBoxFocus )
+        if page is not None:
+            
+            wx.CallAfter( page.SetTagBoxFocus )
+            
         
     
     class _Panel( wx.Panel ):

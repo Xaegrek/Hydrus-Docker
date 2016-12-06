@@ -64,6 +64,13 @@ def GenerateNumpyImage( path ):
             
         else:
             
+            if numpy_image.dtype == 'uint16':
+                
+                numpy_image /= 256
+                
+                numpy_image = numpy.array( numpy_image, dtype = 'uint8' )
+                
+            
             shape = numpy_image.shape
             
             if len( shape ) == 2:
@@ -102,7 +109,7 @@ def GenerateNumPyImageFromPILImage( pil_image ):
     
     return numpy.fromstring( s, dtype = 'uint8' ).reshape( ( h, w, len( s ) // ( w * h ) ) )
     
-def GeneratePerceptualHash( path ):
+def GenerateShapePerceptualHashes( path ):
     
     numpy_image = GenerateNumpyImage( path )
     
@@ -118,7 +125,7 @@ def GeneratePerceptualHash( path ):
         
         numpy_image_bgr = numpy_image[ :, :, :3 ]
         
-        numpy_image_gray_bare = cv2.cvtColor( numpy_image_bgr, cv2.COLOR_BGR2GRAY )
+        numpy_image_gray_bare = cv2.cvtColor( numpy_image_bgr, cv2.COLOR_RGB2GRAY )
         
         # create a white greyscale canvas
         
@@ -130,7 +137,7 @@ def GeneratePerceptualHash( path ):
         
     else:
         
-        numpy_image_gray = cv2.cvtColor( numpy_image, cv2.COLOR_BGR2GRAY )
+        numpy_image_gray = cv2.cvtColor( numpy_image, cv2.COLOR_RGB2GRAY )
         
     
     numpy_image_tiny = cv2.resize( numpy_image_gray, ( 32, 32 ), interpolation = cv2.INTER_AREA )
@@ -173,11 +180,13 @@ def GeneratePerceptualHash( path ):
         bytes.append( byte )
         
     
-    answer = str( bytearray( bytes ) )
+    phash = str( bytearray( bytes ) )
+    
+    phashes = [ phash ]
     
     # we good
     
-    return answer
+    return phashes
     
 def ResizeNumpyImage( mime, numpy_image, ( target_x, target_y ) ):
     

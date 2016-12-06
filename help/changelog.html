@@ -8,6 +8,77 @@
 		<div class="content">
 			<h3>changelog</h3>
 			<ul>
+				<li><h3>version 234</h3></li>
+				<ul>
+					<li>the action choice workflow in the manage tags dialog now merges decisions for multiple tag entry events</li>
+					<li>the button dialog that pops up on the new merge manage tags workflow has button tooltips to better describe the proposed action's tag and file combinations</li>
+					<li>the manage tags dialog only requests one petition reason for an above merged multitag petition event</li>
+					<li>perceptual hashes are now stored in the cache db (moved from the preferably leaner main db)</li>
+					<li>the database now supports multiple perceptual hashes per file</li>
+					<li>fleshed out the perceptual hash vptree generation and maintenance code</li>
+					<li>added option for main gui title to options->gui--it even updates live</li>
+					<li>added unicode path support when importing serialised pngs</li>
+					<li>added unicode path support when exporting serialised pngs</li>
+					<li>exporting a serialised png now reports success via the export button, which will temporarily relabel itself</li>
+					<li>when a GET network connection fails during the read phase due to an unexpected timeout, the request will be reattempted a couple of times, like failed connection initialisations currently are</li>
+					<li>escape key now closes scrolledpanelframes (review services or import status frames)</li>
+					<li>manage tags dialog and frame now closes due to escape key correctly</li>
+					<li>fixed a size calculation bug that was not initially drawing scrollbars on manage options and any other listbook-containing scrolling panel when the screen is too small to show the whole dialog</li>
+					<li>undo menu now works on the new menu system</li>
+					<li>cleaned up some bad gui-thread interaction in the file import dialog</li>
+					<li>fixed file->restart in the built release, including when the install path includes a space</li>
+					<li>the trash service no longer records which files it has physically deleted, as this information is not used and is redundant compared to the existing local files' deleted record (existing records will be deleted on update)</li>
+					<li>the subscription daemon will wait 90 seconds after boot before triggering--quitting the client before then will result in subs not being checked</li>
+				</ul>
+				<li><h3>version 233</h3></li>
+				<ul>
+					<li>made a plan for faster dupe search</li>
+					<li>created skeleton of db tables for faster dupe search</li>
+					<li>wrote out search algorithm for faster dupe search when the rest is ready</li>
+					<li>updated search algorithm and skeleton to support a future multiframe (i.e. gif/video) similar files comparison</li>
+					<li>the os x release now has 'client' as the main client executable</li>
+					<li>the os x release now includes the server, under the 'server' executable</li>
+					<li>added studio (128,0,0) and meta (0,0,0) default namespace colours</li>
+					<li>the 'add all' button on the file lookup tag suggestions panel now will only ever add--it won't remove/rescind pend</li>
+					<li>the password system now supports non-ascii input (be careful though, as even a subtle change in keyboard encoding that nonetheless may have the same visual characters will likely be considered a different password)</li>
+					<li>fixed the 'nonetype has no dtype' rendering problem introduced by last week's 16-bit channel fix (this mostly affected static gifs)</li>
+					<li>fixed non-null ratings changes in the numerical ratings dialog</li>
+					<li>fixed culling and adding variables not initialising on the edit html formula panel</li>
+					<li>fixed the htmlparser attribute fetcher to deal with both single value attrs ('id') and multiple value attrs ('class'). in the latter case, the many values will be joined up, as how they appear in html</li>
+					<li>tweaked disk cache timings a little more to account for more scenarios--it now also reports itself to the shutdown splash screen</li>
+				</ul>
+				<li><h3>version 232</h3></li>
+				<ul>
+					<li>finished png object sharing system, created some gui for it</li>
+					<li>switched the top half of the new png export to wx code, which can render with prettier system fonts</li>
+					<li>you can now 'export' parsing scripts to png from manage parsing scripts for easy sharing</li>
+					<li>you can also 'import' parsing script pngs in the same dialog!</li>
+					<li>the file lookup tag suggestions panel now listens for media update events (so if you browse the media viewer with manage tags open, it'll keep up with the current file)</li>
+					<li>added a 'add all' button to quickly add all tags from file lookup suggested tags panel</li>
+					<li>created a 'script management' control for file lookup suggested tags panel and added some script text status updates for it (progress gauge doesn't do anything yet)</li>
+					<li>added basic 'cancel' support to script management control--mid-http cancel support will come with the gauges</li>
+					<li>added url support to thread notification objects, and hooked script code into it</li>
+					<li>added a url menu button to script management control, so you can launch any parsed urls the script found in your browser</li>
+					<li>html parsing formulas now support positive and negative front and end character culling</li>
+					<li>html parsing formulas now support prepending and appending arbitrary text</li>
+					<li>added some more pretty text to the html formula summary to explain when they do the new culling or adding</li>
+					<li>script 404s and other network errors are now caught neatly and reported</li>
+					<li>link node 404s and other network errors are now reported and recovered from</li>
+					<li>fixed favourite file lookup script selection on initialisation</li>
+					<li>fixed parsing veto test to include membership of search string in result, not just exact match</li>
+					<li>fixed html formula tag attribute fetching</li>
+					<li>updated os x release to python 2.7.10</li>
+					<li>fixed os x about window</li>
+					<li>fixed v231 linux release image rendering crash</li>
+					<li>updated linux release to wx 3.0.2.0</li>
+					<li>updated linux release to opencv 3.1.0</li>
+					<li>fixed rendering for 16-bit-per-channel images</li>
+					<li>fixed a potential out-of-order settagboxfocus event issue on panel initialisation</li>
+					<li>created a 'menubutton' control and switched existing code over</li>
+					<li>created some 'nullipotent panel' dialog code to handle some new stuff</li>
+					<li>misc fixes</li>
+					<li>bunch of misc refactoring</li>
+				</ul>
 				<li><h3>version 231</h3></li>
 				<ul>
 					<li>added file lookup scripts suggested tags control and appropriate options panel</li>

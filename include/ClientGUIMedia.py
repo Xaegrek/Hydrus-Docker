@@ -7,7 +7,7 @@ import ClientGUICommon
 import ClientGUIDialogs
 import ClientGUIDialogsManage
 import ClientGUICanvas
-import ClientGUIScrolledPanels
+import ClientGUIScrolledPanelsManagement
 import ClientGUITopLevelWindows
 import ClientMedia
 import collections
@@ -799,7 +799,7 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
             with ClientGUITopLevelWindows.DialogManage( self, title, frame_key ) as dlg:
                 
-                panel = ClientGUIScrolledPanels.ManageTagsPanel( dlg, self._file_service_key, self._selected_media )
+                panel = ClientGUIScrolledPanelsManagement.ManageTagsPanel( dlg, self._file_service_key, self._selected_media )
                 
                 dlg.SetPanel( panel )
                 
@@ -2175,7 +2175,7 @@ class MediaPanelThumbnails( MediaPanel ):
                     
                     if len( potential_clean_indices_to_steal ) > 0:
                         
-                        index_to_steal = potential_clean_indices_to_steal.pop()
+                        index_to_steal = potential_clean_indices_to_steal.pop( 0 )
                         
                         self._DirtyPage( index_to_steal )
                         
