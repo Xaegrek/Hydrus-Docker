@@ -1017,12 +1017,12 @@ class GalleryBooru( Gallery ):
             
         except Exception as e:
             
-            raise HydrusExceptions.NetworkException( 'Could not parse a download link for ' + url_base + '!' + os.linesep + HydrusData.ToUnicode( e ) )
+            raise HydrusExceptions.DataMissing( 'Could not parse a download link for ' + url_base + '!' + os.linesep + HydrusData.ToUnicode( e ) )
             
         
         if image_url is None:
             
-            raise HydrusExceptions.NetworkException( 'Could not parse a download link for ' + url_base + '!' )
+            raise HydrusExceptions.DataMissing( 'Could not parse a download link for ' + url_base + '!' )
             
         
         image_url = urlparse.urljoin( url_base, image_url )
@@ -1044,6 +1044,11 @@ class GalleryBooru( Gallery ):
                 if tag_list_entry.name == 'a': links.append( tag_list_entry )
                 
                 for link in links:
+                    
+                    if link.string is None:
+                        
+                        continue
+                        
                     
                     if link.string not in ( '?', '-', '+' ):
                         

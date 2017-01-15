@@ -17,6 +17,7 @@ import HydrusSerialisable
 import HydrusSessions
 import HydrusTags
 import HydrusThreading
+import HydrusVideoHandling
 import ClientConstants as CC
 import ClientDB
 import ClientGUI
@@ -195,15 +196,17 @@ class Controller( HydrusController.HydrusController ):
             
         elif mouse_position != self._last_mouse_position:
             
-            idle_before = self.CurrentlyIdle()
+            idle_before_position_update = self.CurrentlyIdle()
             
             self._timestamps[ 'last_mouse_action' ] = HydrusData.GetNow()
             
             self._last_mouse_position = mouse_position
             
-            idle_after = self.CurrentlyIdle()
+            idle_after_position_update = self.CurrentlyIdle()
             
-            if idle_before != idle_after:
+            move_knocked_us_out_of_idle = ( not idle_before_position_update ) and idle_after_position_update
+            
+            if move_knocked_us_out_of_idle:
                 
                 self.pub( 'refresh_status' )
                 
@@ -508,6 +511,11 @@ class Controller( HydrusController.HydrusController ):
         return self._db.GetUpdatesDir()
         
     
+    def GoodTimeToDoForegroundWork( self ):
+        
+        return not self._gui.CurrentlyBusy()
+        
+    
     def InitModel( self ):
         
         self.pub( 'splash_set_title_text', 'booting db...' )
@@ -520,6 +528,14 @@ class Controller( HydrusController.HydrusController ):
         self._new_options = self.Read( 'serialisable', HydrusSerialisable.SERIALISABLE_TYPE_CLIENT_OPTIONS )
         
         HC.options = self._options
+        
+        if self._new_options.GetBoolean( 'use_system_ffmpeg' ):
+            
+            if HydrusVideoHandling.FFMPEG_PATH.startswith( HC.BIN_DIR ):
+                
+                HydrusVideoHandling.FFMPEG_PATH = os.path.basename( HydrusVideoHandling.FFMPEG_PATH )
+                
+            
         
         self._services_manager = ClientCaches.ServicesManager( self )
         
@@ -614,16 +630,17 @@ class Controller( HydrusController.HydrusController ):
         if not self._no_daemons:
             
             self._daemons.append( HydrusThreading.DAEMONWorker( self, 'CheckMouseIdle', ClientDaemons.DAEMONCheckMouseIdle, period = 10 ) )
-            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'DownloadFiles', ClientDaemons.DAEMONDownloadFiles, ( 'notify_new_downloads', 'notify_new_permissions' ) ) )
             self._daemons.append( HydrusThreading.DAEMONWorker( self, 'SynchroniseAccounts', ClientDaemons.DAEMONSynchroniseAccounts, ( 'permissions_are_stale', ) ) )
-            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'SynchroniseSubscriptions', ClientDaemons.DAEMONSynchroniseSubscriptions, ( 'notify_restart_subs_sync_daemon', 'notify_new_subscriptions' ), init_wait = 90 ) )
             
-            self._daemons.append( HydrusThreading.DAEMONBigJobWorker( self, 'CheckImportFolders', ClientDaemons.DAEMONCheckImportFolders, ( 'notify_restart_import_folders_daemon', 'notify_new_import_folders' ), period = 180 ) )
-            self._daemons.append( HydrusThreading.DAEMONBigJobWorker( self, 'CheckExportFolders', ClientDaemons.DAEMONCheckExportFolders, ( 'notify_restart_export_folders_daemon', 'notify_new_export_folders' ), period = 180 ) )
-            self._daemons.append( HydrusThreading.DAEMONBigJobWorker( self, 'MaintainTrash', ClientDaemons.DAEMONMaintainTrash, init_wait = 60 ) )
-            self._daemons.append( HydrusThreading.DAEMONBigJobWorker( self, 'RebalanceClientFiles', ClientDaemons.DAEMONRebalanceClientFiles, period = 3600 ) )
-            self._daemons.append( HydrusThreading.DAEMONBigJobWorker( self, 'SynchroniseRepositories', ClientDaemons.DAEMONSynchroniseRepositories, ( 'notify_restart_repo_sync_daemon', 'notify_new_permissions' ), period = 4 * 3600 ) )
-            self._daemons.append( HydrusThreading.DAEMONBigJobWorker( self, 'UPnP', ClientDaemons.DAEMONUPnP, ( 'notify_new_upnp_mappings', ), init_wait = 120, pre_callable_wait = 6 ) )
+            self._daemons.append( HydrusThreading.DAEMONForegroundWorker( self, 'DownloadFiles', ClientDaemons.DAEMONDownloadFiles, ( 'notify_new_downloads', 'notify_new_permissions' ) ) )
+            self._daemons.append( HydrusThreading.DAEMONForegroundWorker( self, 'SynchroniseSubscriptions', ClientDaemons.DAEMONSynchroniseSubscriptions, ( 'notify_restart_subs_sync_daemon', 'notify_new_subscriptions' ), init_wait = 60, pre_call_wait = 3 ) )
+            self._daemons.append( HydrusThreading.DAEMONForegroundWorker( self, 'CheckImportFolders', ClientDaemons.DAEMONCheckImportFolders, ( 'notify_restart_import_folders_daemon', 'notify_new_import_folders' ), period = 180 ) )
+            self._daemons.append( HydrusThreading.DAEMONForegroundWorker( self, 'CheckExportFolders', ClientDaemons.DAEMONCheckExportFolders, ( 'notify_restart_export_folders_daemon', 'notify_new_export_folders' ), period = 180 ) )
+            
+            self._daemons.append( HydrusThreading.DAEMONBackgroundWorker( self, 'MaintainTrash', ClientDaemons.DAEMONMaintainTrash, init_wait = 60 ) )
+            self._daemons.append( HydrusThreading.DAEMONBackgroundWorker( self, 'RebalanceClientFiles', ClientDaemons.DAEMONRebalanceClientFiles, period = 3600 ) )
+            self._daemons.append( HydrusThreading.DAEMONBackgroundWorker( self, 'SynchroniseRepositories', ClientDaemons.DAEMONSynchroniseRepositories, ( 'notify_restart_repo_sync_daemon', 'notify_new_permissions' ), period = 4 * 3600, pre_call_wait = 3 ) )
+            self._daemons.append( HydrusThreading.DAEMONBackgroundWorker( self, 'UPnP', ClientDaemons.DAEMONUPnP, ( 'notify_new_upnp_mappings', ), init_wait = 120, pre_call_wait = 6 ) )
             
             self._daemons.append( HydrusThreading.DAEMONQueue( self, 'FlushRepositoryUpdates', ClientDaemons.DAEMONFlushServiceUpdates, 'service_updates_delayed', period = 5 ) )
             
@@ -642,6 +659,11 @@ class Controller( HydrusController.HydrusController ):
         if self._db.IsDBUpdated():
             
             HydrusData.ShowText( 'The client has updated to version ' + str( HC.SOFTWARE_VERSION ) + '!' )
+            
+        
+        for message in self._db.GetInitialMessages():
+            
+            HydrusData.ShowText( message )
             
         
     
@@ -670,9 +692,9 @@ class Controller( HydrusController.HydrusController ):
             loaded_into_disk_cache = HydrusGlobals.client_controller.Read( 'load_into_disk_cache', stop_time = disk_cache_stop_time, caller_limit = disk_cache_maintenance_mb * 1024 * 1024 )
             
         
-        self.WriteInterruptable( 'vacuum', stop_time = stop_time )
+        self.WriteInterruptable( 'maintain_similar_files', stop_time = stop_time )
         
-        self.pub( 'splash_set_status_text', 'analyzing' )
+        self.WriteInterruptable( 'vacuum', stop_time = stop_time )
         
         self.WriteInterruptable( 'analyze', stop_time = stop_time )
         
@@ -871,7 +893,7 @@ class Controller( HydrusController.HydrusController ):
                         
                         import ClientLocalServer
                         
-                        self._local_service = reactor.listenTCP( port, ClientLocalServer.HydrusServiceLocal( CC.LOCAL_FILE_SERVICE_KEY, HC.LOCAL_FILE, 'This is the local file service.' ), interface = '127.0.0.1' )
+                        self._local_service = reactor.listenTCP( port, ClientLocalServer.HydrusServiceLocal( CC.COMBINED_LOCAL_FILE_SERVICE_KEY, HC.COMBINED_LOCAL_FILE, 'This is the local file service.' ), interface = '127.0.0.1' )
                         
                         try:
                             

@@ -402,7 +402,7 @@ class EditNodes( wx.Panel ):
         self._referral_url_callable = referral_url_callable
         self._example_data_callable = example_data_callable
         
-        self._nodes = ClientGUICommon.SaneListCtrl( self, 200, [ ( 'name', 120 ), ( 'node type', 80 ), ( 'produces', -1 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit, use_display_tuple_for_sort = True )
+        self._nodes = ClientGUICommon.SaneListCtrlForSingleObject( self, 200, [ ( 'name', 120 ), ( 'node type', 80 ), ( 'produces', -1 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
         
         menu_items = []
         
@@ -425,9 +425,9 @@ class EditNodes( wx.Panel ):
         
         for node in nodes:
             
-            ( display_tuple, data_tuple ) = self._ConvertNodeToTuples( node )
+            ( display_tuple, sort_tuple ) = self._ConvertNodeToTuples( node )
             
-            self._nodes.Append( display_tuple, data_tuple )
+            self._nodes.Append( display_tuple, sort_tuple, node )
             
         
         #
@@ -453,7 +453,56 @@ class EditNodes( wx.Panel ):
         
         ( name, node_type, produces ) = node.ToPrettyStrings()
         
-        return ( ( name, node_type, produces ), ( node, node_type, produces ) )
+        return ( ( name, node_type, produces ), ( name, node_type, produces ) )
+        
+    
+    def _GetExportObject( self ):
+        
+        to_export = HydrusSerialisable.SerialisableList()
+        
+        for node in self._nodes.GetSelectedClientData():
+            
+            to_export.append( node )
+            
+        
+        if len( to_export ) == 0:
+            
+            return None
+            
+        elif len( to_export ) == 1:
+            
+            return to_export[0]
+            
+        else:
+            
+            return to_export
+            
+        
+    
+    def _ImportObject( self, obj ):
+        
+        if isinstance( obj, HydrusSerialisable.SerialisableList ):
+            
+            for sub_obj in obj:
+                
+                self._ImportObject( sub_obj )
+                
+            
+        else:
+            
+            if isinstance( obj, ( ClientParsing.ParseNodeContent, ClientParsing.ParseNodeContentLink ) ):
+                
+                node = obj
+                
+                ( display_tuple, sort_tuple ) = self._ConvertNodeToTuples( node )
+                
+                self._nodes.Append( display_tuple, sort_tuple, node )
+                
+            else:
+                
+                wx.MessageBox( 'That was not a script--it was a: ' + type( obj ).__name__ )
+                
+            
         
     
     def AddContentNode( self ):
@@ -493,22 +542,22 @@ class EditNodes( wx.Panel ):
                 
                 new_node = panel.GetValue()
                 
-                ( display_tuple, data_tuple ) = self._ConvertNodeToTuples( new_node )
+                ( display_tuple, sort_tuple ) = self._ConvertNodeToTuples( new_node )
                 
-                self._nodes.Append( display_tuple, data_tuple )
+                self._nodes.Append( display_tuple, sort_tuple, new_node )
                 
             
         
     
     def Copy( self ):
         
-        for i in self._nodes.GetAllSelected():
+        export_object = self._GetExportObject()
+        
+        if export_object is not None:
             
-            ( node, node_type, produces ) = self._nodes.GetClientData( i )
+            json = export_object.DumpToString()
             
-            node_json = node.DumpToString()
-            
-            HydrusGlobals.client_controller.pub( 'clipboard', 'text', node_json )
+            HydrusGlobals.client_controller.pub( 'clipboard', 'text', json )
             
         
     
@@ -519,22 +568,15 @@ class EditNodes( wx.Panel ):
     
     def Duplicate( self ):
         
-        nodes_to_dupe = []
-        
-        for i in self._nodes.GetAllSelected():
-            
-            ( node, node_type, produces ) = self._nodes.GetClientData( i )
-            
-            nodes_to_dupe.append( node )
-            
+        nodes_to_dupe = self._nodes.GetSelectedClientData()
         
         for node in nodes_to_dupe:
             
             dupe_node = node.Duplicate()
             
-            ( display_tuple, data_tuple ) = self._ConvertNodeToTuples( dupe_node )
+            ( display_tuple, sort_tuple ) = self._ConvertNodeToTuples( dupe_node )
             
-            self._nodes.Append( display_tuple, data_tuple )
+            self._nodes.Append( display_tuple, sort_tuple, dupe_node )
             
         
     
@@ -542,7 +584,7 @@ class EditNodes( wx.Panel ):
         
         for i in self._nodes.GetAllSelected():
             
-            ( node, node_type, produces ) = self._nodes.GetClientData( i )
+            node = self._nodes.GetClientData( i )
             
             with ClientGUITopLevelWindows.DialogEdit( self, 'edit node' ) as dlg:
                 
@@ -566,9 +608,9 @@ class EditNodes( wx.Panel ):
                     
                     edited_node = panel.GetValue()
                     
-                    ( display_tuple, data_tuple ) = self._ConvertNodeToTuples( edited_node )
+                    ( display_tuple, sort_tuple ) = self._ConvertNodeToTuples( edited_node )
                     
-                    self._nodes.UpdateRow( i, display_tuple, data_tuple )
+                    self._nodes.UpdateRow( i, display_tuple, sort_tuple, edited_node )
                     
                 
                 
@@ -577,9 +619,7 @@ class EditNodes( wx.Panel ):
     
     def GetValue( self ):
         
-        nodes = [ node for ( node, node_type, produces ) in self._nodes.GetClientData() ]
-        
-        return nodes
+        return self._nodes.GetClientData()
         
     
     def Paste( self ):
@@ -598,14 +638,7 @@ class EditNodes( wx.Panel ):
                 
                 obj = HydrusSerialisable.CreateFromString( raw_text )
                 
-                if isinstance( obj, ( ClientParsing.ParseNodeContent, ClientParsing.ParseNodeContentLink ) ):
-                    
-                    node = obj
-                    
-                    ( display_tuple, data_tuple ) = self._ConvertNodeToTuples( node )
-                    
-                    self._nodes.Append( display_tuple, data_tuple )
-                    
+                self._ImportObject( obj )
                 
             except:
                 
@@ -1106,7 +1139,16 @@ The formula should attempt to parse full or relative urls. If the url is relativ
             
             response = ClientNetworking.RequestsGet( self._my_example_url, headers = headers )
             
-            self._my_example_data.SetValue( response.content )
+            example_data = response.text
+            
+            try:
+                
+                self._example_data.SetValue( example_data )
+                
+            except UnicodeDecodeError:
+                
+                self._example_data.SetValue( 'The fetched data, which had length ' + HydrusData.ConvertIntToBytes( len( example_data ) ) + ', did not appear to be displayable text.' )
+                
             
         except Exception as e:
             
@@ -1251,6 +1293,8 @@ class EditParsingScriptFileLookupPanel( ClientGUIScrolledPanels.EditPanel ):
         
         self._example_data = ''
         
+        self._test_script_management = ScriptManagementControl( test_panel )
+        
         self._test_arg = wx.TextCtrl( test_panel )
         
         self._test_arg.SetValue( 'enter example file path, hex hash, or raw user input here' )
@@ -1341,6 +1385,7 @@ And pass that html to a number of 'parsing children' that will each look through
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
+        vbox.AddF( self._test_script_management, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._test_arg, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._fetch_data, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._example_data, CC.FLAGS_EXPAND_BOTH_WAYS )
@@ -1404,9 +1449,18 @@ And pass that html to a number of 'parsing children' that will each look through
             
             job_key = ClientThreading.JobKey( cancellable = True, stop_time = stop_time )
             
+            self._test_script_management.SetJobKey( job_key )
+            
             example_data = script.FetchData( job_key, file_identifier )
             
-            self._example_data.SetValue( example_data )
+            try:
+                
+                self._example_data.SetValue( example_data )
+                
+            except UnicodeDecodeError:
+                
+                self._example_data.SetValue( 'The fetched data, which had length ' + HydrusData.ConvertIntToBytes( len( example_data ) ) + ', did not appear to be displayable text.' )
+                
             
         except Exception as e:
             
@@ -1417,6 +1471,10 @@ And pass that html to a number of 'parsing children' that will each look through
             message += HydrusData.ToUnicode( e )
             
             wx.MessageBox( message )
+            
+        finally:
+            
+            job_key.Finish()
             
         
     
@@ -1429,6 +1487,8 @@ And pass that html to a number of 'parsing children' that will each look through
             stop_time = HydrusData.GetNow() + 30
             
             job_key = ClientThreading.JobKey( cancellable = True, stop_time = stop_time )
+            
+            self._test_script_management.SetJobKey( job_key )
             
             data = self._example_data.GetValue()
             desired_content = 'all'
@@ -1452,6 +1512,10 @@ And pass that html to a number of 'parsing children' that will each look through
             message = 'Could not parse!'
             
             wx.MessageBox( message )
+            
+        finally:
+            
+            job_key.Finish()
             
         
     
@@ -1483,11 +1547,15 @@ And pass that html to a number of 'parsing children' that will each look through
     
 class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
     
+    SCRIPT_TYPES = []
+    
+    SCRIPT_TYPES.append( HydrusSerialisable.SERIALISABLE_TYPE_PARSE_ROOT_FILE_LOOKUP )
+    
     def __init__( self, parent ):
         
         ClientGUIScrolledPanels.ManagePanel.__init__( self, parent )
         
-        self._scripts = ClientGUICommon.SaneListCtrl( self, 200, [ ( 'name', 140 ), ( 'query type', 80 ), ( 'script type', 80 ), ( 'produces', -1 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit, use_display_tuple_for_sort = True )
+        self._scripts = ClientGUICommon.SaneListCtrlForSingleObject( self, 200, [ ( 'name', 140 ), ( 'query type', 80 ), ( 'script type', 80 ), ( 'produces', -1 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
         
         menu_items = []
         
@@ -1507,7 +1575,7 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
         menu_items.append( ( 'from clipboard', 'Load a script from text in your clipboard.', self.ImportFromClipboard ) )
         menu_items.append( ( 'from png', 'Load a script from an encoded png.', self.ImportFromPng ) )
         
-        self._paste_button = ClientGUICommon.MenuButton( self, 'import', menu_items )
+        self._import_button = ClientGUICommon.MenuButton( self, 'import', menu_items )
         
         self._duplicate_button = ClientGUICommon.BetterButton( self, 'duplicate', self.Duplicate )
         
@@ -1517,13 +1585,18 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         #
         
-        scripts = HydrusGlobals.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_PARSE_ROOT_FILE_LOOKUP )
+        scripts = []
+        
+        for script_type in self.SCRIPT_TYPES:
+            
+            scripts.extend( HydrusGlobals.client_controller.Read( 'serialisable_named', script_type ) )
+            
         
         for script in scripts:
             
-            ( display_tuple, data_tuple ) = self._ConvertScriptToTuples( script )
+            ( display_tuple, sort_tuple ) = self._ConvertScriptToTuples( script )
             
-            self._scripts.Append( display_tuple, data_tuple )
+            self._scripts.Append( display_tuple, sort_tuple, script )
             
         
         #
@@ -1534,7 +1607,7 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         button_hbox.AddF( self._add_button, CC.FLAGS_VCENTER )
         button_hbox.AddF( self._export_button, CC.FLAGS_VCENTER )
-        button_hbox.AddF( self._paste_button, CC.FLAGS_VCENTER )
+        button_hbox.AddF( self._import_button, CC.FLAGS_VCENTER )
         button_hbox.AddF( self._duplicate_button, CC.FLAGS_VCENTER )
         button_hbox.AddF( self._edit_button, CC.FLAGS_VCENTER )
         button_hbox.AddF( self._delete_button, CC.FLAGS_VCENTER )
@@ -1549,29 +1622,57 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         ( name, query_type, script_type, produces ) = script.ToPrettyStrings()
         
-        return ( ( name, query_type, script_type, produces ), ( script, query_type, script_type, produces ) )
+        return ( ( name, query_type, script_type, produces ), ( name, query_type, script_type, produces ) )
         
     
-    def _SetNonDupeName( self, script ):
+    def _GetExportObject( self ):
         
-        name = script.GetName()
+        to_export = HydrusSerialisable.SerialisableList()
         
-        current_names = { script.GetName() for ( script, query_type, script_type, produces ) in self._scripts.GetClientData() }
+        for script in self._scripts.GetSelectedClientData():
+            
+            to_export.append( script )
+            
         
-        if name in current_names:
+        if len( to_export ) == 0:
             
-            i = 1
+            return None
             
-            original_name = name
+        elif len( to_export ) == 1:
             
-            while name in current_names:
+            return to_export[0]
+            
+        else:
+            
+            return to_export
+            
+        
+    
+    def _ImportObject( self, obj ):
+        
+        if isinstance( obj, HydrusSerialisable.SerialisableList ):
+            
+            for sub_obj in obj:
                 
-                name = original_name + ' (' + str( i ) + ')'
-                
-                i += 1
+                self._ImportObject( sub_obj )
                 
             
-            script.SetName( name )
+        else:
+            
+            if isinstance( obj, ClientParsing.ParseRootFileLookup ):
+                
+                script = obj
+                
+                self._scripts.SetNonDupeName( script )
+                
+                ( display_tuple, sort_tuple ) = self._ConvertScriptToTuples( script )
+                
+                self._scripts.Append( display_tuple, sort_tuple, script )
+                
+            else:
+                
+                wx.MessageBox( 'That was not a script--it was a: ' + type( obj ).__name__ )
+                
             
         
     
@@ -1607,43 +1708,20 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 new_script = panel.GetValue()
                 
-                self._SetNonDupeName( new_script )
+                self._scripts.SetNonDupeName( new_script )
                 
-                ( display_tuple, data_tuple ) = self._ConvertScriptToTuples( new_script )
+                ( display_tuple, sort_tuple ) = self._ConvertScriptToTuples( new_script )
                 
-                self._scripts.Append( display_tuple, data_tuple )
+                self._scripts.Append( display_tuple, sort_tuple, new_script )
                 
             
         
     
     def CommitChanges( self ):
         
-        scripts = [ script for ( script, query_type, script_type, produces ) in self._scripts.GetClientData() ]
+        scripts = self._scripts.GetClientData()
         
-        file_lookup_scripts = [ script for script in scripts if isinstance( script, ClientParsing.ParseRootFileLookup ) ]
-        
-        stuff_to_save = []
-        
-        stuff_to_save.append( ( HydrusSerialisable.SERIALISABLE_TYPE_PARSE_ROOT_FILE_LOOKUP, file_lookup_scripts ) )
-        
-        for ( serialisable_type, scripts ) in stuff_to_save:
-            
-            existing_names = set( HydrusGlobals.client_controller.Read( 'serialisable_names', serialisable_type ) )
-            
-            save_names = { script.GetName() for script in scripts }
-            
-            for script in scripts:
-                
-                HydrusGlobals.client_controller.Write( 'serialisable', script )
-                
-            
-            deletee_names = existing_names.difference( save_names )
-            
-            for name in deletee_names:
-                
-                HydrusGlobals.client_controller.Write( 'delete_serialisable_named', serialisable_type, name )
-                
-            
+        HydrusGlobals.client_controller.Write( 'serialisables_overwrite', self.SCRIPT_TYPES, scripts )
         
     
     def Delete( self ):
@@ -1653,24 +1731,17 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
     
     def Duplicate( self ):
         
-        scripts_to_dupe = []
-        
-        for i in self._scripts.GetAllSelected():
-            
-            ( script, query_type, script_type, produces ) = self._scripts.GetClientData( i )
-            
-            scripts_to_dupe.append( script )
-            
+        scripts_to_dupe = self._scripts.GetSelectedClientData()
         
         for script in scripts_to_dupe:
             
             dupe_script = script.Duplicate()
             
-            self._SetNonDupeName( dupe_script )
+            self._scripts.SetNonDupeName( dupe_script )
             
-            ( display_tuple, data_tuple ) = self._ConvertScriptToTuples( dupe_script )
+            ( display_tuple, sort_tuple ) = self._ConvertScriptToTuples( dupe_script )
             
-            self._scripts.Append( display_tuple, data_tuple )
+            self._scripts.Append( display_tuple, sort_tuple, dupe_script )
             
         
     
@@ -1678,7 +1749,7 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         for i in self._scripts.GetAllSelected():
             
-            ( script, query_type, script_type, produces ) = self._scripts.GetClientData( i )
+            script = self._scripts.GetClientData( i )
             
             if isinstance( script, ClientParsing.ParseRootFileLookup ):
                 
@@ -1699,16 +1770,14 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     edited_script = panel.GetValue()
                     
-                    name = edited_script.GetName()
-                    
-                    if name != original_name:
+                    if edited_script.GetName() != original_name:
                         
-                        self._SetNonDupeName( edited_script )
+                        self._scripts.SetNonDupeName( edited_script )
                         
                     
-                    ( display_tuple, data_tuple ) = self._ConvertScriptToTuples( edited_script )
+                    ( display_tuple, sort_tuple ) = self._ConvertScriptToTuples( edited_script )
                     
-                    self._scripts.UpdateRow( i, display_tuple, data_tuple )
+                    self._scripts.UpdateRow( i, display_tuple, sort_tuple, edited_script )
                     
                 
                 
@@ -1717,25 +1786,25 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
     
     def ExportToClipboard( self ):
         
-        for i in self._scripts.GetAllSelected():
+        export_object = self._GetExportObject()
+        
+        if export_object is not None:
             
-            ( script, query_type, script_type, produces ) = self._scripts.GetClientData( i )
+            json = export_object.DumpToString()
             
-            script_json = script.DumpToString()
-            
-            HydrusGlobals.client_controller.pub( 'clipboard', 'text', script_json )
+            HydrusGlobals.client_controller.pub( 'clipboard', 'text', json )
             
         
     
     def ExportToPng( self ):
         
-        for i in self._scripts.GetAllSelected():
+        export_object = self._GetExportObject()
+        
+        if export_object is not None:
             
-            ( script, query_type, script_type, produces ) = self._scripts.GetClientData( i )
-            
-            with ClientGUITopLevelWindows.DialogNullipotent( self, 'export script to png' ) as dlg:
+            with ClientGUITopLevelWindows.DialogNullipotent( self, 'export to png' ) as dlg:
                 
-                panel = ClientGUISerialisable.PngExportPanel( dlg, script )
+                panel = ClientGUISerialisable.PngExportPanel( dlg, export_object )
                 
                 dlg.SetPanel( panel )
                 
@@ -1760,20 +1829,7 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 obj = HydrusSerialisable.CreateFromString( raw_text )
                 
-                if isinstance( obj, ClientParsing.ParseRootFileLookup ):
-                    
-                    script = obj
-                    
-                    self._SetNonDupeName( script )
-                    
-                    ( display_tuple, data_tuple ) = self._ConvertScriptToTuples( script )
-                    
-                    self._scripts.Append( display_tuple, data_tuple )
-                    
-                else:
-                    
-                    wx.MessageBox( 'That was not a script--it was a: ' + type( obj ).__name__ )
-                    
+                self._ImportObject( obj )
                 
             except Exception as e:
                 
@@ -1809,20 +1865,7 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     obj = HydrusSerialisable.CreateFromNetworkString( payload )
                     
-                    if isinstance( obj, ClientParsing.ParseRootFileLookup ):
-                        
-                        script = obj
-                        
-                        self._SetNonDupeName( script )
-                        
-                        ( display_tuple, data_tuple ) = self._ConvertScriptToTuples( script )
-                        
-                        self._scripts.Append( display_tuple, data_tuple )
-                        
-                    else:
-                        
-                        wx.MessageBox( 'That was not a script--it was a: ' + type( obj ).__name__ )
-                        
+                    self._ImportObject( obj )
                     
                 except:
                     
@@ -1831,7 +1874,6 @@ class ManageParsingScriptsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
             
         
-    
     
 class ScriptManagementControl( wx.Panel ):
     

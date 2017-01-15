@@ -3,6 +3,7 @@ import ClientConstants as CC
 import ClientData
 import ClientDefaults
 import ClientDragDrop
+import ClientExporting
 import ClientFiles
 import ClientGUIACDropdown
 import ClientGUICollapsible
@@ -1390,21 +1391,17 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
         
         ClientGUIDialogs.Dialog.__init__( self, parent, 'manage export folders' )
         
-        self._export_folders = ClientGUICommon.SaneListCtrl( self, 120, [ ( 'path', -1 ), ( 'type', 120 ), ( 'query', 120 ), ( 'period', 120 ), ( 'phrase', 120 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit, use_display_tuple_for_sort = True )
+        self._export_folders = ClientGUICommon.SaneListCtrlForSingleObject( self, 120, [ ( 'name', 120 ), ( 'path', -1 ), ( 'type', 120 ), ( 'query', 120 ), ( 'period', 120 ), ( 'phrase', 120 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
         
         export_folders = HydrusGlobals.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER )
-        
-        self._original_paths = []
         
         for export_folder in export_folders:
             
             path = export_folder.GetName()
             
-            self._original_paths.append( path )
+            ( display_tuple, sort_tuple ) = self._ConvertExportFolderToTuples( export_folder )
             
-            ( pretty_path, pretty_export_type, pretty_file_search_context, pretty_period, pretty_phrase ) = self._GetPrettyVariables( export_folder )
-            
-            self._export_folders.Append( ( pretty_path, pretty_export_type, pretty_file_search_context, pretty_period, pretty_phrase ), export_folder )
+            self._export_folders.Append( display_tuple, sort_tuple, export_folder )
             
         
         self._add_button = wx.Button( self, label = 'add' )
@@ -1455,51 +1452,16 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
         wx.CallAfter( self._ok.SetFocus )
         
     
-    def _AddFolder( self, path ):
+    def _AddFolder( self ):
         
-        export_folders = self._export_folders.GetClientData()
-        
-        for export_folder in export_folders:
-            
-            existing_path = export_folder.GetName()
-            
-            test_path = os.path.join( path, '' )
-            test_existing_path = os.path.join( existing_path, '' )
-            
-            if test_path == test_existing_path:
-                
-                text = 'That directory already exists as an export folder--at current, there can only be one export folder per destination.'
-                
-                wx.MessageBox( text )
-                
-                return
-                
-            
-            if test_path.startswith( test_existing_path ):
-                
-                text = 'You have entered a subdirectory of an existing path--at current, this is not permitted.'
-                
-                wx.MessageBox( text )
-                
-                return
-                
-            
-            if test_existing_path.startswith( test_path ):
-                
-                text = 'You have entered a parent directory of an existing path--at current, this is not permitted.'
-                
-                wx.MessageBox( text )
-                
-                return
-                
-            
-        
+        name = 'export folder'
+        path = ''
         export_type = HC.EXPORT_FOLDER_TYPE_REGULAR
         file_search_context = ClientSearch.FileSearchContext( file_service_key = CC.LOCAL_FILE_SERVICE_KEY )
         period = 15 * 60
         phrase = '{hash}'
         
-        export_folder = ClientFiles.ExportFolder( path, export_type = export_type, file_search_context = file_search_context, period = period, phrase = phrase )
+        export_folder = ClientExporting.ExportFolder( name, path, export_type = export_type, file_search_context = file_search_context, period = period, phrase = phrase )
         
         with DialogManageExportFoldersEdit( self, export_folder ) as dlg:
             
@@ -1507,16 +1469,18 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
                 
                 export_folder = dlg.GetInfo()
                 
-                ( pretty_path, pretty_export_type, pretty_file_search_context, pretty_period, pretty_phrase ) = self._GetPrettyVariables( export_folder )
+                self._export_folders.SetNonDupeName( export_folder )
                 
-                self._export_folders.Append( ( pretty_path, pretty_export_type, pretty_file_search_context, pretty_period, pretty_phrase ), export_folder )
+                ( display_tuple, sort_tuple ) = self._ConvertExportFolderToTuples( export_folder )
+                
+                self._export_folders.Append( display_tuple, sort_tuple, export_folder )
                 
             
         
     
-    def _GetPrettyVariables( self, export_folder ):
+    def _ConvertExportFolderToTuples( self, export_folder ):
         
-        ( path, export_type, file_search_context, period, phrase ) = export_folder.ToTuple()
+        ( name, path, export_type, file_search_context, period, phrase ) = export_folder.ToTuple()
         
         if export_type == HC.EXPORT_FOLDER_TYPE_REGULAR:
             
@@ -1533,7 +1497,11 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
         
         pretty_phrase = phrase
         
-        return ( path, pretty_export_type, pretty_file_search_context, pretty_period, pretty_phrase )
+        display_tuple = ( name, path, pretty_export_type, pretty_file_search_context, pretty_period, pretty_phrase )
+        
+        sort_tuple = ( name, path, pretty_export_type, pretty_file_search_context, period, phrase )
+        
+        return ( display_tuple, sort_tuple )
         
     
     def Delete( self ):
@@ -1549,15 +1517,22 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
             
             export_folder = self._export_folders.GetClientData( index )
             
+            original_name = export_folder.GetName()
+            
             with DialogManageExportFoldersEdit( self, export_folder ) as dlg:
                 
                 if dlg.ShowModal() == wx.ID_OK:
                     
                     export_folder = dlg.GetInfo()
                     
-                    ( pretty_path, pretty_export_type, pretty_file_search_context, pretty_period, pretty_phrase ) = self._GetPrettyVariables( export_folder )
+                    if export_folder.GetName() != original_name:
+                        
+                        self._export_folders.SetNonDupeName( export_folder )
+                        
                     
-                    self._export_folders.UpdateRow( index, ( pretty_path, pretty_export_type, pretty_file_search_context, pretty_period, pretty_phrase ), export_folder )
+                    ( display_tuple, sort_tuple ) = self._ConvertExportFolderToTuples( export_folder )
+                    
+                    self._export_folders.UpdateRow( index, display_tuple, sort_tuple, export_folder )
                     
                 
             
@@ -1565,15 +1540,7 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
     
     def EventAdd( self, event ):
         
-        with wx.DirDialog( self, 'Select a folder to add.' ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_OK:
-                
-                path = HydrusData.ToUnicode( dlg.GetPath() )
-                
-                self._AddFolder( path )
-                
-            
+        self._AddFolder()
         
     
     def EventDelete( self, event ):
@@ -1588,26 +1555,24 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
     
     def EventOK( self, event ):
         
-        client_data = self._export_folders.GetClientData()
+        existing_db_names = set( HydrusGlobals.client_controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER ) )
         
-        export_folders = []
+        export_folders = self._export_folders.GetClientData()
         
-        paths_set = set()
+        good_names = set()
         
-        for export_folder in client_data:
+        for export_folder in export_folders:
             
             HydrusGlobals.client_controller.Write( 'serialisable', export_folder )
             
-            path = export_folder.GetName()
-            
-            paths_set.add( path )
+            good_names.add( export_folder.GetName() )
             
         
-        deletees = set( self._original_paths ) - paths_set
+        names_to_delete = existing_db_names - good_names
         
-        for deletee in deletees:
+        for name in names_to_delete:
             
-            HydrusGlobals.client_controller.Write( 'delete_serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER, deletee )
+            HydrusGlobals.client_controller.Write( 'delete_serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER, name )
             
         
         HydrusGlobals.client_controller.pub( 'notify_new_export_folders' )
@@ -1623,23 +1588,21 @@ class DialogManageExportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         self._export_folder = export_folder
         
-        ( path, export_type, file_search_context, period, phrase ) = self._export_folder.ToTuple()
+        ( name, path, export_type, file_search_context, period, phrase ) = self._export_folder.ToTuple()
         
-        self._path_box = ClientGUICommon.StaticBox( self, 'export path' )
+        self._path_box = ClientGUICommon.StaticBox( self, 'name and location' )
+        
+        self._name = wx.TextCtrl( self._path_box)
         
         self._path = wx.DirPickerCtrl( self._path_box, style = wx.DIRP_USE_TEXTCTRL )
         
-        self._path.SetPath( path )
-        
         #
         
-        self._type_box = ClientGUICommon.StaticBox( self, 'type of export folder' )
+        self._type_box = ClientGUICommon.StaticBox( self, 'type of export' )
         
         self._type = ClientGUICommon.BetterChoice( self._type_box )
         self._type.Append( 'regular', HC.EXPORT_FOLDER_TYPE_REGULAR )
         self._type.Append( 'synchronise', HC.EXPORT_FOLDER_TYPE_SYNCHRONISE )
-        
-        self._type.SelectClientData( export_type )
         
         #
         
@@ -1659,15 +1622,11 @@ class DialogManageExportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         self._period = ClientGUICommon.TimeDeltaButton( self._period_box, min = 3 * 60, days = True, hours = True, minutes = True )
         
-        self._period.SetValue( period )
-        
         #
         
         self._phrase_box = ClientGUICommon.StaticBox( self, 'filenames' )
         
         self._pattern = wx.TextCtrl( self._phrase_box )
-        
-        self._pattern.SetValue( phrase )
         
         self._examples = ClientGUICommon.ExportPatternButton( self._phrase_box )
         
@@ -1682,7 +1641,28 @@ class DialogManageExportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         #
         
-        self._path_box.AddF( self._path, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._name.SetValue( name )
+        
+        self._path.SetPath( path )
+        
+        self._type.SelectClientData( export_type )
+        
+        self._period.SetValue( period )
+        
+        self._pattern.SetValue( phrase )
+        
+        #
+        
+        rows = []
+        
+        rows.append( ( 'name: ', self._name ) )
+        rows.append( ( 'folder path: ', self._path ) )
+        
+        gridbox = ClientGUICommon.WrapInGrid( self._path_box, rows )
+        
+        self._path_box.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        
+        #
         
         text = '''regular - try to export the files to the directory, overwriting if the filesize if different
 
@@ -1734,9 +1714,19 @@ If you select synchronise, be careful!'''
     
     def EventOK( self, event ):
         
+        if self._path.GetPath() in ( '', None ):
+            
+            wx.MessageBox( 'You must enter a folder path to export to!' )
+            
+            return
+            
+        
         phrase = self._pattern.GetValue()
         
-        try: ClientFiles.ParseExportPhrase( phrase )
+        try:
+            
+            ClientExporting.ParseExportPhrase( phrase )
+            
         except:
             
             wx.MessageBox( 'Could not parse that export phrase!' )
@@ -1748,6 +1738,8 @@ If you select synchronise, be careful!'''
         
     
     def GetInfo( self ):
+        
+        name = self._name.GetValue()
         
         path = HydrusData.ToUnicode( self._path.GetPath() )
         
@@ -1763,9 +1755,9 @@ If you select synchronise, be careful!'''
         
         phrase = self._pattern.GetValue()
         
-        self._export_folder.SetTuple( path, export_type, file_search_context, period, phrase )
+        export_folder = ClientExporting.ExportFolder( name, path, export_type, file_search_context, period, phrase )
         
-        return self._export_folder
+        return export_folder
         
 '''
 class DialogManageImageboards( ClientGUIDialogs.Dialog ):
@@ -2492,7 +2484,7 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
         
         ClientGUIDialogs.Dialog.__init__( self, parent, 'manage import folders' )
         
-        self._import_folders = ClientGUICommon.SaneListCtrl( self, 120, [ ( 'name', 120 ), ( 'path', -1 ), ( 'check period', 120 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
+        self._import_folders = ClientGUICommon.SaneListCtrlForSingleObject( self, 120, [ ( 'name', 120 ), ( 'path', -1 ), ( 'check period', 120 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
         
         self._add_button = wx.Button( self, label = 'add' )
         self._add_button.Bind( wx.EVT_BUTTON, self.EventAdd )
@@ -2512,19 +2504,13 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
         
         #
         
-        self._names_to_import_folders = {}
-        
         import_folders = HydrusGlobals.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_FOLDER )
         
         for import_folder in import_folders:
             
-            ( name, path, check_period ) = import_folder.ToListBoxTuple()
+            ( display_tuple, sort_tuple ) = self._ConvertImportFolderToTuples( import_folder )
             
-            pretty_check_period = self._GetPrettyVariables( check_period )
-            
-            self._import_folders.Append( ( name, path, pretty_check_period ), ( name, path, check_period ) )
-            
-            self._names_to_import_folders[ name ] = import_folder
+            self._import_folders.Append( display_tuple, sort_tuple, import_folder )
             
         
         #
@@ -2563,35 +2549,36 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
         wx.CallAfter( self._ok.SetFocus )
         
     
-    def _AddImportFolder( self, name ):
+    def _AddImportFolder( self ):
         
-        if name not in self._names_to_import_folders:
+        import_folder = ClientImporting.ImportFolder( 'import folder' )
+        
+        with DialogManageImportFoldersEdit( self, import_folder ) as dlg:
             
-            import_folder = ClientImporting.ImportFolder( name )
-            
-            with DialogManageImportFoldersEdit( self, import_folder ) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
                 
-                if dlg.ShowModal() == wx.ID_OK:
-                    
-                    import_folder = dlg.GetInfo()
-                    
-                    ( name, path, check_period ) = import_folder.ToListBoxTuple()
-                    
-                    pretty_check_period = self._GetPrettyVariables( check_period )
-                    
-                    self._import_folders.Append( ( name, path, pretty_check_period ), ( name, path, check_period ) )
-                    
-                    self._names_to_import_folders[ name ] = import_folder
-                    
+                import_folder = dlg.GetInfo()
+                
+                self._import_folders.SetNonDupeName( import_folder )
+                
+                ( display_tuple, sort_tuple ) = self._ConvertImportFolderToTuples( import_folder )
+                
+                self._import_folders.Append( display_tuple, sort_tuple, import_folder )
                 
             
         
     
-    def _GetPrettyVariables( self, check_period ):
+    def _ConvertImportFolderToTuples( self, import_folder ):
+        
+        sort_tuple = import_folder.ToListBoxTuple()
+        
+        ( name, path, check_period ) = sort_tuple
         
         pretty_check_period = HydrusData.ConvertTimeDeltaToPrettyString( check_period )
         
-        return pretty_check_period
+        display_tuple = ( name, path, pretty_check_period )
+        
+        return ( display_tuple, sort_tuple )
         
     
     def Delete( self ):
@@ -2605,9 +2592,9 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
         
         for index in indices:
             
-            ( name, path, check_period ) = self._import_folders.GetClientData( index )
+            import_folder = self._import_folders.GetClientData( index )
             
-            import_folder = self._names_to_import_folders[ name ]
+            original_name = import_folder.GetName()
             
             with DialogManageImportFoldersEdit( self, import_folder ) as dlg:
                 
@@ -2615,13 +2602,14 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
                     
                     import_folder = dlg.GetInfo()
                     
-                    ( name, path, check_period ) = import_folder.ToListBoxTuple()
+                    if import_folder.GetName() != original_name:
+                        
+                        self._import_folders.SetNonDupeName( import_folder )
+                        
                     
-                    pretty_check_period = self._GetPrettyVariables( check_period )
+                    ( display_tuple, sort_tuple ) = self._ConvertImportFolderToTuples( import_folder )
                     
-                    self._import_folders.UpdateRow( index, ( name, path, pretty_check_period ), ( name, path, check_period ) )
-                    
-                    self._names_to_import_folders[ name ] = import_folder
+                    self._import_folders.UpdateRow( index, display_tuple, sort_tuple, import_folder )
                     
                 
             
@@ -2629,37 +2617,7 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
     
     def EventAdd( self, event ):
         
-        client_data = self._import_folders.GetClientData()
-        
-        existing_names = set()
-        
-        for ( name, path, check_period ) in client_data:
-            
-            existing_names.add( name )
-            
-        
-        with ClientGUIDialogs.DialogTextEntry( self, 'Enter a name for the import folder.' ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_OK:
-                
-                try:
-                    
-                    name = dlg.GetValue()
-                    
-                    if name in existing_names: raise HydrusExceptions.NameException( 'That name is already in use!' )
-                    
-                    if name == '': raise HydrusExceptions.NameException( 'Please enter a nickname for the import folder.' )
-                    
-                    self._AddImportFolder( name )
-                    
-                except HydrusExceptions.NameException as e:
-                    
-                    wx.MessageBox( str( e ) )
-                    
-                    self.EventAdd( event )
-                    
-                
-            
+        self._AddImportFolder()
         
     
     def EventDelete( self, event ):
@@ -2674,27 +2632,24 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
     
     def EventOK( self, event ):
         
-        client_data = self._import_folders.GetClientData()
+        existing_db_names = set( HydrusGlobals.client_controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_FOLDER ) )
         
-        names_to_save = set()
+        good_names = set()
         
-        for ( name, path, check_period ) in client_data:
+        import_folders = self._import_folders.GetClientData()
+        
+        for import_folder in import_folders:
             
-            names_to_save.add( name )
+            good_names.add( import_folder.GetName() )
+            
+            HydrusGlobals.client_controller.Write( 'serialisable', import_folder )
             
         
-        names_to_delete = { name for name in self._names_to_import_folders if name not in names_to_save }
+        names_to_delete = existing_db_names - good_names
         
         for name in names_to_delete:
             
             HydrusGlobals.client_controller.Write( 'delete_serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_FOLDER, name )
-            
-        
-        for name in names_to_save:
-            
-            import_folder = self._names_to_import_folders[ name ]
-            
-            HydrusGlobals.client_controller.Write( 'serialisable', import_folder )
             
         
         HydrusGlobals.client_controller.pub( 'notify_new_import_folders' )
@@ -2906,7 +2861,7 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         ( x, y ) = self.GetEffectiveMinSize()
         
-        ( max_x, max_y ) = wx.GetDisplaySize()
+        ( max_x, max_y ) = ClientGUITopLevelWindows.GetDisplaySize( self )
         
         x = min( x + 25, max_x )
         y = min( y + 25, max_y )
@@ -4006,20 +3961,16 @@ class DialogManageServices( ClientGUIDialogs.Dialog ):
         
         #
         
-        manageable_service_types = HC.RESTRICTED_SERVICES + [ HC.LOCAL_TAG, HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL, HC.LOCAL_BOORU, HC.IPFS ]
-        
-        for service_type in manageable_service_types:
+        for service_type in HC.ALL_SERVICES:
             
             if service_type == HC.LOCAL_RATING_LIKE: name = 'like/dislike ratings'
             elif service_type == HC.LOCAL_RATING_NUMERICAL: name = 'numerical ratings'
             elif service_type == HC.LOCAL_BOORU: name = 'booru'
             elif service_type == HC.LOCAL_TAG: name = 'local tags'
+            elif service_type == HC.LOCAL_FILE_DOMAIN: name = 'local files'
             elif service_type == HC.TAG_REPOSITORY: name = 'tag repositories'
             elif service_type == HC.FILE_REPOSITORY: name = 'file repositories'
-            #elif service_type == HC.MESSAGE_DEPOT: name = 'message repositories'
             elif service_type == HC.SERVER_ADMIN: name = 'administrative services'
-            #elif service_type == HC.RATING_LIKE_REPOSITORY: name = 'like/dislike rating repositories'
-            #elif service_type == HC.RATING_NUMERICAL_REPOSITORY: name = 'numerical rating repositories'
             elif service_type == HC.IPFS: name = 'ipfs daemons'
             else: continue
             
@@ -4094,7 +4045,7 @@ class DialogManageServices( ClientGUIDialogs.Dialog ):
             
             service_type = self._listbooks_to_service_types[ services_listbook ]
             
-            if service_type in HC.NONEDITABLE_SERVICES:
+            if service_type in HC.NONADDREMOVEABLE_SERVICES:
                 
                 self._add.Disable()
                 self._remove.Disable()
@@ -4155,9 +4106,9 @@ class DialogManageServices( ClientGUIDialogs.Dialog ):
                         service_key = HydrusData.GenerateKey()
                         service_type = self._listbooks_to_service_types[ services_listbook ]
                         
-                        if service_type in HC.NONEDITABLE_SERVICES:
+                        if service_type in HC.NONADDREMOVEABLE_SERVICES:
                             
-                            wx.MessageBox( 'You cannot edit this type of service yet!' )
+                            wx.MessageBox( 'You cannot add or delete this type of service yet!' )
                             
                             return
                             
@@ -4421,7 +4372,7 @@ class DialogManageServices( ClientGUIDialogs.Dialog ):
             
             #
             
-            if service_type not in HC.NONEDITABLE_SERVICES:
+            if service_type not in HC.NONRENAMEABLE_SERVICES:
                 
                 if service_type in HC.REMOTE_SERVICES: title = 'name and credentials'
                 else: title = 'name'
@@ -4551,7 +4502,7 @@ class DialogManageServices( ClientGUIDialogs.Dialog ):
             
             #
             
-            if service_type not in HC.NONEDITABLE_SERVICES:
+            if service_type not in HC.NONRENAMEABLE_SERVICES:
                 
                 self._service_name.SetValue( name )
                 
@@ -4599,7 +4550,7 @@ class DialogManageServices( ClientGUIDialogs.Dialog ):
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            if service_type not in HC.NONEDITABLE_SERVICES:
+            if service_type not in HC.NONRENAMEABLE_SERVICES:
                 
                 rows = []
                 
@@ -4857,7 +4808,9 @@ class DialogManageServices( ClientGUIDialogs.Dialog ):
                 
                 return
                 
-            except:
+            except Exception as e:
+                
+                HydrusData.ShowException( e )
                 
                 wx.MessageBox( 'Could not connect!' )
                 
@@ -4892,11 +4845,14 @@ class DialogManageServices( ClientGUIDialogs.Dialog ):
             
             info = dict( info )
             
-            if service_type not in HC.NONEDITABLE_SERVICES:
+            if service_type not in HC.NONRENAMEABLE_SERVICES:
                 
                 name = self._service_name.GetValue()
                 
-                if name == '': raise Exception( 'Please enter a name' )
+                if name == '':
+                    
+                    raise Exception( 'Please enter a name' )
+                    
                 
             
             if service_type in HC.REMOTE_SERVICES:
@@ -5063,549 +5019,6 @@ class DialogManageServices( ClientGUIDialogs.Dialog ):
                 
                 self._num_stars.SetValue( num_stars )
                 
-            
-        
-    
-class DialogManageSubscriptions( ClientGUIDialogs.Dialog ):
-    
-    def __init__( self, parent ):
-        
-        ClientGUIDialogs.Dialog.__init__( self, parent, 'manage subscriptions' )
-        
-        self._original_subscription_names = HydrusGlobals.client_controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION )
-        
-        self._names_to_delete = set()
-        
-        #
-        
-        self._listbook = ClientGUICommon.ListBook( self )
-        
-        self._add = wx.Button( self, label = 'add' )
-        self._add.Bind( wx.EVT_BUTTON, self.EventAdd )
-        self._add.SetForegroundColour( ( 0, 128, 0 ) )
-        
-        self._remove = wx.Button( self, label = 'remove' )
-        self._remove.Bind( wx.EVT_BUTTON, self.EventRemove )
-        self._remove.SetForegroundColour( ( 128, 0, 0 ) )
-        
-        self._export = wx.Button( self, label = 'export' )
-        self._export.Bind( wx.EVT_BUTTON, self.EventExport )
-        
-        self._ok = wx.Button( self, id = wx.ID_OK, label = 'ok' )
-        self._ok.Bind( wx.EVT_BUTTON, self.EventOK )
-        self._ok.SetForegroundColour( ( 0, 128, 0 ) )
-        
-        self._cancel = wx.Button( self, id = wx.ID_CANCEL, label = 'cancel' )
-        self._cancel.SetForegroundColour( ( 128, 0, 0 ) )
-        
-        #
-        
-        for name in self._original_subscription_names:
-            
-            self._listbook.AddPageArgs( name, name, self._Panel, ( self._listbook, name ), {} )
-            
-        
-        #
-        
-        text_hbox = wx.BoxSizer( wx.HORIZONTAL )
-        text_hbox.AddF( wx.StaticText( self, label = 'For more information about subscriptions, please check' ), CC.FLAGS_VCENTER )
-        text_hbox.AddF( wx.HyperlinkCtrl( self, id = -1, label = 'here', url = 'file://' + HC.HELP_DIR + '/getting_started_subscriptions.html' ), CC.FLAGS_VCENTER )
-        
-        add_remove_hbox = wx.BoxSizer( wx.HORIZONTAL )
-        add_remove_hbox.AddF( self._add, CC.FLAGS_VCENTER )
-        add_remove_hbox.AddF( self._remove, CC.FLAGS_VCENTER )
-        add_remove_hbox.AddF( self._export, CC.FLAGS_VCENTER )
-        
-        ok_hbox = wx.BoxSizer( wx.HORIZONTAL )
-        ok_hbox.AddF( self._ok, CC.FLAGS_VCENTER )
-        ok_hbox.AddF( self._cancel, CC.FLAGS_VCENTER )
-        
-        vbox = wx.BoxSizer( wx.VERTICAL )
-        vbox.AddF( text_hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._listbook, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( add_remove_hbox, CC.FLAGS_SMALL_INDENT )
-        vbox.AddF( ok_hbox, CC.FLAGS_BUTTON_SIZER )
-        
-        self.SetSizer( vbox )
-        
-        #
-        
-        ( x, y ) = self.GetEffectiveMinSize()
-        
-        self.SetInitialSize( ( 680, max( 720, y ) ) )
-        
-        self.SetDropTarget( ClientDragDrop.FileDropTarget( self.Import ) )
-        
-        wx.CallAfter( self._ok.SetFocus )
-        
-    
-    def EventAdd( self, event ):
-        
-        with ClientGUIDialogs.DialogTextEntry( self, 'Enter a name for the subscription.' ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_OK:
-                
-                try:
-                    
-                    name = dlg.GetValue()
-                    
-                    if self._listbook.KeyExists( name ):
-                        
-                        raise HydrusExceptions.NameException( 'That name is already in use!' )
-                        
-                    
-                    if name == '': raise HydrusExceptions.NameException( 'Please enter a nickname for the subscription.' )
-                    
-                    page = self._Panel( self._listbook, name, is_new_subscription = True )
-                    
-                    self._listbook.AddPage( name, name, page, select = True )
-                    
-                except HydrusExceptions.NameException as e:
-                    
-                    wx.MessageBox( str( e ) )
-                    
-                    self.EventAdd( event )
-                    
-                
-            
-        
-    
-    def EventExport( self, event ):
-        
-        panel = self._listbook.GetCurrentPage()
-        
-        if panel is not None:
-            
-            subscription = panel.GetSubscription()
-            
-            name = subscription.GetName()
-            
-            dump = subscription.DumpToString()
-            
-            try:
-                
-                with wx.FileDialog( self, 'select where to export subscription', defaultFile = name + '.json', style = wx.FD_SAVE ) as dlg:
-                    
-                    if dlg.ShowModal() == wx.ID_OK:
-                        
-                        path = HydrusData.ToUnicode( dlg.GetPath() )
-                        
-                        with open( path, 'wb' ) as f: f.write( dump )
-                        
-                    
-                
-            except:
-                
-                with wx.FileDialog( self, 'select where to export subscription', defaultFile = 'subscription.json', style = wx.FD_SAVE ) as dlg:
-                    
-                    if dlg.ShowModal() == wx.ID_OK:
-                        
-                        path = HydrusData.ToUnicode( dlg.GetPath() )
-                        
-                        with open( path, 'wb' ) as f: f.write( dump )
-                        
-                    
-                
-            
-        
-    
-    def EventOK( self, event ):
-        
-        all_pages = self._listbook.GetActivePages()
-        
-        try:
-            
-            for name in self._names_to_delete:
-                
-                HydrusGlobals.client_controller.Write( 'delete_serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION, name )
-                
-            
-            for page in all_pages:
-                
-                subscription = page.GetSubscription()
-                
-                HydrusGlobals.client_controller.Write( 'serialisable', subscription )
-                
-            
-            HydrusGlobals.client_controller.pub( 'notify_new_subscriptions' )
-            
-        finally: self.EndModal( wx.ID_OK )
-        
-    
-    def EventRemove( self, event ):
-        
-        name = self._listbook.GetCurrentKey()
-        
-        self._names_to_delete.add( name )
-        
-        self._listbook.DeleteCurrentPage()
-        
-    
-    def Import( self, paths ):
-        
-        for path in paths:
-            
-            try:
-                
-                with open( path, 'rb' ) as f: data = f.read()
-                
-                subscription = HydrusSerialisable.CreateFromString( data )
-                
-                name = subscription.GetName()
-                
-                if self._listbook.KeyExists( name ):
-                    
-                    message = 'A subscription with that name already exists. Overwrite it?'
-                    
-                    with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
-                        
-                        if dlg.ShowModal() == wx.ID_YES:
-                            
-                            self._listbook.Select( name )
-                            
-                            page = self._listbook.GetPage( name )
-                            
-                            page.Update( subscription )
-                            
-                        
-                    
-                else:
-                    
-                    page = self._Panel( self._listbook, name, is_new_subscription = True )
-                    
-                    page.Update( subscription )
-                    
-                    self._listbook.AddPage( name, name, page, select = True )
-                    
-                
-            except:
-                
-                wx.MessageBox( traceback.format_exc() )
-                
-            
-        
-    
-    class _Panel( wx.ScrolledWindow ):
-        
-        def __init__( self, parent, name, is_new_subscription = False ):
-            
-            wx.ScrolledWindow.__init__( self, parent )
-            
-            self._is_new_subscription = is_new_subscription
-            
-            if self._is_new_subscription:
-                
-                self._original_subscription = ClientImporting.Subscription( name )
-                
-            else:
-                
-                self._original_subscription = HydrusGlobals.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION, name )
-                
-            
-            #
-            
-            self._query_panel = ClientGUICommon.StaticBox( self, 'site and query' )
-            
-            self._site_type = ClientGUICommon.BetterChoice( self._query_panel )
-            
-            site_types = []
-            site_types.append( HC.SITE_TYPE_BOORU )
-            site_types.append( HC.SITE_TYPE_DEVIANT_ART )
-            site_types.append( HC.SITE_TYPE_HENTAI_FOUNDRY_ARTIST )
-            site_types.append( HC.SITE_TYPE_HENTAI_FOUNDRY_TAGS )
-            site_types.append( HC.SITE_TYPE_NEWGROUNDS )
-            site_types.append( HC.SITE_TYPE_PIXIV_ARTIST_ID )
-            site_types.append( HC.SITE_TYPE_PIXIV_TAG )
-            site_types.append( HC.SITE_TYPE_TUMBLR )
-            
-            for site_type in site_types:
-                
-                self._site_type.Append( HC.site_type_string_lookup[ site_type ], site_type )
-                
-            
-            self._site_type.Bind( wx.EVT_CHOICE, self.EventSiteChanged )
-            
-            self._query = wx.TextCtrl( self._query_panel )
-            
-            self._booru_selector = wx.ListBox( self._query_panel )
-            self._booru_selector.Bind( wx.EVT_LISTBOX, self.EventBooruSelected )
-            
-            self._period = ClientGUICommon.TimeDeltaButton( self._query_panel, min = 3600 * 4, days = True, hours = True )
-            
-            self._info_panel = ClientGUICommon.StaticBox( self, 'info' )
-            
-            self._get_tags_if_redundant = wx.CheckBox( self._info_panel, label = 'get tags even if new file is already in db' )
-            
-            self._initial_file_limit = ClientGUICommon.NoneableSpinCtrl( self._info_panel, 'initial file limit', none_phrase = 'no limit', min = 1, max = 1000000 )
-            self._initial_file_limit.SetToolTipString( 'If set, the first sync will add no more than this many files. Otherwise, it will get everything the gallery has.' )
-            
-            self._periodic_file_limit = ClientGUICommon.NoneableSpinCtrl( self._info_panel, 'periodic file limit', none_phrase = 'no limit', min = 1, max = 1000000 )
-            self._periodic_file_limit.SetToolTipString( 'If set, normal syncs will add no more than this many files. Otherwise, they will get everything up until they find a file they have seen before.' )
-            
-            self._paused = wx.CheckBox( self._info_panel, label = 'paused' )
-            
-            self._seed_cache_button = wx.BitmapButton( self._info_panel, bitmap = CC.GlobalBMPs.seed_cache )
-            self._seed_cache_button.Bind( wx.EVT_BUTTON, self.EventSeedCache )
-            self._seed_cache_button.SetToolTipString( 'open detailed url cache status' )
-            
-            self._reset_cache_button = wx.Button( self._info_panel, label = '     reset url cache on dialog ok     ' )
-            self._reset_cache_button.Bind( wx.EVT_BUTTON, self.EventResetCache )
-            
-            self._check_now_button = wx.Button( self._info_panel, label = '     force sync on dialog ok     ' )
-            self._check_now_button.Bind( wx.EVT_BUTTON, self.EventCheckNow )
-            
-            self._import_tag_options = ClientGUICollapsible.CollapsibleOptionsTags( self )
-            
-            self._import_file_options = ClientGUICollapsible.CollapsibleOptionsImportFiles( self )
-            
-            #
-            
-            self._SetControls()
-            
-            #
-            
-            hbox = wx.BoxSizer( wx.HORIZONTAL )
-            
-            hbox.AddF( wx.StaticText( self._query_panel, label = 'Check subscription every ' ), CC.FLAGS_VCENTER )
-            hbox.AddF( self._period, CC.FLAGS_VCENTER )
-            
-            self._query_panel.AddF( self._site_type, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self._query_panel.AddF( self._query, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self._query_panel.AddF( self._booru_selector, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self._query_panel.AddF( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            
-            #
-            
-            self._info_panel.AddF( self._get_tags_if_redundant, CC.FLAGS_LONE_BUTTON )
-            self._info_panel.AddF( self._initial_file_limit, CC.FLAGS_LONE_BUTTON )
-            self._info_panel.AddF( self._periodic_file_limit, CC.FLAGS_LONE_BUTTON )
-            self._info_panel.AddF( self._paused, CC.FLAGS_LONE_BUTTON )
-            
-            last_checked_text = self._original_subscription.GetLastCheckedText()
-            
-            self._info_panel.AddF( wx.StaticText( self._info_panel, label = last_checked_text ), CC.FLAGS_EXPAND_PERPENDICULAR )
-            
-            seed_cache = self._original_subscription.GetSeedCache()
-            
-            seed_cache_text = HydrusData.ConvertIntToPrettyString( seed_cache.GetSeedCount() ) + ' urls in cache'
-            
-            num_failed = seed_cache.GetSeedCount( CC.STATUS_FAILED )
-            
-            if num_failed > 0:
-                
-                seed_cache_text += ', ' + HydrusData.ConvertIntToPrettyString( num_failed ) + ' failed'
-                
-            
-            self._info_panel.AddF( wx.StaticText( self._info_panel, label = seed_cache_text ), CC.FLAGS_EXPAND_PERPENDICULAR )
-            self._info_panel.AddF( self._seed_cache_button, CC.FLAGS_LONE_BUTTON )
-            self._info_panel.AddF( self._reset_cache_button, CC.FLAGS_LONE_BUTTON )
-            self._info_panel.AddF( self._check_now_button, CC.FLAGS_LONE_BUTTON )
-            
-            #
-            
-            vbox = wx.BoxSizer( wx.VERTICAL )
-            
-            vbox.AddF( self._query_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._info_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._import_tag_options, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._import_file_options, CC.FLAGS_EXPAND_PERPENDICULAR )
-            
-            self.SetSizer( vbox )
-            
-            self.SetScrollRate( 0, 20 )
-            
-            ( x, y ) = self.GetEffectiveMinSize()
-            
-            self.SetInitialSize( ( x, y ) )
-            
-        
-        def _ConfigureImportTagOptions( self ):
-            
-            gallery_identifier = self._GetGalleryIdentifier()
-            
-            ( namespaces, search_value ) = ClientDefaults.GetDefaultNamespacesAndSearchValue( gallery_identifier )
-            
-            new_options = HydrusGlobals.client_controller.GetNewOptions()
-            
-            import_tag_options = new_options.GetDefaultImportTagOptions( gallery_identifier )
-            
-            if not self._is_new_subscription:
-                
-                if gallery_identifier == self._original_subscription.GetGalleryIdentifier():
-                    
-                    search_value = self._original_subscription.GetQuery()
-                    import_tag_options = self._original_subscription.GetImportTagOptions()
-                    
-                
-            
-            self._query.SetValue( search_value )
-            self._import_tag_options.SetNamespaces( namespaces )
-            self._import_tag_options.SetOptions( import_tag_options )
-            
-        
-        def _GetGalleryIdentifier( self ):
-            
-            site_type = self._site_type.GetChoice()
-            
-            if site_type == HC.SITE_TYPE_BOORU:
-                
-                booru_name = self._booru_selector.GetStringSelection()
-                
-                gallery_identifier = ClientDownloading.GalleryIdentifier( site_type, additional_info = booru_name )
-                
-            else:
-                
-                gallery_identifier = ClientDownloading.GalleryIdentifier( site_type )
-                
-            
-            return gallery_identifier
-            
-        
-        def _PresentForSiteType( self ):
-            
-            site_type = self._site_type.GetChoice()
-            
-            if site_type == HC.SITE_TYPE_BOORU:
-                
-                if self._booru_selector.GetCount() == 0:
-                    
-                    boorus = HydrusGlobals.client_controller.Read( 'remote_boorus' )
-                    
-                    for ( name, booru ) in boorus.items(): self._booru_selector.Append( name, booru )
-                    
-                    self._booru_selector.Select( 0 )
-                    
-                
-                self._booru_selector.Show()
-                
-            else: self._booru_selector.Hide()
-            
-            wx.CallAfter( self._ConfigureImportTagOptions )
-            
-            self.Layout()
-            
-        
-        def _SetControls( self ):
-            
-            ( gallery_identifier, gallery_stream_identifiers, query, period, get_tags_if_redundant, initial_file_limit, periodic_file_limit, paused, import_file_options, import_tag_options ) = self._original_subscription.ToTuple()
-            
-            site_type = gallery_identifier.GetSiteType()
-            
-            self._site_type.SelectClientData( site_type )
-            
-            self._PresentForSiteType()
-            
-            if site_type == HC.SITE_TYPE_BOORU:
-                
-                booru_name = gallery_identifier.GetAdditionalInfo()
-                
-                index = self._booru_selector.FindString( booru_name )
-                
-                if index != wx.NOT_FOUND:
-                    
-                    self._booru_selector.Select( index )
-                    
-                
-            
-            # set gallery_stream_identifiers selection here--some kind of list of checkboxes or whatever
-            
-            self._query.SetValue( query )
-            
-            self._period.SetValue( period )
-            
-            self._get_tags_if_redundant.SetValue( get_tags_if_redundant )
-            self._initial_file_limit.SetValue( initial_file_limit )
-            self._periodic_file_limit.SetValue( periodic_file_limit )
-            
-            self._paused.SetValue( paused )
-            
-            self._import_file_options.SetOptions( import_file_options )
-            
-            self._import_tag_options.SetOptions( import_tag_options )
-            
-        
-        def EventBooruSelected( self, event ):
-            
-            self._ConfigureImportTagOptions()
-            
-        
-        def EventCheckNow( self, event ):
-            
-            self._original_subscription.CheckNow()
-            
-            self._check_now_button.SetLabelText( 'will check on dialog ok' )
-            self._check_now_button.Disable()
-            
-        
-        def EventResetCache( self, event ):
-            
-            message = '''Resetting this subscription's cache will delete ''' + HydrusData.ConvertIntToPrettyString( self._original_subscription.GetSeedCache().GetSeedCount() ) + ''' remembered urls, meaning when the subscription next runs, it will try to download those all over again. This may be expensive in time and data. Only do it if you are willing to wait. Do you want to do it?'''
-            
-            with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
-                
-                if dlg.ShowModal() == wx.ID_YES:
-                    
-                    self._original_subscription.Reset()
-                    
-                    self._reset_cache_button.SetLabelText( 'cache will be reset on dialog ok' )
-                    self._reset_cache_button.Disable()
-                    
-                
-            
-        
-        def EventSeedCache( self, event ):
-            
-            seed_cache = self._original_subscription.GetSeedCache()
-            
-            dupe_seed_cache = seed_cache.Duplicate()
-            
-            with ClientGUITopLevelWindows.DialogEdit( self, 'file import status' ) as dlg:
-                
-                panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( dlg, HydrusGlobals.client_controller, dupe_seed_cache )
-                
-                dlg.SetPanel( panel )
-                
-                if dlg.ShowModal() == wx.ID_OK:
-                    
-                    self._original_subscription.SetSeedCache( dupe_seed_cache )
-                    
-                
-            
-            
-        
-        def EventSiteChanged( self, event ): self._PresentForSiteType()
-        
-        def GetSubscription( self ):
-            
-            gallery_identifier = self._GetGalleryIdentifier()
-            
-            # in future, this can be harvested from some checkboxes or whatever for stream selection
-            gallery_stream_identifiers = ClientDownloading.GetGalleryStreamIdentifiers( gallery_identifier )
-            
-            query = self._query.GetValue()
-            
-            period = self._period.GetValue()
-            
-            get_tags_if_redundant = self._get_tags_if_redundant.GetValue()
-            initial_file_limit = self._initial_file_limit.GetValue()
-            periodic_file_limit = self._periodic_file_limit.GetValue()
-            
-            paused = self._paused.GetValue()
-            
-            import_file_options = self._import_file_options.GetOptions()
-            
-            import_tag_options = self._import_tag_options.GetOptions()
-            
-            self._original_subscription.SetTuple( gallery_identifier, gallery_stream_identifiers, query, period, get_tags_if_redundant, initial_file_limit, periodic_file_limit, paused, import_file_options, import_tag_options )
-            
-            return self._original_subscription
-            
-        
-        def Update( self, subscription ):
-            
-            self._original_subscription = subscription
-            
-            self._SetControls()
             
         
     

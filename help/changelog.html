@@ -8,6 +8,162 @@
 		<div class="content">
 			<h3>changelog</h3>
 			<ul>
+				<li><h3>version 239</h3></li>
+				<ul>
+					<li>finished up similar files search data maintenance code</li>
+					<li>similar files search data maintenance will now run during idle time</li>
+					<li>similar files search data maintenance can be called from database->maintain menu</li>
+					<li>the crowded database->maintenance menu is now split into maintain, regenerate, check</li>
+					<li>improved the similar files tree generation code, speeding searches significantly</li>
+					<li>wrote a new listctrl class to handle more complicated objects and also sort by underlying data</li>
+					<li>the new listctrl now handles object name non-duplication</li>
+					<li>cleaned a bunch of crap old listctrl code</li>
+					<li>manage export folders now uses the new listctrl</li>
+					<li>manage import folders now uses the new listctrl</li>
+					<li>manage subs now uses the new listctrl</li>
+					<li>manage scripts now uses the new listctrl</li>
+					<li>options media viewer options now uses the new listctrl</li>
+					<li>file import status panel now uses the new listctrl</li>
+					<li>the new listctrl can now quickly fetch item index from the underlying object</li>
+					<li>the file import status panel should now cope with extremely huge lists a bit better now!</li>
+					<li>multiple parsing child nodes can now import from/export to clipboard as lists</li>
+					<li>export folders now have names, so you can have multiple export folders pointing to the same path! existing export folders will get their path as their name, but this can be changed no prob</li>
+					<li>cleaned import/export folder dialogs</li>
+					<li>cleaned import/export folder dialog workflow</li>
+					<li>several misc import/export folder improvements</li>
+					<li>hydrus servers are now exclusively https with self-signed certificates</li>
+					<li>hydrus servers now create server.crt and server.key in their db folders for SSL--these files will be backed up along with everything else on an admin backup command</li>
+					<li>system:hash now ignores the file domain and any other predicate. it now returns very quickly, no matter the context</li>
+					<li>improved system:hash search logic</li>
+					<li>all the awkward choice dropdowns in system predicate panels are replaced with radioboxes</li>
+					<li>improved system:rating panel grid layout</li>
+					<li>wrote a better subclass of radiobox to handle more data</li>
+					<li>moved first half of thumbnail menu to new menu system</li>
+					<li>cleaned up a little thumbnail menu logic</li>
+					<li>improved the different ways services are added to thumbnail menu</li>
+					<li>thumbnail 'select' menu is logically cleaned up and allows for better file domain selection</li>
+					<li>the thumbnail menu's copy files and copy hashes to clipboard will now send them ordered (they were previously pseudo-random)</li>
+					<li>added 'paths' to the share->copy thumbnail menu for copying multiple files' paths. these are also ordered.</li>
+					<li>if the popup message manager does not have any errors, it will no longer unhide (which can annoyingly raise the main gui window) when the gui window does not have focus</li>
+					<li>removed some old redundant error reporting stuff in popups</li>
+					<li>improved and quietened some some mime detection failure code, sped up mime failure loop in all cases</li>
+					<li>massively simplified and atomised how new serialisable-object management panels can save their data</li>
+					<li>the manage subscription dialog now saves in a single, faster transaction</li>
+					<li>the manage script dialog now saves in a single, faster transaction</li>
+					<li>reduced redundant index work from analyze jobs</li>
+					<li>improved tag parse error handling</li>
+					<li>fixed media removal rules when deleting from the 'all local files' domain</li>
+					<li>polished and clarified some of the help's tag schema</li>
+					<li>misc cleanup</li>
+					<li>more misc cleanup</li>
+					<li>misc refactoring</li>
+					<li>more misc refactoring</li>
+				</ul>
+				<li><h3>version 238</h3></li>
+				<ul>
+					<li>added left/right equal ratio preference to the similar files search tree generation</li>
+					<li>added high standard deviation preference to the similar files search tree generation</li>
+					<li>added 'db profile mode' to the help menu, for briefer profiling in future</li>
+					<li>when a similar files search occurs with db report mode on, it'll popup a nice bit of text saying how many cycles it took</li>
+					<li>fixed a bug due to last week's 'all local files' change that meant archive/delete filtering would include any selected trashed files</li>
+					<li>'recent tags' will now only be populated by add/pend tag events, and only by those tags that were valid for that action</li>
+					<li>moved the help menu to the new menu system</li>
+					<li>added bitmapped menu item support to the new menu code</li>
+					<li>fixed and cleaned up some of the new menu code</li>
+					<li>improved a/c cache regen error reporting</li>
+				</ul>
+				<li><h3>version 237</h3></li>
+				<ul>
+					<li>added 'all local files' service that spans all local file domains</li>
+					<li>improved trash service code</li>
+					<li>trashed files now report their trashed timestamp in right-click menus</li>
+					<li>trash views will sort oldest/newest by the trash timestamp</li>
+					<li>renamed 'local files' to 'my files' to reduce initial confusion</li>
+					<li>if you don't like 'my files', you can now rename the local files service under manage services!</li>
+					<li>improved how some local file service metadata is stored</li>
+					<li>cleaned and possibly fixed up some delete code</li>
+					<li>cleaned up a bunch of misc service and file service code</li>
+					<li>the client is more intelligent about what local files are -- you can now 'open externally' trashed files, for instance</li>
+					<li>on multiple monitor systems, the new sizing system now bounds itself by the appropriate monitor's dimensions (previously, it was always consulting the primary, I think)</li>
+					<li>if an expansion event causes a frame to grow off screen, the new sizing system will now attempt to move it up and left so it is completely visible</li>
+					<li>fixed an important bug in the specific service autocomplete cache that was leading to several kinds of miscount--please regen your autocomplete cache at your convenience</li>
+					<li>the client can now post additional messages on boot (you'll see one!)</li>
+					<li>improved how errors with unusual characters are applied to failed import file status objects</li>
+					<li>left double-click on the main gui greyspace now opens the new page chooser as well</li>
+					<li>restored session pages now recover more gracefully from missing services</li>
+					<li>shortened the 'stop after this many files' phrase, which was mis-sizing downloader panels</li>
+					<li>changed several bits of old jank in the 'import options - files' collapsible. it is also now thinner</li>
+					<li>misc gui improvements</li>
+					<li>updated more of the menu system code</li>
+					<li>the selection tags box now sizes its height more reasonably</li>
+					<li>fixed 'check now' and 'reset cache' buttons on edit sub dialog</li>
+					<li>subscriptions report better file import status on their popup</li>
+					<li>misc cleanup</li>
+				</ul>
+				<li><h3>version 236</h3></li>
+				<ul>
+					<li>in prep for a network https upgrade, the client can now detect and escalate to https when making connections to hydrus services</li>
+					<li>import/export to png and clipboard now supports multiple objects at once!</li>
+					<li>rewrote the manage subscriptions dialog to work on the new panel system</li>
+					<li>the new manage subscriptions dialog has a listctrl and a sub edit dialog</li>
+					<li>the new manage subscriptions dialog has the same add/export/import/dupe/edit/delete buttons as the manage scripts dialog</li>
+					<li>subscriptions are now importable/exportable, including en masse with the new multiple object import/export support!</li>
+					<li>the new manage subscriptions dialog has retry failed/pause-resume/check now/reset buttons for easy mass subs management</li>
+					<li>the edit subscription panel has a bit of a layout makeover</li>
+					<li>the edit subscription panel now updates itself as its buttons are hit</li>
+					<li>the edit subscription panel disables buttons that are not applicable</li>
+					<li>subscriptions can now be renamed!</li>
+					<li>cleaned some misc subscription code</li>
+					<li>relabelled initial and periodic file limit in the subscription edit panel</li>
+					<li>middle-clicking on the main gui's greyspace (e.g. to the right of the notebook tabs) will spawn the new page chooser!</li>
+					<li>created a simple HydrusRatingArchive class--will do more with it in future</li>
+					<li>added ffmpeg, python, and sqlite versions to the help->about window</li>
+					<li>harmonised daemon code</li>
+					<li>added a new class of daemon that will not fire while a session load is occuring</li>
+					<li>subscriptions, import and export folders, and file repo downloads now use this new daemon</li>
+					<li>cleaned the way background daemons check for idle</li>
+					<li>expand/collapse panels now notify the new kind of toplevelwindow that a resize may be needed when they switch state</li>
+					<li>time deltas (like on subs edit panel or a thread watcher) now render more concisely ('7 days' instead of '7 days 0 hours')</li>
+					<li>serialisable object png export panel now has a width parameter</li>
+					<li>fixed a bug where tags that begin with unicode digits were accidentally identifying as numbers for the purposes of sorting and throwing errors on convert fail</li>
+					<li>the media viewer can handle some more unusual content update combinations--for instance, if it cannot figure out which media to show next, it will revert back to the first image rather than displaying an undefined null mess</li>
+					<li>updated and cleaned a bunch of my old misc encryption code</li>
+					<li>misc cleanup</li>
+				</ul>
+				<li><h3>version 235</h3></li>
+				<ul>
+					<li>finished first version of new faster dupe search--'system:similar to' now uses it</li>
+					<li>finished faster dupe search tree creation</li>
+					<li>finished faster dupe search tree search</li>
+					<li>added faster dupe search tree leaf insertion</li>
+					<li>added faster dupe search tree rebalancing maintenance</li>
+					<li>added faster dupe search tree orphan deletion maintenance</li>
+					<li>added faster dupe search leaf-regeneration-as-scheduled maintenance</li>
+					<li>misc faster dupe search tree work</li>
+					<li>new search tree will be created on db update</li>
+					<li>fixed the 'add' buttons on the import files dialog</li>
+					<li>fixed linux manage tags text input</li>
+					<li>reduced incidence of linux media viewer post-manage tags key event swallowing</li>
+					<li>fixed an issue where if the manage tags dialog was launched from the media viewer while a hover window was displaying, the main gui would often be raised when the manage tags frame was closed, annoyingly obscuring and de-focusing the underlying media viewer</li>
+					<li>fixed manage tags action workflow when no valid tag choices exist</li>
+					<li>entering a tag petition reason now has several common 'suggestions' for quick entry</li>
+					<li>removed ffmpeg binary from default linux release (as basically every linux has a decent ffmpeg by default)</li>
+					<li>fixed the incorrect ffmpeg version for os x</li>
+					<li>added an option to options->media to prefer to use the system ffmpeg over any in the hydrus bin directory</li>
+					<li>fixed linux arrow key navigation of the page picker dialog</li>
+					<li>cleaned up the page picker dialog's gross old code</li>
+					<li>the edit file lookup script panel now has a script management control on its test page to better report on and control tests</li>
+					<li>scripts will new correctly attempt to decode unicode and other encoded text in responses</li>
+					<li>if non-text data is accidentally fetched in the file lookup script panel's test page, it is now caught and a small summary of that event is printed to the text box instead</li>
+					<li>added the same non-text catch to the edit link node panel</li>
+					<li>improved how some script errors and status updates are handled so the new test window script management controls will see and report more useful information</li>
+					<li>removed 'restart' option from linux for now--looks like a bug in pyinstaller</li>
+					<li>improved how the new GET request read reattempt works</li>
+					<li>cleaned up some spammy error code</li>
+					<li>cleaned up spammy test code</li>
+					<li>misc error handling improvements</li>
+					<li>misc cleanup</li>
+				</ul>
 				<li><h3>version 234</h3></li>
 				<ul>
 					<li>the action choice workflow in the manage tags dialog now merges decisions for multiple tag entry events</li>
@@ -20,6 +176,7 @@
 					<li>added unicode path support when importing serialised pngs</li>
 					<li>added unicode path support when exporting serialised pngs</li>
 					<li>exporting a serialised png now reports success via the export button, which will temporarily relabel itself</li>
+					<li>added discord links to help files and help->links menu</li>
 					<li>when a GET network connection fails during the read phase due to an unexpected timeout, the request will be reattempted a couple of times, like failed connection initialisations currently are</li>
 					<li>escape key now closes scrolledpanelframes (review services or import status frames)</li>
 					<li>manage tags dialog and frame now closes due to escape key correctly</li>

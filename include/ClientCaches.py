@@ -1668,7 +1668,7 @@ class ThumbnailCache( object ):
         
         locations_manager = display_media.GetLocationsManager()
         
-        if locations_manager.HasLocal():
+        if locations_manager.IsLocal():
             
             try:
                 
@@ -1953,6 +1953,28 @@ class ServicesManager( object ):
         self._controller.sub( self, 'RefreshServices', 'notify_new_services_data' )
         
     
+    def _GetService( self, service_key ):
+        
+        try:
+            
+            return self._keys_to_services[ service_key ]
+            
+        except KeyError:
+            
+            raise HydrusExceptions.DataMissing( 'That service was not found!' )
+            
+        
+    
+    def Filter( self, service_keys, desired_types ):
+        
+        with self._lock:
+            
+            filtered_service_keys = [ service_key for service_key in service_keys if self._keys_to_services[ service_key ].GetServiceType() in desired_types ]
+            
+            return filtered_service_keys
+            
+        
+    
     def FilterValidServiceKeys( self, service_keys ):
         
         with self._lock:
@@ -1963,26 +1985,39 @@ class ServicesManager( object ):
             
         
     
+    def GetName( self, service_key ):
+        
+        with self._lock:
+            
+            service = self._GetService( service_key )
+            
+            return service.GetName()
+            
+        
+    
     def GetService( self, service_key ):
         
         with self._lock:
             
-            try:
-                
-                return self._keys_to_services[ service_key ]
-                
-            except KeyError:
-                
-                raise HydrusExceptions.DataMissing( 'That service was not found!' )
-                
+            return self._GetService( service_key )
             
         
     
-    def GetServices( self, types = HC.ALL_SERVICES, randomised = True ):
+    def GetServiceKeys( self, desired_types = HC.ALL_SERVICES ):
         
         with self._lock:
             
-            services = [ service for service in self._services_sorted if service.GetServiceType() in types ]
+            filtered_service_keys = [ service_key for ( service_key, service ) in self._keys_to_services.items() if service.GetServiceType() in desired_types ]
+            
+            return filtered_service_keys
+            
+        
+    
+    def GetServices( self, desired_types = HC.ALL_SERVICES, randomised = True ):
+        
+        with self._lock:
+            
+            services = [ service for service in self._services_sorted if service.GetServiceType() in desired_types ]
             
             if randomised:
                 
@@ -2638,12 +2673,23 @@ class UndoManager( object ):
                 ( data_type, action, row ) = content_update.ToTuple()
                 
                 if data_type == HC.CONTENT_TYPE_FILES:
-                    if action in ( HC.CONTENT_UPDATE_ADD, HC.CONTENT_UPDATE_DELETE, HC.CONTENT_UPDATE_UNDELETE, HC.CONTENT_UPDATE_RESCIND_PETITION, HC.CONTENT_UPDATE_ADVANCED ): continue
+                    
+                    if action in ( HC.CONTENT_UPDATE_ADD, HC.CONTENT_UPDATE_DELETE, HC.CONTENT_UPDATE_UNDELETE, HC.CONTENT_UPDATE_RESCIND_PETITION, HC.CONTENT_UPDATE_ADVANCED ):
+                        
+                        continue
+                        
+                    
                 elif data_type == HC.CONTENT_TYPE_MAPPINGS:
                     
-                    if action in ( HC.CONTENT_UPDATE_RESCIND_PETITION, HC.CONTENT_UPDATE_ADVANCED ): continue
+                    if action in ( HC.CONTENT_UPDATE_RESCIND_PETITION, HC.CONTENT_UPDATE_ADVANCED ):
+                        
+                        continue
+                        
                     
-                else: continue
+                else:
+                    
+                    continue
+                    
                 
                 filtered_content_update = HydrusData.ContentUpdate( data_type, action, row )
                 

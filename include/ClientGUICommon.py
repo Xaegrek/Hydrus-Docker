@@ -187,18 +187,19 @@ class AnimatedStaticTextTimestamp( wx.StaticText ):
     
 class BetterButton( wx.Button ):
     
-    def __init__( self, parent, label, callable ):
+    def __init__( self, parent, label, callable, *args, **kwargs ):
         
         wx.Button.__init__( self, parent, label = label )
         
         self._callable = callable
-        
+        self._args = args
+        self._kwargs = kwargs
         self.Bind( wx.EVT_BUTTON, self.EventButton )
         
     
     def EventButton( self, event ):
         
-        self._callable()
+        self._callable( *self._args,  **self._kwargs )
         
     
 class BetterChoice( wx.Choice ):
@@ -228,6 +229,24 @@ class BetterChoice( wx.Choice ):
             
             self.Select( 0 )
             
+        
+    
+class BetterRadioBox( wx.RadioBox ):
+    
+    def __init__( self, *args, **kwargs ):
+        
+        self._indices_to_data = { i : data for ( i, ( s, data ) ) in enumerate( kwargs[ 'choices' ] ) }
+        
+        kwargs[ 'choices' ] = [ s for ( s, data ) in kwargs[ 'choices' ] ]
+        
+        wx.RadioBox.__init__( self, *args, **kwargs )
+        
+    
+    def GetChoice( self ):
+        
+        index = self.GetSelection()
+        
+        return self._indices_to_data[ index ]
         
     
 class BufferedWindow( wx.Window ):
@@ -3058,6 +3077,11 @@ class ListBoxTagsSelectionHoverFrame( ListBoxTagsSelection ):
     
     def _Activate( self ):
         
+        # if the hover window has focus when the manage tags spawns, then when it disappears, the main gui gets put as the next heir
+        # so when manage tags closes, main gui pops to the front!
+        
+        #self.GetParent().GiveParentFocus()
+        
         HydrusGlobals.client_controller.pub( 'canvas_manage_tags', self._canvas_key )
         
     
@@ -3109,7 +3133,10 @@ class ListBoxTagsSelectionManagementPanel( ListBoxTagsSelection ):
     
     def ChangeTagServicePubsub( self, page_key, service_key ):
         
-        if page_key == self._page_key: self.ChangeTagService( service_key )
+        if page_key == self._page_key:
+            
+            self.ChangeTagService( service_key )
+            
         
     
     def IncrementTagsByMediaPubsub( self, page_key, media ):
@@ -3475,16 +3502,6 @@ class PopupMessage( PopupWindow ):
         self._tb_text.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
         self._tb_text.Hide()
         
-        self._show_caller_tb_button = wx.Button( self, label = 'show caller traceback' )
-        self._show_caller_tb_button.Bind( wx.EVT_BUTTON, self.EventShowCallerTBButton )
-        self._show_caller_tb_button.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
-        self._show_caller_tb_button.Hide()
-        
-        self._caller_tb_text = FitResistantStaticText( self )
-        self._caller_tb_text.Wrap( 380 )
-        self._caller_tb_text.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
-        self._caller_tb_text.Hide()
-        
         self._copy_tb_button = wx.Button( self, label = 'copy traceback information' )
         self._copy_tb_button.Bind( wx.EVT_BUTTON, self.EventCopyTBButton )
         self._copy_tb_button.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
@@ -3514,8 +3531,6 @@ class PopupMessage( PopupWindow ):
         vbox.AddF( self._show_files_button, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._show_tb_button, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._tb_text, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._show_caller_tb_button, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._caller_tb_text, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._copy_tb_button, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( hbox, CC.FLAGS_BUTTON_SIZER )
         
@@ -3575,24 +3590,6 @@ class PopupMessage( PopupWindow ):
             
             self._pause_button.SetBitmap( CC.GlobalBMPs.pause )
             
-        
-    
-    def EventShowCallerTBButton( self, event ):
-        
-        if self._caller_tb_text.IsShown():
-            
-            self._show_caller_tb_button.SetLabelText( 'show caller traceback' )
-            
-            self._caller_tb_text.Hide()
-            
-        else:
-            
-            self._show_caller_tb_button.SetLabelText( 'hide caller traceback' )
-            
-            self._caller_tb_text.Show()
-            
-        
-        self.GetParent().MakeSureEverythingFits()
         
     
     def EventShowFilesButton( self, event ):
@@ -3796,9 +3793,8 @@ class PopupMessage( PopupWindow ):
             
         
         popup_traceback = self._job_key.GetIfHasVariable( 'popup_traceback' )
-        popup_caller_traceback = self._job_key.GetIfHasVariable( 'popup_traceback' )
         
-        if popup_traceback is not None or popup_caller_traceback is not None:
+        if popup_traceback is not None:
             
             self._copy_tb_button.Show()
             
@@ -3822,23 +3818,6 @@ class PopupMessage( PopupWindow ):
             
             self._show_tb_button.Hide()
             self._tb_text.Hide()
-            
-        
-        if popup_caller_traceback is not None:
-            
-            text = popup_caller_traceback
-            
-            if self._caller_tb_text.GetLabelText() != text:
-                
-                self._caller_tb_text.SetLabelText( self._ProcessText( HydrusData.ToUnicode( text ) ) )
-                
-            
-            self._show_caller_tb_button.Show()
-            
-        else:
-            
-            self._show_caller_tb_button.Hide()
-            self._caller_tb_text.Hide()
             
         
         if self._job_key.IsPausable():
@@ -3950,6 +3929,25 @@ class PopupMessageManager( wx.Frame ):
             
         
     
+    def _DisplayingError( self ):
+        
+        sizer_items = self._message_vbox.GetChildren()
+        
+        for sizer_item in sizer_items:
+            
+            message_window = sizer_item.GetWindow()
+            
+            job_key = message_window.GetJobKey()
+            
+            if job_key.HasVariable( 'popup_traceback' ):
+                
+                return True
+                
+            
+        
+        return False
+        
+    
     def _SizeAndPositionAndShow( self ):
         
         try:
@@ -3971,11 +3969,11 @@ class PopupMessageManager( wx.Frame ):
                     
                 
             
+            current_focus_tlp = wx.GetTopLevelParent( wx.Window.FindFocus() )
+            
+            gui_is_active = current_focus_tlp in ( self, parent )
+            
             if new_options.GetBoolean( 'hide_message_manager_on_gui_deactive' ):
-                
-                current_focus_tlp = wx.GetTopLevelParent( wx.Window.FindFocus() )
-                
-                gui_is_active = current_focus_tlp in ( self, parent )
                 
                 if gui_is_active:
                     
@@ -4022,8 +4020,14 @@ class PopupMessageManager( wx.Frame ):
                     
                     self.SetPosition( parent.ClientToScreenXY( my_x, my_y ) )
                     
+                    
                 
-                if not going_to_bug_out_at_hide_or_show:
+                # Unhiding tends to raise the main gui tlp, which is annoying if a media viewer window has focus
+                show_is_not_annoying = gui_is_active or self._DisplayingError()
+                
+                ok_to_show = show_is_not_annoying and not going_to_bug_out_at_hide_or_show
+                
+                if ok_to_show:
                     
                     was_hidden = not self.IsShown()
                     
@@ -4139,7 +4143,10 @@ class PopupMessageManager( wx.Frame ):
         event.Skip()
         
     
-    def MakeSureEverythingFits( self ): self._SizeAndPositionAndShow()
+    def MakeSureEverythingFits( self ):
+        
+        self._SizeAndPositionAndShow()
+        
     
     def TIMEREvent( self, event ):
         
@@ -4881,7 +4888,7 @@ class SaneMultilineTextCtrl( wx.TextCtrl ):
     
 class SaneListCtrl( wx.ListCtrl, ListCtrlAutoWidthMixin, ColumnSorterMixin ):
     
-    def __init__( self, parent, height, columns, delete_key_callback = None, activation_callback = None, use_display_tuple_for_sort = False ):
+    def __init__( self, parent, height, columns, delete_key_callback = None, activation_callback = None ):
         
         num_columns = len( columns )
         
@@ -4890,9 +4897,9 @@ class SaneListCtrl( wx.ListCtrl, ListCtrlAutoWidthMixin, ColumnSorterMixin ):
         ColumnSorterMixin.__init__( self, num_columns )
         
         self.itemDataMap = {}
+        self._data_indices_to_sort_indices = {}
+        self._data_indices_to_sort_indices_dirty = False
         self._next_data_index = 0
-        self._use_display_tuple_for_sort = use_display_tuple_for_sort
-        self._custom_client_data = {}
         
         resize_column = 1
         
@@ -4919,24 +4926,46 @@ class SaneListCtrl( wx.ListCtrl, ListCtrlAutoWidthMixin, ColumnSorterMixin ):
         self.Bind( wx.EVT_LIST_COL_BEGIN_DRAG, self.EventBeginColDrag )
         
     
-    def Append( self, display_tuple, client_data ):
+    _GetDataIndex = wx.ListCtrl.GetItemData
+    
+    def _GetIndexFromDataIndex( self, data_index ):
+        
+        if self._data_indices_to_sort_indices_dirty:
+            
+            self._data_indices_to_sort_indices = { self._GetDataIndex( index ) : index for index in range( self.GetItemCount() ) }
+            
+            self._data_indices_to_sort_indices_dirty = False
+            
+        
+        try:
+            
+            return self._data_indices_to_sort_indices[ data_index ]
+            
+        except KeyError:
+            
+            raise HydrusExceptions.DataMissing( 'Data not found!' )
+            
+        
+    
+    def Append( self, display_tuple, sort_tuple ):
         
         index = wx.ListCtrl.Append( self, display_tuple )
         
-        self.SetItemData( index, self._next_data_index )
+        data_index = self._next_data_index
         
-        if self._use_display_tuple_for_sort:
-            
-            self.itemDataMap[ self._next_data_index ] = list( display_tuple )
-            
-            self._custom_client_data[ self._next_data_index ] = client_data
-            
-        else:
-            
-            self.itemDataMap[ self._next_data_index ] = list( client_data )
-            
+        self.SetItemData( index, data_index )
+        
+        self.itemDataMap[ data_index ] = list( sort_tuple )
+        self._data_indices_to_sort_indices[ data_index ] = index
         
         self._next_data_index += 1
+        
+    
+    def DeleteItem( self, *args, **kwargs ):
+        
+        wx.ListCtrl.DeleteItem( self, *args, **kwargs )
+        
+        self._data_indices_to_sort_indices_dirty = True
         
     
     def EventBeginColDrag( self, event ):
@@ -5013,31 +5042,17 @@ class SaneListCtrl( wx.ListCtrl, ListCtrlAutoWidthMixin, ColumnSorterMixin ):
         
         if index is None:
             
-            data_indicies = [ self.GetItemData( index ) for index in range( self.GetItemCount() ) ]
+            data_indicies = [ self._GetDataIndex( index ) for index in range( self.GetItemCount() ) ]
             
-            if self._use_display_tuple_for_sort:
-                
-                datas = [ self._custom_client_data[ data_index ] for data_index in data_indicies ]
-                
-            else:
-                
-                datas = [ tuple( self.itemDataMap[ data_index ] ) for data_index in data_indicies ]
-                
+            datas = [ tuple( self.itemDataMap[ data_index ] ) for data_index in data_indicies ]
             
             return datas
             
         else:
             
-            data_index = self.GetItemData( index )
+            data_index = self._GetDataIndex( index )
             
-            if self._use_display_tuple_for_sort:
-                
-                return self._custom_client_data[ data_index ]
-                
-            else:
-                
-                return tuple( self.itemDataMap[ data_index ] )
-                
+            return tuple( self.itemDataMap[ data_index ] )
             
         
     
@@ -5056,7 +5071,10 @@ class SaneListCtrl( wx.ListCtrl, ListCtrlAutoWidthMixin, ColumnSorterMixin ):
                 comparison_data = client_data[ column_index ]
                 
             
-            if comparison_data == data: return index
+            if comparison_data == data:
+                
+                return index
+                
             
         
         raise HydrusExceptions.DataMissing( 'Data not found!' )
@@ -5083,7 +5101,10 @@ class SaneListCtrl( wx.ListCtrl, ListCtrlAutoWidthMixin, ColumnSorterMixin ):
             
         
     
-    def GetListCtrl( self ): return self
+    def GetListCtrl( self ):
+        
+        return self
+        
     
     def GetSelectedClientData( self ):
         
@@ -5099,13 +5120,21 @@ class SaneListCtrl( wx.ListCtrl, ListCtrlAutoWidthMixin, ColumnSorterMixin ):
         return results
         
     
+    def OnSortOrderChanged( self ):
+        
+        self._data_indices_to_sort_indices_dirty = True
+        
+    
     def RemoveAllSelected( self ):
         
         indices = self.GetAllSelected()
         
         indices.reverse() # so we don't screw with the indices of deletees below
         
-        for index in indices: self.DeleteItem( index )
+        for index in indices:
+            
+            self.DeleteItem( index )
+            
         
     
     def SelectAll( self ):
@@ -5120,16 +5149,7 @@ class SaneListCtrl( wx.ListCtrl, ListCtrlAutoWidthMixin, ColumnSorterMixin ):
             
         
     
-    def UpdateValue( self, index, column, display_value, data_value ):
-        
-        self.SetStringItem( index, column, display_value )
-        
-        data_index = self.GetItemData( index )
-        
-        self.itemDataMap[ data_index ][ column ] = data_value
-        
-    
-    def UpdateRow( self, index, display_tuple, client_data ):
+    def UpdateRow( self, index, display_tuple, sort_tuple ):
         
         column = 0
         
@@ -5140,34 +5160,129 @@ class SaneListCtrl( wx.ListCtrl, ListCtrlAutoWidthMixin, ColumnSorterMixin ):
             column += 1
             
         
-        data_index = self.GetItemData( index )
+        data_index = self._GetDataIndex( index )
         
-        if self._use_display_tuple_for_sort:
+        self.itemDataMap[ data_index ] = list( sort_tuple )
+        
+    
+class SaneListCtrlForSingleObject( SaneListCtrl ):
+    
+    def __init__( self, *args, **kwargs ):
+        
+        # this could one day just take column parameters that the user can pick
+        # it could just take obj in append or whatever and generate column tuples off that
+        
+        self._data_indices_to_objects = {}
+        self._objects_to_data_indices = {}
+        
+        SaneListCtrl.__init__( self, *args, **kwargs )
+        
+    
+    def Append( self, display_tuple, sort_tuple, obj ):
+        
+        self._data_indices_to_objects[ self._next_data_index ] = obj
+        self._objects_to_data_indices[ obj ] = self._next_data_index
+        
+        SaneListCtrl.Append( self, display_tuple, sort_tuple )
+        
+    
+    def GetClientData( self, index = None ):
+        
+        if index is None:
             
-            self.itemDataMap[ data_index ] = list( display_tuple )
+            data_indicies = [ self._GetDataIndex( index ) for index in range( self.GetItemCount() ) ]
             
-            self._custom_client_data[ data_index ] = client_data
+            datas = [ self._data_indices_to_objects[ data_index ] for data_index in data_indicies ]
+            
+            return datas
             
         else:
             
-            self.itemDataMap[ data_index ] = list( client_data )
+            data_index = self._GetDataIndex( index )
+            
+            return self._data_indices_to_objects[ data_index ]
             
         
     
-class SeedCacheControl( SaneListCtrl ):
+    def GetIndexFromClientData( self, obj ):
+        
+        try:
+            
+            data_index = self._objects_to_data_indices[ obj ]
+            
+            index = self._GetIndexFromDataIndex( data_index )
+            
+            return index
+            
+        except KeyError:
+            
+            raise HydrusExceptions.DataMissing( 'Data not found!' )
+            
+        
+    
+    def HasClientData( self, data ):
+        
+        try:
+            
+            index = self.GetIndexFromClientData( data )
+            
+            return True
+            
+        except HydrusExceptions.DataMissing:
+            
+            return False
+            
+        
+    
+    def SetNonDupeName( self, obj ):
+        
+        # when column population is handled here, we can tuck this into normal append/update calls internally
+        
+        name = obj.GetName()
+        
+        current_names = { obj.GetName() for obj in self.GetClientData() }
+        
+        if name in current_names:
+            
+            i = 1
+            
+            original_name = name
+            
+            while name in current_names:
+                
+                name = original_name + ' (' + str( i ) + ')'
+                
+                i += 1
+                
+            
+            obj.SetName( name )
+            
+        
+    
+    def UpdateRow( self, index, display_tuple, sort_tuple, obj ):
+        
+        SaneListCtrl.UpdateRow( self, index, display_tuple, sort_tuple )
+        
+        data_index = self._GetDataIndex( index )
+        
+        self._data_indices_to_objects[ data_index ] = obj
+        self._objects_to_data_indices[ obj ] = data_index
+        
+    
+class SeedCacheControl( SaneListCtrlForSingleObject ):
     
     def __init__( self, parent, seed_cache ):
         
         height = 300
         columns = [ ( 'source', -1 ), ( 'status', 90 ), ( 'added', 150 ), ( 'last modified', 150 ), ( 'note', 200 ) ]
         
-        SaneListCtrl.__init__( self, parent, height, columns )
+        SaneListCtrlForSingleObject.__init__( self, parent, height, columns )
         
         self._seed_cache = seed_cache
         
-        for info_tuple in self._seed_cache.GetSeedsWithInfo():
+        for seed in self._seed_cache.GetSeeds():
             
-            self._AddSeed( info_tuple )
+            self._AddSeed( seed )
             
         
         self.Bind( wx.EVT_MENU, self.EventMenu )
@@ -5176,16 +5291,20 @@ class SeedCacheControl( SaneListCtrl ):
         HydrusGlobals.client_controller.sub( self, 'NotifySeedUpdated', 'seed_cache_seed_updated' )
         
     
-    def _AddSeed( self, info_tuple ):
+    def _AddSeed( self, seed ):
         
-        pretty_tuple = self._GetPrettyTuple( info_tuple )
+        sort_tuple = self._seed_cache.GetSeedInfo( seed )
         
-        self.Append( pretty_tuple, info_tuple )
+        ( display_tuple, sort_tuple ) = self._GetListCtrlTuples( seed )
+        
+        self.Append( display_tuple, sort_tuple, seed )
         
     
-    def _GetPrettyTuple( self, info_tuple ):
+    def _GetListCtrlTuples( self, seed ):
         
-        ( seed, status, added_timestamp, last_modified_timestamp, note ) = info_tuple
+        sort_tuple = self._seed_cache.GetSeedInfo( seed )
+        
+        ( seed, status, added_timestamp, last_modified_timestamp, note ) = sort_tuple
         
         pretty_seed = HydrusData.ToUnicode( seed )
         pretty_status = CC.status_string_lookup[ status ]
@@ -5193,14 +5312,18 @@ class SeedCacheControl( SaneListCtrl ):
         pretty_modified = HydrusData.ConvertTimestampToPrettyAgo( last_modified_timestamp )
         pretty_note = note.split( os.linesep )[0]
         
-        return ( pretty_seed, pretty_status, pretty_added, pretty_modified, pretty_note )
+        display_tuple = ( pretty_seed, pretty_status, pretty_added, pretty_modified, pretty_note )
+        
+        return ( display_tuple, sort_tuple )
         
     
     def _CopySelectedNotes( self ):
         
         notes = []
         
-        for ( seed, status, added_timestamp, last_modified_timestamp, note ) in self.GetSelectedClientData():
+        for seed in self.GetSelectedClientData():
+            
+            ( seed, status, added_timestamp, last_modified_timestamp, note ) = self._seed_cache.GetSeedInfo( seed )
             
             if note != '':
                 
@@ -5220,7 +5343,7 @@ class SeedCacheControl( SaneListCtrl ):
     
     def _CopySelectedSeeds( self ):
         
-        seeds = [ seed for  ( seed, status, added_timestamp, last_modified_timestamp, note ) in self.GetSelectedClientData() ]
+        seeds = self.GetSelectedClientData()
         
         if len( seeds ) > 0:
             
@@ -5234,15 +5357,7 @@ class SeedCacheControl( SaneListCtrl ):
     
     def _SetSelected( self, status_to_set ):
         
-        seeds_to_reset = set()
-        
-        for ( seed, status, added_timestamp, last_modified_timestamp, note ) in self.GetSelectedClientData():
-            
-            if status != status_to_set:
-                
-                seeds_to_reset.add( seed )
-                
-            
+        seeds_to_reset = self.GetSelectedClientData()
         
         for seed in seeds_to_reset:
             
@@ -5281,38 +5396,28 @@ class SeedCacheControl( SaneListCtrl ):
         HydrusGlobals.client_controller.PopupMenu( self, menu )
         
     
-    def NotifySeedAdded( self, seed ):
-        
-        if self._seed_cache.HasSeed( seed ):
-            
-            info_tuple = self._seed_cache
-            
-        
-    
     def NotifySeedUpdated( self, seed ):
         
         if self._seed_cache.HasSeed( seed ):
             
-            info_tuple = self._seed_cache.GetSeedInfo( seed )
-            
-            if self.HasClientData( seed, 0 ):
+            if self.HasClientData( seed ):
                 
-                index = self.GetIndexFromClientData( seed, 0 )
+                index = self.GetIndexFromClientData( seed )
                 
-                pretty_tuple = self._GetPrettyTuple( info_tuple )
+                ( display_tuple, sort_tuple ) = self._GetListCtrlTuples( seed )
                 
-                self.UpdateRow( index, pretty_tuple, info_tuple )
+                self.UpdateRow( index, display_tuple, sort_tuple, seed )
                 
             else:
                 
-                self._AddSeed( info_tuple )
+                self._AddSeed( seed )
                 
             
         else:
             
-            if self.HasClientData( seed, 0 ):
+            if self.HasClientData( seed ):
                 
-                index = self.GetIndexFromClientData( seed, 0 )
+                index = self.GetIndexFromClientData( seed )
                 
                 self.DeleteItem( index )
                 

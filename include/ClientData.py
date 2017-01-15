@@ -114,7 +114,7 @@ def ConvertServiceKeysToContentUpdatesToPrettyString( service_keys_to_content_up
         
         if len( content_updates ) > 0:
             
-            name = HydrusGlobals.client_controller.GetServicesManager().GetService( service_key ).GetName()
+            name = HydrusGlobals.client_controller.GetServicesManager().GetName( service_key )
             
             locations.add( name )
             
@@ -123,15 +123,30 @@ def ConvertServiceKeysToContentUpdatesToPrettyString( service_keys_to_content_up
             
             ( data_type, action, row ) = content_update.ToTuple()
             
-            if data_type == HC.CONTENT_TYPE_MAPPINGS: extra_words = ' tags for'
+            if data_type == HC.CONTENT_TYPE_MAPPINGS:
+                
+                extra_words = ' tags for'
+                
             
             actions.add( HC.content_update_string_lookup[ action ] )
+            
+            if action in ( HC.CONTENT_UPDATE_ARCHIVE, HC.CONTENT_UPDATE_INBOX ):
+                
+                locations = set()
+                
             
             num_files += len( content_update.GetHashes() )
             
         
     
-    s = ', '.join( locations ) + '->' + ', '.join( actions ) + extra_words + ' ' + HydrusData.ConvertIntToPrettyString( num_files ) + ' files'
+    s = ''
+    
+    if len( locations ) > 0:
+        
+        s += ', '.join( locations ) + '->'
+        
+    
+    s += ', '.join( actions ) + extra_words + ' ' + HydrusData.ConvertIntToPrettyString( num_files ) + ' files'
     
     return s
     
@@ -541,6 +556,8 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         self._dictionary[ 'booleans' ][ 'load_images_with_pil' ] = True
         
+        self._dictionary[ 'booleans' ][ 'use_system_ffmpeg' ] = False
+        
         #
         
         self._dictionary[ 'integers' ] = {}
@@ -603,6 +620,7 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         self._dictionary[ 'frame_locations' ][ 'file_import_status' ] = ( True, True, None, None, ( -1, -1 ), 'topleft', False, False )
         self._dictionary[ 'frame_locations' ][ 'main_gui' ] = ( True, True, ( 640, 480 ), ( 20, 20 ), ( -1, -1 ), 'topleft', True, False )
         self._dictionary[ 'frame_locations' ][ 'manage_options_dialog' ] = ( False, False, None, None, ( -1, -1 ), 'topleft', False, False )
+        self._dictionary[ 'frame_locations' ][ 'manage_subscriptions_dialog' ] = ( True, True, None, None, ( 1, -1 ), 'topleft', False, False )
         self._dictionary[ 'frame_locations' ][ 'manage_tags_dialog' ] = ( False, False, None, None, ( -1, 1 ), 'topleft', False, False )
         self._dictionary[ 'frame_locations' ][ 'manage_tags_frame' ] = ( False, False, None, None, ( -1, 1 ), 'topleft', False, False )
         self._dictionary[ 'frame_locations' ][ 'media_viewer' ] = ( True, True, ( 640, 480 ), ( 70, 70 ), ( -1, -1 ), 'topleft', True, True )
@@ -1751,7 +1769,7 @@ class ServiceRestricted( ServiceRemote ):
             
             url = 'http://' + host + ':' + str( port ) + path_and_query
             
-            ( response, size_of_response, response_headers, cookies ) = HydrusGlobals.client_controller.DoHTTP( method, url, request_headers, body, report_hooks = report_hooks, temp_path = temp_path, return_everything = True )
+            ( response, size_of_response, response_headers, cookies ) = HydrusGlobals.client_controller.DoHTTP( method, url, request_headers, body, report_hooks = report_hooks, temp_path = temp_path, hydrus_network = True )
             
             ClientNetworking.CheckHydrusVersion( self._service_key, self._service_type, response_headers )
             

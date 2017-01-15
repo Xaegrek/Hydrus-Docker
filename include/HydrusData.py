@@ -313,21 +313,36 @@ def ConvertTimeDeltaToPrettyString( seconds ):
             days = seconds / 86400
             hours = ( seconds % 86400 ) / 3600
             
-            result = '%d' % days + ' days ' + '%d' % hours + ' hours'
+            result = '%d' % days + ' days'
+            
+            if hours > 0:
+                
+                result += ' %d' % hours + ' hours'
+                
             
         elif seconds > 3600:
             
             hours = seconds / 3600
             minutes = ( seconds % 3600 ) / 60
             
-            result = '%d' % hours + ' hours ' + '%d' % minutes + ' minutes'
+            result = '%d' % hours + ' hours'
+            
+            if minutes > 0:
+                
+                result += ' %d' % minutes + ' minutes'
+                
             
         else:
             
             minutes = seconds / 60
             seconds = seconds % 60
             
-            result = '%d' % minutes + ' minutes ' + '%d' % seconds + ' seconds'
+            result = '%d' % minutes + ' minutes'
+            
+            if seconds > 0:
+                
+                result += ' %d' % seconds + ' seconds'
+                
             
         
     elif seconds > 1:
@@ -864,6 +879,20 @@ def LastShutdownWasBad( db_path, instance ):
         
         return False
         
+
+def MassUnion( lists ):
+    
+    return { item for item in itertools.chain.from_iterable( lists ) }
+    
+def MedianPop( population ):
+    
+    # assume it has at least one and comes sorted
+    
+    median_index = len( population ) / 2
+    
+    row = population.pop( median_index )
+    
+    return row
     
 def MergeKeyToListDicts( key_to_list_dicts ):
     
@@ -882,7 +911,7 @@ def Print( text ):
     
 ShowText = Print
 
-def PrintException( e ):
+def PrintException( e, do_wait = True ):
     
     if isinstance( e, HydrusExceptions.ShutdownException ):
         
@@ -904,7 +933,10 @@ def PrintException( e ):
     
     DebugPrint( message )
     
-    time.sleep( 1 )
+    if do_wait:
+        
+        time.sleep( 1 )
+        
     
 ShowException = PrintException
 
@@ -994,9 +1026,9 @@ def RestartProcess():
     exe = sys.executable
     me = sys.argv[0]
     
-    if me.endswith( '.py' ) or me.endswith( '.pyw' ):
+    if HC.RUNNING_FROM_SOURCE:
         
-        # we are running from source--exe is python's exe, me is the script
+        # exe is python's exe, me is the script
         
         args = [ sys.executable ] + sys.argv
         

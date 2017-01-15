@@ -18,19 +18,64 @@ if HC.PLATFORM_LINUX or HC.PLATFORM_OSX:
     
     FFMPEG_PATH = os.path.join( HC.BIN_DIR, 'ffmpeg' )
     
-    if not os.path.exists( FFMPEG_PATH ):
-        
-        FFMPEG_PATH = 'ffmpeg'
-        
-    
 elif HC.PLATFORM_WINDOWS:
     
     FFMPEG_PATH = os.path.join( HC.BIN_DIR, 'ffmpeg.exe' )
     
-    if not os.path.exists( FFMPEG_PATH ):
+if not os.path.exists( FFMPEG_PATH ):
+    
+    FFMPEG_PATH = os.path.basename( FFMPEG_PATH )
+    
+def GetFFMPEGVersion():
+    # open the file in a pipe, provoke an error, read output
+    
+    cmd = [ FFMPEG_PATH, '-version' ]
+    
+    try:
         
-        FFMPEG_PATH = 'ffmpeg.exe'
+        proc = subprocess.Popen( cmd, bufsize=10**5, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo = HydrusData.GetSubprocessStartupInfo() )
         
+    except Exception as e:
+        
+        if not os.path.exists( FFMPEG_PATH ):
+            
+            return 'no ffmpeg found'
+            
+        else:
+            
+            HydrusData.ShowException( e )
+            
+            return 'unable to execute ffmpeg'
+            
+        
+    
+    infos = proc.stdout.read().decode( 'utf8' )
+    
+    proc.terminate()
+    
+    del proc
+    
+    lines = infos.splitlines()
+    
+    if len( lines ) > 0:
+        
+        # typically 'ffmpeg version [VERSION] Copyright ...
+        top_line = lines[0]
+        
+        if top_line.startswith( 'ffmpeg version ' ):
+            
+            top_line = top_line.replace( 'ffmpeg version ', '' )
+            
+            if ' ' in top_line:
+                
+                version_string = top_line.split( ' ' )[0]
+                
+                return version_string
+                
+            
+        
+    
+    return 'unknown'
     
 def GetFFMPEGVideoProperties( path ):
     
@@ -117,7 +162,7 @@ def GetMimeFromFFMPEG( path ):
             
         
     
-    raise Exception( 'FFMPEG could not find mime in ' + path + '!' )
+    return HC.APPLICATION_UNKNOWN
     
 def HasVideoStream( path ):
     
@@ -159,7 +204,21 @@ def Hydrusffmpeg_parse_infos(filename, print_infos=False):
         if HC.PLATFORM_WINDOWS: cmd += ["-f", "null", "NUL"]
         else: cmd += ["-f", "null", "/dev/null"]
     
-    proc = subprocess.Popen( cmd, bufsize=10**5, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+    try:
+        
+        proc = subprocess.Popen( cmd, bufsize=10**5, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+        
+    except:
+        
+        if not os.path.exists( FFMPEG_PATH ):
+            
+            raise Exception( 'FFMPEG was not found!' )
+            
+        else:
+            
+            raise
+            
+        
     
     infos = proc.stderr.read().decode('utf8')
     
@@ -174,6 +233,8 @@ def Hydrusffmpeg_parse_infos(filename, print_infos=False):
     lines = infos.splitlines()
     if "No such file or directory" in lines[-1]:
         raise IOError("%s not found ! Wrong path ?"%filename)
+    if 'Invalid data' in lines[-1]:
+        raise HydrusExceptions.MimeException( 'FFMPEG could not parse.' )
     
     result = dict()
     
@@ -364,7 +425,21 @@ class VideoRendererFFMPEG( object ):
             '-vcodec', 'rawvideo', '-' ]
             
         
-        self.process = subprocess.Popen( cmd, bufsize = self.bufsize, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+        try:
+            
+            self.process = subprocess.Popen( cmd, bufsize = self.bufsize, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+            
+        except:
+            
+            if not os.path.exists( FFMPEG_PATH ):
+                
+                raise Exception( 'FFMPEG was not found!' )
+                
+            else:
+                
+                raise
+                
+            
         
         if skip_frames > 0:
             

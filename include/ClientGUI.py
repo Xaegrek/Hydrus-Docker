@@ -5,6 +5,7 @@ import ClientCaches
 import ClientFiles
 import ClientData
 import ClientDragDrop
+import ClientExporting
 import ClientGUICommon
 import ClientGUIDialogs
 import ClientGUIDialogsManage
@@ -20,6 +21,8 @@ import ClientDownloading
 import ClientMedia
 import ClientSearch
 import ClientThreading
+import collections
+import cv2
 import gc
 import HydrusData
 import HydrusExceptions
@@ -32,15 +35,19 @@ import HydrusNetworking
 import HydrusSerialisable
 import HydrusTagArchive
 import HydrusThreading
+import HydrusVideoHandling
 import itertools
 import os
+import PIL
 import random
 import sqlite3
+import ssl
 import subprocess
 import sys
 import threading
 import time
 import traceback
+import types
 import webbrowser
 import wx
 import yaml
@@ -79,6 +86,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         self._lock = threading.Lock()
         
         self._notebook = wx.Notebook( self )
+        self._notebook.Bind( wx.EVT_LEFT_DCLICK, self.EventNotebookLeftDoubleClick )
         self._notebook.Bind( wx.EVT_MIDDLE_DOWN, self.EventNotebookMiddleClick )
         self._notebook.Bind( wx.EVT_RIGHT_DOWN, self.EventNotebookMenu )
         self.Bind( wx.EVT_NOTEBOOK_PAGE_CHANGED, self.EventNotebookPageChanged )
@@ -91,6 +99,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         self._message_manager = ClientGUICommon.PopupMessageManager( self )
         
+        self.Bind( wx.EVT_LEFT_DCLICK, self.EventFrameNewPage )
+        self.Bind( wx.EVT_MIDDLE_DOWN, self.EventFrameNewPage )
         self.Bind( wx.EVT_CLOSE, self.EventClose )
         self.Bind( wx.EVT_MENU, self.EventMenu )
         self.Bind( wx.EVT_SET_FOCUS, self.EventFocus )
@@ -182,7 +192,37 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         aboutinfo.SetIcon( wx.Icon( os.path.join( HC.STATIC_DIR, 'hydrus.ico' ), wx.BITMAP_TYPE_ICO ) )
         aboutinfo.SetName( 'hydrus client' )
         aboutinfo.SetVersion( str( HC.SOFTWARE_VERSION ) + ', using network version ' + str( HC.NETWORK_VERSION ) )
-        aboutinfo.SetDescription( CC.CLIENT_DESCRIPTION )
+        
+        library_versions = []
+        
+        library_versions.append( ( 'FFMPEG', HydrusVideoHandling.GetFFMPEGVersion() ) )
+        library_versions.append( ( 'OpenCV', cv2.__version__ ) )
+        library_versions.append( ( 'openssl', ssl.OPENSSL_VERSION ) )
+        library_versions.append( ( 'PIL', PIL.VERSION ) )
+        
+        if hasattr( PIL, 'PILLOW_VERSION' ):
+            
+            library_versions.append( ( 'Pillow', PIL.PILLOW_VERSION ) )
+            
+        
+        # 2.7.12 (v2.7.12:d33e0cf91556, Jun 27 2016, 15:24:40) [MSC v.1500 64 bit (AMD64)]
+        v = sys.version
+        
+        if ' ' in v:
+            
+            v = v.split( ' ' )[0]
+            
+        
+        library_versions.append( ( 'python', v ) )
+        
+        library_versions.append( ( 'sqlite', sqlite3.sqlite_version ) )
+        library_versions.append( ( 'wx', wx.version() ) )
+        
+        description = 'This client is the media management application of the hydrus software suite.'
+        
+        description += os.linesep * 2 + os.linesep.join( ( lib + ': ' + version for ( lib, version ) in library_versions ) )
+        
+        aboutinfo.SetDescription( description )
         
         with open( os.path.join( HC.BASE_DIR, 'license.txt' ), 'rb' ) as f: license = f.read()
         
@@ -215,7 +255,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
     
     def _AnalyzeDatabase( self ):
         
-        message = 'This will gather statistical information on the database\'s indices, helping the query planner design efficient queries. It typically happens automatically every few days, but you can force it here. If you have a large database, it will take a few minutes, during which your gui may hang. A popup message will show its status.'
+        message = 'This will gather statistical information on the database\'s indices, helping the query planner perform efficiently. It typically happens automatically every few days, but you can force it here. If you have a large database, it will take a few minutes, during which your gui may hang. A popup message will show its status.'
         message += os.linesep * 2
         message += 'A \'soft\' analyze will only reanalyze those indices that are due for a check in the normal db maintenance cycle. If nothing is due, it will return immediately.'
         message += os.linesep * 2
@@ -553,6 +593,14 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
         
     
+    def _ChooseNewPage( self ):
+        
+        with ClientGUIDialogs.DialogPageChooser( self ) as dlg:
+            
+            dlg.ShowModal()
+            
+        
+    
     def _ClearOrphans( self ):
         
         text = 'This will iterate through every file in your database\'s file storage, removing any it does not expect to be there. It may take some time.'
@@ -644,6 +692,75 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         self._controller.pub( 'notify_new_undo' )
         
     
+    def _DebugMakeSomePopups( self ):
+        
+        for i in range( 1, 7 ):
+            
+            HydrusData.ShowText( 'This is a test popup message -- ' + str( i ) )
+            
+        
+        #
+        
+        job_key = ClientThreading.JobKey( pausable = True, cancellable = True)
+        
+        job_key.SetVariable( 'title', 'test job' )
+        
+        job_key.SetVariable( 'popup_text_1', 'Currently processing test job 5/8' )
+        job_key.SetVariable( 'popup_gauge_1', ( 5, 8 ) )
+        
+        self._controller.pub( 'message', job_key )
+        
+        wx.CallLater( 2000, job_key.SetVariable, 'popup_text_2', 'Pulsing subjob' )
+        wx.CallLater( 2000, job_key.SetVariable, 'popup_gauge_2', ( 0, None ) )
+        
+        #
+        
+        e = HydrusExceptions.DataMissing( 'This is a test exception' )
+        
+        HydrusData.ShowException( e )
+        
+        #
+        
+        for i in range( 1, 4 ):
+            
+            wx.CallLater( 500 * i, HydrusData.ShowText, 'This is a delayed popup message -- ' + str( i ) )
+            
+        
+    
+    def _DebugPrintGarbage( self ):
+        
+        HydrusData.ShowText( 'Printing garbage to log' )
+        
+        gc.collect()
+        
+        count = collections.Counter()
+        
+        class_count = collections.Counter()
+        
+        for o in gc.get_objects():
+            
+            count[ type( o ) ] += 1
+            
+            if isinstance( o, types.InstanceType ): class_count[ o.__class__.__name__ ] += 1
+            elif isinstance( o, types.BuiltinFunctionType ): class_count[ o.__name__ ] += 1
+            elif isinstance( o, types.BuiltinMethodType ): class_count[ o.__name__ ] += 1
+            
+        
+        HydrusData.Print( 'gc:' )
+        
+        for ( k, v ) in count.items():
+            
+            if v > 100: print ( k, v )
+            
+        
+        for ( k, v ) in class_count.items():
+            
+            if v > 100: print ( k, v )
+            
+        
+        HydrusData.Print( 'uncollectable garbage: ' + HydrusData.ToUnicode( gc.garbage ) )
+        
+    
     def _DeleteAllClosedPages( self ):
         
         with self._lock:
@@ -658,6 +775,13 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         self._focus_holder.SetFocus()
         
         self._controller.pub( 'notify_new_undo' )
+        
+    
+    def _DeleteGUISession( self, name ):
+        
+        self._controller.Write( 'delete_serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_GUI_SESSION, name )
+        
+        self._controller.pub( 'notify_new_sessions' )
         
     
     def _DeletePending( self, service_key ):
@@ -751,7 +875,13 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             menu.AppendSeparator()
             
-            ClientGUIMenus.AppendMenuItem( menu, 'restart', 'Shut the client down and then start it up again.', self, self.Exit, restart = True )
+            we_borked_linux_pyinstaller = HC.PLATFORM_LINUX and not HC.RUNNING_FROM_SOURCE
+            
+            if not we_borked_linux_pyinstaller:
+                
+                ClientGUIMenus.AppendMenuItem( menu, 'restart', 'Shut the client down and then start it up again.', self, self.Exit, restart = True )
+                
+            
             ClientGUIMenus.AppendMenuItem( menu, 'exit', 'Shut the client down.', self, self.Exit )
             
             return ( menu, p( '&File' ), True )
@@ -833,8 +963,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         def pages():
             
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'refresh' ), p( '&Refresh' ), p( 'Refresh the current view.' ) )
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'show_hide_splitters' ), p( 'Show/Hide Management and Preview Panels' ), p( 'Show or hide the panels on the left.' ) )
+            ClientGUIMenus.AppendMenuItem( menu, 'refresh', 'If the current page has a search, refresh it.', self, self._Refresh )
+            ClientGUIMenus.AppendMenuItem( menu, 'show/hide management and preview panels', 'Show or hide the panels on the left.', self, self._ShowHideSplitters )
             
             menu.AppendSeparator()
             
@@ -848,13 +978,13 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 
                 for name in gui_session_names:
                     
-                    load.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'load_gui_session', name ), name )
+                    ClientGUIMenus.AppendMenuItem( load, name, 'Close all other pages and load this session.', self, self._LoadGUISession, name )
                     
                 
-                sessions.AppendMenu( CC.ID_NULL, p( 'Load' ), load )
+                ClientGUIMenus.AppendMenu( sessions, load, 'load' )
                 
             
-            sessions.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'save_gui_session' ), p( 'Save Current' ) )
+            ClientGUIMenus.AppendMenuItem( sessions, 'save current', 'Save the existing open pages as a session.', self, self._SaveGUISession )
             
             if len( gui_session_names ) > 0 and gui_session_names != [ 'last session' ]:
                 
@@ -864,16 +994,18 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                     
                     if name != 'last session':
                         
-                        delete.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'delete_gui_session', name ), name )
+                        ClientGUIMenus.AppendMenuItem( delete, name, 'Delete this session.', self, self._DeleteGUISession, name )
                         
                     
                 
-                sessions.AppendMenu( CC.ID_NULL, p( 'Delete' ), delete )
+                ClientGUIMenus.AppendMenu( sessions, delete, 'delete' )
                 
             
-            menu.AppendMenu( CC.ID_NULL, p( 'Sessions' ), sessions )
+            ClientGUIMenus.AppendMenu( menu, sessions, 'sessions' )
+            
             menu.AppendSeparator()
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_page' ), p( 'Pick a New &Page' ), p( 'Pick a new page.' ) )
+            
+            ClientGUIMenus.AppendMenuItem( menu, 'pick a new page', 'Choose a new page to open.', self, self._ChooseNewPage )
             
             #
             
@@ -889,11 +1021,15 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             petition_resolve_file_services = [ repository for repository in file_repositories if repository.GetInfo( 'account' ).HasPermission( HC.RESOLVE_PETITIONS ) ]
             
-            search_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY ), p( '&New Local Search' ), p( 'Open a new search tab for your files' ) )
-            search_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_page_query', CC.TRASH_SERVICE_KEY ), p( '&New Trash Search' ), p( 'Open a new search tab for your recently deleted files' ) )
-            for service in file_repositories: search_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_page_query', service.GetServiceKey() ), p( 'New ' + service.GetName() + ' Search' ), p( 'Open a new search tab for ' + service.GetName() + '.' ) )
+            ClientGUIMenus.AppendMenuItem( search_menu, 'my files', 'Open a new search tab for your files.', self, self._NewPageQuery, CC.LOCAL_FILE_SERVICE_KEY )
+            ClientGUIMenus.AppendMenuItem( search_menu, 'trash', 'Open a new search tab for your recently deleted files.', self, self._NewPageQuery, CC.TRASH_SERVICE_KEY )
             
-            menu.AppendMenu( CC.ID_NULL, p( 'New Search Page' ), search_menu )
+            for service in file_repositories:
+                
+                ClientGUIMenus.AppendMenuItem( search_menu, service.GetName(), 'Open a new search tab for ' + service.GetName() + '.', self, self._NewPageQuery, service.GetServiceKey() )
+                
+            
+            ClientGUIMenus.AppendMenu( menu, search_menu, 'new search page' )
             
             #
             
@@ -903,63 +1039,68 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 
                 for service in petition_resolve_tag_services:
                     
-                    petition_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'petitions', service.GetServiceKey() ), p( service.GetName() + ' Petitions' ), p( 'Open a petition tab for ' + service.GetName() ) )
+                    ClientGUIMenus.AppendMenuItem( petition_menu, service.GetName(), 'Open a new tag petition tab for ' + service.GetName() + '.', self, self._NewPagePetitions, service.GetServiceKey() )
                     
                 
                 for service in petition_resolve_file_services:
                     
-                    petition_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'petitions', service.GetServiceKey() ), p( service.GetName() + ' Petitions' ), p( 'Open a petition tab for ' + service.GetName() ) )
+                    ClientGUIMenus.AppendMenuItem( petition_menu, service.GetName(), 'Open a new file petition tab for ' + service.GetName() + '.', self, self._NewPagePetitions, service.GetServiceKey() )
                     
                 
-                menu.AppendMenu( CC.ID_NULL, p( 'New Petition Page' ), petition_menu )
+                ClientGUIMenus.AppendMenu( menu, petition_menu, 'new petition page' )
                 
             
             #
             
             download_menu = wx.Menu()
             
-            download_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_page_of_images' ), p( '&New Page of Images Download Page' ), p( 'Open a new tab to download files from generic galleries or threads.' ) )
-            download_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_thread_watcher' ), p( '&New Thread Watcher Page' ), p( 'Open a new tab to watch a thread.' ) )
-            download_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_urls' ), p( '&New URL Download Page' ), p( 'Open a new tab to download some raw urls.' ) )
+            ClientGUIMenus.AppendMenuItem( download_menu, 'url download', 'Open a new tab to download some raw urls.', self, self._NewPageImportURLs )
+            ClientGUIMenus.AppendMenuItem( download_menu, 'thread watcher', 'Open a new tab to watch a thread.', self, self._NewPageImportThreadWatcher )
+            ClientGUIMenus.AppendMenuItem( download_menu, 'webpage of images', 'Open a new tab to download files from generic galleries or threads.', self, self._NewPageImportPageOfImages )
             
-            submenu = wx.Menu()
+            gallery_menu = wx.Menu()
             
-            submenu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_booru' ), p( 'Booru' ), p( 'Open a new tab to download files from a booru.' ) )
-            submenu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_gallery', HC.SITE_TYPE_DEVIANT_ART ), p( 'Deviant Art' ), p( 'Open a new tab to download files from Deviant Art.' ) )
+            ClientGUIMenus.AppendMenuItem( gallery_menu, 'booru', 'Open a new tab to download files from a booru.', self, self._NewPageImportBooru )
+            ClientGUIMenus.AppendMenuItem( gallery_menu, 'deviant art', 'Open a new tab to download files from Deviant Art.', self, self._NewPageImportGallery, ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_DEVIANT_ART ) )
+            
             hf_submenu = wx.Menu()
-            hf_submenu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_gallery', HC.SITE_TYPE_HENTAI_FOUNDRY_ARTIST ), p( 'By Artist' ), p( 'Open a new tab to download files from Hentai Foundry.' ) )
-            hf_submenu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_gallery', HC.SITE_TYPE_HENTAI_FOUNDRY_TAGS ), p( 'By Tags' ), p( 'Open a new tab to download files from Hentai Foundry.' ) )
-            submenu.AppendMenu( CC.ID_NULL, p( '&Hentai Foundry' ), hf_submenu )
-            submenu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_gallery', HC.SITE_TYPE_NEWGROUNDS ), p( 'Newgrounds' ), p( 'Open a new tab to download files from Newgrounds.' ) )
+            
+            ClientGUIMenus.AppendMenuItem( hf_submenu, 'by artist', 'Open a new tab to download files from Hentai Foundry.', self, self._NewPageImportGallery, ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_HENTAI_FOUNDRY_ARTIST ) )
+            ClientGUIMenus.AppendMenuItem( hf_submenu, 'by tags', 'Open a new tab to download files from Hentai Foundry.', self, self._NewPageImportGallery, ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_HENTAI_FOUNDRY_TAGS ) )
+            
+            ClientGUIMenus.AppendMenu( gallery_menu, hf_submenu, 'hentai foundry' )
+            
+            ClientGUIMenus.AppendMenuItem( gallery_menu, 'newgrounds', 'Open a new tab to download files from Newgrounds.', self, self._NewPageImportGallery, ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_NEWGROUNDS ) )
             
             result = self._controller.Read( 'serialisable_simple', 'pixiv_account' )
             
             if result is not None:
                 
                 pixiv_submenu = wx.Menu()
-                pixiv_submenu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_gallery', HC.SITE_TYPE_PIXIV_ARTIST_ID ), p( 'By Artist Id' ), p( 'Open a new tab to download files from Pixiv.' ) )
-                pixiv_submenu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_gallery', HC.SITE_TYPE_PIXIV_TAG ), p( 'By Tag' ), p( 'Open a new tab to download files from Hentai Pixiv.' ) )
-                submenu.AppendMenu( CC.ID_NULL, p( '&Pixiv' ), pixiv_submenu )
+                
+                ClientGUIMenus.AppendMenuItem( pixiv_submenu, 'by artist id', 'Open a new tab to download files from Pixiv.', self, self._NewPageImportGallery, ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_PIXIV_ARTIST_ID ) )
+                ClientGUIMenus.AppendMenuItem( pixiv_submenu, 'by tag', 'Open a new tab to download files from Pixiv.', self, self._NewPageImportGallery, ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_PIXIV_TAG ) )
+                
+                ClientGUIMenus.AppendMenu( gallery_menu, pixiv_submenu, 'pixiv' )
                 
             
-            submenu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'new_import_gallery', HC.SITE_TYPE_TUMBLR ), p( 'Tumblr' ), p( 'Open a new tab to download files from Tumblr.' ) )
+            ClientGUIMenus.AppendMenuItem( gallery_menu, 'tumblr', 'Open a new tab to download files from tumblr.', self, self._NewPageImportGallery, ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_TUMBLR ) )
             
-            download_menu.AppendMenu( CC.ID_NULL, p( '&New Gallery Download Page' ), submenu )
-            
-            menu.AppendMenu( CC.ID_NULL, p( 'New Download Page' ), download_menu )
+            ClientGUIMenus.AppendMenu( download_menu, gallery_menu, 'gallery' )
+            ClientGUIMenus.AppendMenu( menu, download_menu, 'new download page' )
             
             download_popup_menu = wx.Menu()
             
-            download_popup_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'start_youtube_download' ), p( '&A YouTube Video' ), p( 'Enter a YouTube URL and choose which formats you would like to download' ) )
+            ClientGUIMenus.AppendMenuItem( download_popup_menu, 'a youtube video', 'Enter a YouTube URL and choose which formats you would like to download', self, self._StartYoutubeDownload )
             
             has_ipfs = len( [ service for service in services if service.GetServiceType() == HC.IPFS ] )
             
             if has_ipfs:
                 
-                download_popup_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'start_ipfs_download' ), p( '&An IPFS Multihash' ), p( 'Enter an IPFS multihash and attempt to import whatever is returned' ) )
+                ClientGUIMenus.AppendMenuItem( download_popup_menu, 'an ipfs multihash', 'Enter an IPFS multihash and attempt to import whatever is returned.', self, self._StartIPFSDownload )
                 
             
-            menu.AppendMenu( CC.ID_NULL, p( 'New Download Popup' ), download_popup_menu )
+            ClientGUIMenus.AppendMenu( menu, download_popup_menu, 'new download popup' )
             
             #
             
@@ -969,23 +1110,38 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         def database():
             
             ClientGUIMenus.AppendMenuItem( menu, 'set a password', 'Set a simple password for the database so only you can open it in the client.', self, self._SetPassword )
+            
             menu.AppendSeparator()
+            
             ClientGUIMenus.AppendMenuItem( menu, 'create a database backup', 'Back the database up to an external location.', self, self._controller.BackupDatabase )
             ClientGUIMenus.AppendMenuItem( menu, 'restore a database backup', 'Restore the database from an external location.', self, self._controller.RestoreDatabase )
+            
             menu.AppendSeparator()
             
             submenu = wx.Menu()
             
             ClientGUIMenus.AppendMenuItem( submenu, 'vacuum', 'Defrag the database by completely rebuilding it.', self, self._VacuumDatabase )
             ClientGUIMenus.AppendMenuItem( submenu, 'analyze', 'Optimise slow queries by running statistical analyses on the database.', self, self._AnalyzeDatabase )
+            ClientGUIMenus.AppendMenuItem( submenu, 'similar files search data', 'Rebalance and update the data the database uses to find similar files.', self, self._MaintainSimilarFilesData )
             ClientGUIMenus.AppendMenuItem( submenu, 'rebalance file storage', 'Move your files around your chosen storage directories until they satisfy the weights you have set in the options.', self, self._RebalanceClientFiles )
-            ClientGUIMenus.AppendMenuItem( submenu, 'regenerate autocomplete cache', 'Delete and recreate the tag autocomplete cache, fixing any miscounts.', self, self._RegenerateACCache )
-            ClientGUIMenus.AppendMenuItem( submenu, 'regenerate thumbnails', 'Delete all thumbnails and regenerate them from their original files.', self, self._RegenerateThumbnails )
-            ClientGUIMenus.AppendMenuItem( submenu, 'check database integrity', 'Have the database examine all its records for internal consistency.', self, self._CheckDBIntegrity )
-            ClientGUIMenus.AppendMenuItem( submenu, 'check file integrity', 'Have the database check if it truly has the files it thinks it does, and remove records when not.', self, self._CheckFileIntegrity )
             ClientGUIMenus.AppendMenuItem( submenu, 'clear orphans', 'Clear out surplus files that have found their way into the file structure.', self, self._ClearOrphans )
             
-            ClientGUIMenus.AppendMenu( menu, submenu, 'maintenance' )
+            ClientGUIMenus.AppendMenu( menu, submenu, 'maintain' )
+            
+            submenu = wx.Menu()
+            
+            ClientGUIMenus.AppendMenuItem( submenu, 'database integrity', 'Have the database examine all its records for internal consistency.', self, self._CheckDBIntegrity )
+            ClientGUIMenus.AppendMenuItem( submenu, 'file integrity', 'Have the database check if it truly has the files it thinks it does, and remove records when not.', self, self._CheckFileIntegrity )
+            
+            ClientGUIMenus.AppendMenu( menu, submenu, 'check' )
+            
+            submenu = wx.Menu()
+            
+            ClientGUIMenus.AppendMenuItem( submenu, 'autocomplete cache', 'Delete and recreate the tag autocomplete cache, fixing any miscounts.', self, self._RegenerateACCache )
+            ClientGUIMenus.AppendMenuItem( submenu, 'similar files search data', 'Delete and recreate the similar files search tree.', self, self._RegenerateSimilarFilesData )
+            ClientGUIMenus.AppendMenuItem( submenu, 'all thumbnails', 'Delete all thumbnails and regenerate them from their original files.', self, self._RegenerateThumbnails )
+            
+            ClientGUIMenus.AppendMenu( menu, submenu, 'regenerate' )
             
             return ( menu, p( '&Database' ), True )
             
@@ -1182,53 +1338,43 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         def help():
             
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'help' ), p( '&Help' ) )
-            dont_know = wx.Menu()
-            dont_know.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'auto_repo_setup' ), p( 'Just set up some repositories for me, please' ) )
-            dont_know.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'auto_server_setup' ), p( 'Just set up the server on this computer, please' ) )
-            menu.AppendMenu( wx.ID_NONE, p( 'I don\'t know what I am doing' ), dont_know )
-            links = wx.Menu()
-            site = wx.MenuItem( links, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'site' ), p( 'Site' ) )
-            site.SetBitmap( CC.GlobalBMPs.file_repository )
-            board = wx.MenuItem( links, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( '8chan_board' ), p( '8chan Board' ) )
-            board.SetBitmap( CC.GlobalBMPs.eight_chan )
-            twitter = wx.MenuItem( links, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'twitter' ), p( 'Twitter' ) )
-            twitter.SetBitmap( CC.GlobalBMPs.twitter )
-            tumblr = wx.MenuItem( links, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'tumblr' ), p( 'Tumblr' ) )
-            tumblr.SetBitmap( CC.GlobalBMPs.tumblr )
-            discord = wx.MenuItem( links, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'discord' ), p( 'Discord' ) )
-            discord.SetBitmap( CC.GlobalBMPs.discord )
-            patreon = wx.MenuItem( links, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'patreon' ), p( 'Patreon' ) )
-            patreon.SetBitmap( CC.GlobalBMPs.patreon )
-            links.AppendItem( site )
-            links.AppendItem( board )
-            links.AppendItem( twitter )
-            links.AppendItem( tumblr )
-            links.AppendItem( discord )
-            links.AppendItem( patreon )
-            menu.AppendMenu( wx.ID_NONE, p( 'Links' ), links )
+            ClientGUIMenus.AppendMenuItem( menu, 'help', 'Open hydrus\'s local help in your web browser.', self, webbrowser.open, 'file://' + HC.HELP_DIR + '/index.html' )
             
-            db_profile_mode_id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'db_profile_mode' )
-            pubsub_profile_mode_id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'pubsub_profile_mode' )
-            force_idle_mode_id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'force_idle_mode' )
+            dont_know = wx.Menu()
+            
+            ClientGUIMenus.AppendMenuItem( dont_know, 'just set up some repositories for me, please', 'This will add the hydrus dev\'s two repositories to your client.', self, self._AutoRepoSetup )
+            
+            ClientGUIMenus.AppendMenu( menu, dont_know, 'I don\'t know what I am doing' )
+            
+            links = wx.Menu()
+            
+            site = ClientGUIMenus.AppendMenuBitmapItem( links, 'site', 'Open hydrus\'s website, which is mostly a mirror of the local help.', self, CC.GlobalBMPs.file_repository, webbrowser.open, 'https://hydrusnetwork.github.io/hydrus/' )
+            site = ClientGUIMenus.AppendMenuBitmapItem( links, '8chan board', 'Open hydrus dev\'s 8chan board, where he makes release posts and other status updates. Much other discussion also occurs.', self, CC.GlobalBMPs.eight_chan, webbrowser.open, 'https://8ch.net/hydrus/index.html' )
+            site = ClientGUIMenus.AppendMenuBitmapItem( links, 'twitter', 'Open hydrus dev\'s twitter, where he makes general progress updates and emergency notifications.', self, CC.GlobalBMPs.twitter, webbrowser.open, 'https://twitter.com/hydrusnetwork' )
+            site = ClientGUIMenus.AppendMenuBitmapItem( links, 'tumblr', 'Open hydrus dev\'s tumblr, where he makes release posts and other status updates.', self, CC.GlobalBMPs.tumblr, webbrowser.open, 'http://hydrus.tumblr.com/' )
+            site = ClientGUIMenus.AppendMenuBitmapItem( links, 'discord', 'Open a discord channel where many hydrus users congregate. Hydrus dev visits regularly.', self, CC.GlobalBMPs.discord, webbrowser.open, 'https://discord.gg/vy8CUB4' )
+            site = ClientGUIMenus.AppendMenuBitmapItem( links, 'patreon', 'Open hydrus dev\'s patreon, which lets you support development.', self, CC.GlobalBMPs.patreon, webbrowser.open, 'https://www.patreon.com/hydrus_dev' )
+            
+            ClientGUIMenus.AppendMenu( menu, links, 'links' )
             
             debug = wx.Menu()
-            debug.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'debug_make_popups' ), p( 'Make Some Popups' ) )
-            debug.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'debug_make_a_delayed_popup' ), p( 'Make a Popup in Five Seconds' ) )
-            debug.AppendCheckItem( db_profile_mode_id, p( '&DB Profile Mode' ) )
-            debug.Check( db_profile_mode_id, HydrusGlobals.db_profile_mode )
-            debug.AppendCheckItem( pubsub_profile_mode_id, p( '&PubSub Profile Mode' ) )
-            debug.Check( pubsub_profile_mode_id, HydrusGlobals.pubsub_profile_mode )
-            debug.AppendCheckItem( force_idle_mode_id, p( '&Force Idle Mode' ) )
-            debug.Check( force_idle_mode_id, HydrusGlobals.force_idle_mode )
-            debug.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'debug_garbage' ), p( 'Garbage' ) )
-            debug.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'clear_caches' ), p( '&Clear Preview/Fullscreen Caches' ) )
-            debug.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'delete_service_info' ), p( '&Clear DB Service Info Cache' ), p( 'Delete all cached service info, in case it has become desynchronised.' ) )
-            debug.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'load_into_disk_cache' ), p( 'Load whole db into disk cache' ) )
             
-            menu.AppendMenu( wx.ID_NONE, p( 'Debug' ), debug )
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'help_shortcuts' ), p( '&Shortcuts' ) )
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'help_about' ), p( '&About' ) )
+            ClientGUIMenus.AppendMenuItem( debug, 'make some popups', 'Throw some varied popups at the message manager, just to check it is working.', self, self._DebugMakeSomePopups )
+            ClientGUIMenus.AppendMenuItem( debug, 'make a popup in five seconds', 'Throw a delayed popup at the message manager, giving you time to minimise or otherwise alter the client before it arrives.', self, wx.CallLater, 5000, HydrusData.ShowText, 'This is a delayed popup message.' )
+            ClientGUIMenus.AppendMenuCheckItem( debug, 'db report mode', 'Have the db report query information, where supported.', self, HydrusGlobals.db_report_mode, self._SwitchBoolean, 'db_report_mode' )
+            ClientGUIMenus.AppendMenuCheckItem( debug, 'db profile mode', 'Run detailed \'profiles\' on every database query and dump this information to the log (this is very useful for hydrus dev to have, if something is running slow for you!).', self, HydrusGlobals.db_profile_mode, self._SwitchBoolean, 'db_profile_mode' )
+            ClientGUIMenus.AppendMenuCheckItem( debug, 'pubsub profile mode', 'Run detailed \'profiles\' on every internal publisher/subscriber message and dump this information to the log. This can hammer your log with dozens of large dumps every second. Don\'t run it unless you know you need to.', self, HydrusGlobals.pubsub_profile_mode, self._SwitchBoolean, 'pubsub_profile_mode' )
+            ClientGUIMenus.AppendMenuCheckItem( debug, 'force idle mode', 'Make the client consider itself idle and fire all maintenance routines right now. This may hang the gui for a while.', self, HydrusGlobals.force_idle_mode, self._SwitchBoolean, 'force_idle_mode' )
+            ClientGUIMenus.AppendMenuItem( debug, 'print garbage', 'Print some information about the python garbage to the log.', self, self._DebugPrintGarbage )
+            ClientGUIMenus.AppendMenuItem( debug, 'clear image rendering cache', 'Tell the image rendering system to forget all current images. This will often free up a bunch of memory immediately.', self, self._controller.ClearCaches )
+            ClientGUIMenus.AppendMenuItem( debug, 'clear db service info cache', 'Delete all cached service info like total number of mappings or files, in case it has become desynchronised. Some parts of the gui may be laggy immediately after this as these numbers are recalculated.', self, self._DeleteServiceInfo )
+            ClientGUIMenus.AppendMenuItem( debug, 'load whole db in disk cache', 'Contiguously read as much of the db as will fit into memory. This will massively speed up any subsequent big job.', self, self._controller.CallToThread, self._controller.Read, 'load_into_disk_cache' )
+            ClientGUIMenus.AppendMenuItem( debug, 'run and initialise server for testing', 'This will try to boot the server in your install folder and initialise it. This is mostly here for testing purposes.', self, self._AutoServerSetup )
+            
+            ClientGUIMenus.AppendMenu( menu, debug, 'debug' )
+            
+            ClientGUIMenus.AppendMenuItem( menu, 'hardcoded shortcuts', 'Review some currently hardcoded shortcuts.', self, wx.MessageBox, CC.SHORTCUT_HELP )
+            ClientGUIMenus.AppendMenuItem( menu, 'about', 'See this client\'s version and other information.', self, self._AboutWindow )
             
             return ( menu, p( '&Help' ), True )
             
@@ -1366,6 +1512,27 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         self._controller.CallToThread( do_it )
         
     
+    def _MaintainSimilarFilesData( self ):
+        
+        text = 'This will do up to ten minutes\' maintenance on the similar files search data.'
+        text += os.linesep * 2
+        text += 'It will rebalance the search tree and (re)generate any outstanding file search data.'
+        text += os.linesep * 2
+        text += 'If there is work to do, it will report its status through a popup message. The gui may hang until it is done.'
+        
+        with ClientGUIDialogs.DialogYesNo( self, text ) as dlg:
+            
+            result = dlg.ShowModal()
+            
+            if result == wx.ID_YES:
+                
+                stop_time = HydrusData.GetNow() + 60 * 10
+                
+                self._controller.Write( 'maintain_similar_files', stop_time )
+                
+            
+        
+    
     def _ManageAccountTypes( self, service_key ):
         
         with ClientGUIDialogsManage.DialogManageAccountTypes( self, service_key ) as dlg: dlg.ShowModal()
@@ -1450,7 +1617,17 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         try:
             
-            with ClientGUIDialogsManage.DialogManageSubscriptions( self ) as dlg: dlg.ShowModal()
+            title = 'manage subscriptions'
+            frame_key = 'manage_subscriptions_dialog'
+            
+            with ClientGUITopLevelWindows.DialogManage( self, title, frame_key ) as dlg:
+                
+                panel = ClientGUIScrolledPanelsManagement.ManageSubscriptionsPanel( dlg )
+                
+                dlg.SetPanel( panel )
+                
+                dlg.ShowModal()
+                
             
         finally:
             
@@ -1612,7 +1789,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
     
     def _OpenExportFolder( self ):
         
-        export_path = ClientFiles.GetExportPath()
+        export_path = ClientExporting.GetExportPath()
         
         HydrusPaths.LaunchDirectory( export_path )
         
@@ -1679,6 +1856,16 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 
                 self._controller.CallToThread( self._controller.GetClientFilesManager().Rebalance, partial = False )
                 
+            
+        
+    
+    def _Refresh( self ):
+        
+        page = self._notebook.GetCurrentPage()
+        
+        if page is not None:
+            
+            page.RefreshQuery()
             
         
     
@@ -1750,6 +1937,25 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             if result == wx.ID_YES:
                 
                 self._controller.Write( 'regenerate_ac_cache' )
+                
+            
+        
+    
+    def _RegenerateSimilarFilesData( self ):
+        
+        message = 'This will delete and then recreate the similar files search tree. This is useful if it has somehow become unbalanced and similar files searches are running slow.'
+        message += os.linesep * 2
+        message += 'If you have a lot of files, it can take a little while, during which the gui may hang.'
+        message += os.linesep * 2
+        message += 'If you do not have a specific reason to run this, it is pointless.'
+        
+        with ClientGUIDialogs.DialogYesNo( self, message, yes_label = 'do it', no_label = 'forget it' ) as dlg:
+            
+            result = dlg.ShowModal()
+            
+            if result == wx.ID_YES:
+                
+                self._controller.Write( 'regenerate_similar_files' )
                 
             
         
@@ -1930,6 +2136,16 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         if page is not None: page.SetSynchronisedWait()
         
     
+    def _ShowHideSplitters( self ):
+        
+        page = self._notebook.GetCurrentPage()
+        
+        if page is not None:
+            
+            page.ShowHideSplit()
+            
+        
+    
     def _StartIPFSDownload( self ):
         
         ipfs_services = self._controller.GetServicesManager().GetServices( ( HC.IPFS, ) )
@@ -1999,6 +2215,26 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         stats = response[ 'stats' ]
         
         wx.MessageBox( HydrusData.ToUnicode( stats ) )
+        
+    
+    def _SwitchBoolean( self, name ):
+        
+        if name == 'db_report_mode':
+            
+            HydrusGlobals.db_report_mode = not HydrusGlobals.db_report_mode
+            
+        elif name == 'db_profile_mode':
+            
+            HydrusGlobals.db_profile_mode = not HydrusGlobals.db_profile_mode
+            
+        elif name == 'pubsub_profile_mode':
+            
+            HydrusGlobals.pubsub_profile_mode = not HydrusGlobals.pubsub_profile_mode
+            
+        elif name == 'force_idle_mode':
+            
+            HydrusGlobals.force_idle_mode = not HydrusGlobals.force_idle_mode
+            
         
     
     def _UnclosePage( self, closed_page_index ):
@@ -2364,6 +2600,11 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             
         
     
+    def EventFrameNewPage( self, event ):
+        
+        self._ChooseNewPage()
+        
+    
     def EventMenu( self, event ):
         
         action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
@@ -2376,108 +2617,19 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             elif command == 'auto_repo_setup': self._AutoRepoSetup()
             elif command == 'auto_server_setup': self._AutoServerSetup()
             elif command == 'backup_service': self._BackupService( data )
-            elif command == 'clear_caches': self._controller.ClearCaches()
             elif command == 'close_page': self._CloseCurrentPage()
-            elif command == 'db_profile_mode':
-                
-                HydrusGlobals.db_profile_mode = not HydrusGlobals.db_profile_mode
-                
-            elif command == 'debug_garbage':
-                
-                import collections
-                import types
-                
-                HydrusData.ShowText( 'Printing garbage to log' )
-                
-                gc.collect()
-                
-                count = collections.Counter()
-                
-                class_count = collections.Counter()
-                
-                for o in gc.get_objects():
-                    
-                    count[ type( o ) ] += 1
-                    
-                    if isinstance( o, types.InstanceType ): class_count[ o.__class__.__name__ ] += 1
-                    elif isinstance( o, types.BuiltinFunctionType ): class_count[ o.__name__ ] += 1
-                    elif isinstance( o, types.BuiltinMethodType ): class_count[ o.__name__ ] += 1
-                    
-                
-                HydrusData.Print( 'gc:' )
-                
-                for ( k, v ) in count.items():
-                    
-                    if v > 100: print ( k, v )
-                    
-                
-                for ( k, v ) in class_count.items():
-                    
-                    if v > 100: print ( k, v )
-                    
-                
-                HydrusData.Print( 'uncollectable garbage: ' + HydrusData.ToUnicode( gc.garbage ) )
-                
-            elif command == 'debug_make_a_delayed_popup':
-                
-                wx.CallLater( 5000, HydrusData.ShowText, 'This is a delayed popup message.' )
-                
-            elif command == 'debug_make_popups':
-                
-                for i in range( 1, 7 ):
-                    
-                    HydrusData.ShowText( 'This is a test popup message -- ' + str( i ) )
-                    
-                
-                #
-                
-                job_key = ClientThreading.JobKey( pausable = True, cancellable = True)
-                
-                job_key.SetVariable( 'title', 'test job' )
-                
-                job_key.SetVariable( 'popup_text_1', 'Currently processing test job 5/8' )
-                job_key.SetVariable( 'popup_gauge_1', ( 5, 8 ) )
-                
-                self._controller.pub( 'message', job_key )
-                
-                wx.CallLater( 2000, job_key.SetVariable, 'popup_text_2', 'Pulsing subjob' )
-                wx.CallLater( 2000, job_key.SetVariable, 'popup_gauge_2', ( 0, None ) )
-                
-                #
-                
-                e = HydrusExceptions.DataMissing( 'This is a test exception' )
-                
-                HydrusData.ShowException( e )
-                
-                #
-                
-                for i in range( 1, 4 ):
-                    
-                    wx.CallLater( 500 * i, HydrusData.ShowText, 'This is a delayed popup message -- ' + str( i ) )
-                    
-                
             elif command == 'delete_gui_session':
                 
                 self._controller.Write( 'delete_serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_GUI_SESSION, data )
                 
                 self._controller.pub( 'notify_new_sessions' )
                 
-            elif command == 'delete_service_info': self._DeleteServiceInfo()
-            elif command == 'discord': webbrowser.open( 'https://discord.gg/vy8CUB4' )
             elif command == 'fetch_ip': self._FetchIP( data )
             elif command == 'force_idle_mode':
                 
                 self._controller.ForceIdle()
                 
-            elif command == '8chan_board': webbrowser.open( 'https://8ch.net/hydrus/index.html' )
-            elif command == 'help': webbrowser.open( 'file://' + HC.HELP_DIR + '/index.html' )
-            elif command == 'help_about': self._AboutWindow()
-            elif command == 'help_shortcuts': wx.MessageBox( CC.SHORTCUT_HELP )
             elif command == 'load_gui_session': self._LoadGUISession( data )
-            elif command == 'load_into_disk_cache':
-                
-                self._controller.CallToThread( self._controller.Read, 'load_into_disk_cache' )
-                
             elif command == 'manage_account_types': self._ManageAccountTypes( data )
             elif command == 'manage_boorus': self._ManageBoorus()
             elif command == 'manage_parsing_scripts': self._ManageParsingScripts()
@@ -2505,11 +2657,10 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             elif command == 'new_import_urls': self._NewPageImportURLs()
             elif command == 'new_page':
                 
-                with ClientGUIDialogs.DialogPageChooser( self ) as dlg: dlg.ShowModal()
+                self._ChooseNewPage()
                 
             elif command == 'new_page_query': self._NewPageQuery( data )
             elif command == 'news': self._News( data )
-            elif command == 'patreon': webbrowser.open( 'https://www.patreon.com/hydrus_dev' )
             elif command == 'pause_export_folders_sync': self._PauseSync( 'export_folders' )
             elif command == 'pause_import_folders_sync': self._PauseSync( 'import_folders' )
             elif command == 'pause_repo_sync': self._PauseSync( 'repo' )
@@ -2523,9 +2674,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             elif command == 'redo': self._controller.pub( 'redo' )
             elif command == 'refresh':
                 
-                page = self._notebook.GetCurrentPage()
-                
-                if page is not None: page.RefreshQuery()
+                self._Refresh()
                 
             elif command == 'review_services': self._ReviewServices()
             elif command == 'save_gui_session': self._SaveGUISession()
@@ -2533,21 +2682,26 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             elif command == 'set_search_focus': self._SetSearchFocus()
             elif command == 'show_hide_splitters':
                 
-                page = self._notebook.GetCurrentPage()
+                self._ShowHideSplitters()
                 
-                if page is not None: page.ShowHideSplit()
-                
-            elif command == 'site': webbrowser.open( 'https://hydrusnetwork.github.io/hydrus/' )
             elif command == 'start_ipfs_download': self._StartIPFSDownload()
             elif command == 'start_youtube_download': self._StartYoutubeDownload()
             elif command == 'stats': self._Stats( data )
             elif command == 'synchronised_wait_switch': self._SetSynchronisedWait()
             elif command == 'tab_menu_close_page': self._ClosePage( self._tab_right_click_index )
             elif command == 'tab_menu_rename_page': self._RenamePage( self._tab_right_click_index )
-            elif command == 'tumblr': webbrowser.open( 'http://hydrus.tumblr.com/' )
-            elif command == 'twitter': webbrowser.open( 'https://twitter.com/#!/hydrusnetwork' )
             elif command == 'undo': self._controller.pub( 'undo' )
             else: event.Skip()
+            
+        
+    
+    def EventNotebookLeftDoubleClick( self, event ):
+        
+        ( tab_index, flags ) = self._notebook.HitTest( ( event.GetX(), event.GetY() ) )
+        
+        if tab_index == wx.NOT_FOUND:
+            
+            self._ChooseNewPage()
             
         
     
@@ -2572,7 +2726,11 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         
         ( tab_index, flags ) = self._notebook.HitTest( ( event.GetX(), event.GetY() ) )
         
-        if tab_index != -1:
+        if tab_index == wx.NOT_FOUND:
+            
+            self._ChooseNewPage()
+            
+        else:
             
             self._ClosePage( tab_index )
             
@@ -2747,9 +2905,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             
         
     
-    def NewSimilarTo( self, file_service_key, hash ):
-        
-        hamming_distance = HC.options[ 'file_system_predicates' ][ 'hamming_distance' ]
+    def NewSimilarTo( self, file_service_key, hash, hamming_distance ):
         
         initial_predicates = [ ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_SIMILAR_TO, ( hash, hamming_distance ) ) ]
         
@@ -2795,7 +2951,15 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             
             for ( time_closed, index, name, page ) in self._closed_pages:
                 
-                if page.GetPageKey() == page_key:
+                try:
+                    
+                    if page.GetPageKey() == page_key:
+                        
+                        return True
+                    
+                except wx.PyDeadObjectError:
+                    
+                    # page is dead, being cleaned up--it probably just called itself during exit, asking if it should be playing video or w/e
                     
                     return True
                     

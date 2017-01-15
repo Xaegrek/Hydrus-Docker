@@ -8,9 +8,12 @@ import ClientGUIDialogs
 import ClientGUIPredicates
 import ClientGUIScrolledPanels
 import ClientGUIScrolledPanelsEdit
+import ClientGUISerialisable
 import ClientGUITagSuggestions
 import ClientGUITopLevelWindows
+import ClientImporting
 import ClientMedia
+import ClientSerialisable
 import collections
 import HydrusConstants as HC
 import HydrusData
@@ -519,7 +522,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gallery_downloader = ClientGUICommon.StaticBox( self, 'gallery downloader' )
             
-            self._gallery_file_limit = ClientGUICommon.NoneableSpinCtrl( gallery_downloader, 'default file limit', none_phrase = 'no limit', min = 1, max = 1000000 )
+            self._gallery_file_limit = ClientGUICommon.NoneableSpinCtrl( gallery_downloader, 'by default, stop searching once this many files are found', none_phrase = 'no limit', min = 1, max = 1000000 )
             
             #
             
@@ -1126,8 +1129,6 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._gui_capitalisation.SetValue( HC.options[ 'gui_capitalisation' ] )
             
-            remember_tuple = self._new_options.GetFrameLocation( 'manage_tags_dialog' )
-            
             self._hide_preview.SetValue( HC.options[ 'hide_preview' ] )
             
             self._show_thumbnail_title_banner.SetValue( self._new_options.GetBoolean( 'show_thumbnail_title_banner' ) )
@@ -1273,12 +1274,15 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._load_images_with_pil = wx.CheckBox( self )
             self._load_images_with_pil.SetToolTipString( 'OpenCV is much faster than PIL, but the current release crashes on certain images. You can try turning this off, but switch it back on if you have any problems.' )
             
+            self._use_system_ffmpeg = wx.CheckBox( self )
+            self._use_system_ffmpeg.SetToolTipString( 'Check this to always default to the system ffmpeg in your path, rather than using the static ffmpeg in hydrus\'s bin directory. (requires restart)' )
+            
             self._media_zooms = wx.TextCtrl( self )
             self._media_zooms.Bind( wx.EVT_TEXT, self.EventZoomsChanged )
             
             self._media_viewer_panel = ClientGUICommon.StaticBox( self, 'media viewer mime handling' )
             
-            self._media_viewer_options = ClientGUICommon.SaneListCtrl( self._media_viewer_panel, 300, [ ( 'mime', 150 ), ( 'media show action', 140 ), ( 'preview show action', 140 ), ( 'zoom info', -1 ) ], activation_callback = self.EditMediaViewerOptions, use_display_tuple_for_sort = True )
+            self._media_viewer_options = ClientGUICommon.SaneListCtrlForSingleObject( self._media_viewer_panel, 300, [ ( 'mime', 150 ), ( 'media show action', 140 ), ( 'preview show action', 140 ), ( 'zoom info', -1 ) ], activation_callback = self.EditMediaViewerOptions )
             
             self._media_viewer_edit_button = wx.Button( self._media_viewer_panel, label = 'edit' )
             self._media_viewer_edit_button.Bind( wx.EVT_BUTTON, self.EventEditMediaViewerOptions )
@@ -1288,6 +1292,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._animation_start_position.SetValue( int( HC.options[ 'animation_start_position' ] * 100.0 ) )
             self._disable_cv_for_gifs.SetValue( self._new_options.GetBoolean( 'disable_cv_for_gifs' ) )
             self._load_images_with_pil.SetValue( self._new_options.GetBoolean( 'load_images_with_pil' ) )
+            self._use_system_ffmpeg.SetValue( self._new_options.GetBoolean( 'use_system_ffmpeg' ) )
             
             media_zooms = self._new_options.GetMediaZooms()
             
@@ -1299,10 +1304,11 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 items = self._new_options.GetMediaViewOptions( mime )
                 
-                listctrl_list = [ mime ] + list( items )
-                pretty_listctrl_list = self._GetPrettyMediaViewOptions( listctrl_list )
+                data = [ mime ] + list( items )
                 
-                self._media_viewer_options.Append( pretty_listctrl_list, listctrl_list )
+                ( display_tuple, sort_tuple, data ) = self._GetListCtrlData( data )
+                
+                self._media_viewer_options.Append( display_tuple, sort_tuple, data )
                 
             
             self._media_viewer_options.SortListItems( col = 0 )
@@ -1316,6 +1322,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             rows.append( ( 'Start animations this % in: ', self._animation_start_position ) )
             rows.append( ( 'Disable OpenCV for gifs: ', self._disable_cv_for_gifs ) )
             rows.append( ( 'Load images with PIL: ', self._load_images_with_pil ) )
+            rows.append( ( 'Prefer system FFMPEG: ', self._use_system_ffmpeg ) )
             rows.append( ( 'Media zooms: ', self._media_zooms ) )
             
             gridbox = ClientGUICommon.WrapInGrid( self, rows )
@@ -1330,9 +1337,12 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self.SetSizer( vbox )
             
         
-        def _GetPrettyMediaViewOptions( self, listctrl_list ):
+        def _GetListCtrlData( self, data ):
             
-            ( mime, media_show_action, preview_show_action, zoom_info ) = listctrl_list
+            ( mime, media_show_action, preview_show_action, zoom_info ) = data
+            
+            # can't store a list in the listctrl obj space, as it is unhashable
+            data = ( mime, media_show_action, preview_show_action, tuple( zoom_info ) )
             
             pretty_mime = HC.mime_string_lookup[ mime ]
             pretty_media_show_action = CC.media_viewer_action_string_lookup[ media_show_action ]
@@ -1351,29 +1361,33 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 pretty_zoom_info = str( zoom_info )
                 
             
-            return ( pretty_mime, pretty_media_show_action, pretty_preview_show_action, pretty_zoom_info )
+            display_tuple = ( pretty_mime, pretty_media_show_action, pretty_preview_show_action, pretty_zoom_info )
+            sort_tuple = ( pretty_mime, pretty_media_show_action, pretty_preview_show_action, pretty_zoom_info )
+            
+            return ( display_tuple, sort_tuple, data )
             
         
         def EditMediaViewerOptions( self ):
             
             for i in self._media_viewer_options.GetAllSelected():
                 
-                listctrl_list = self._media_viewer_options.GetClientData( i )
+                data = self._media_viewer_options.GetClientData( i )
                 
                 title = 'set media view options information'
                 
                 with ClientGUITopLevelWindows.DialogEdit( self, title ) as dlg:
                     
-                    panel = ClientGUIScrolledPanelsEdit.EditMediaViewOptionsPanel( dlg, listctrl_list )
+                    panel = ClientGUIScrolledPanelsEdit.EditMediaViewOptionsPanel( dlg, data )
                     
                     dlg.SetPanel( panel )
                     
                     if dlg.ShowModal() == wx.ID_OK:
                         
-                        new_listctrl_list = panel.GetValue()
-                        pretty_new_listctrl_list = self._GetPrettyMediaViewOptions( new_listctrl_list )
+                        new_data = panel.GetValue()
                         
-                        self._media_viewer_options.UpdateRow( i, pretty_new_listctrl_list, new_listctrl_list )
+                        ( display_tuple, sort_tuple, new_data ) = self._GetListCtrlData( new_data )
+                        
+                        self._media_viewer_options.UpdateRow( i, display_tuple, sort_tuple, new_data )
                         
                     
                 
@@ -1406,6 +1420,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._new_options.SetBoolean( 'disable_cv_for_gifs', self._disable_cv_for_gifs.GetValue() )
             self._new_options.SetBoolean( 'load_images_with_pil', self._load_images_with_pil.GetValue() )
+            self._new_options.SetBoolean( 'use_system_ffmpeg', self._use_system_ffmpeg.GetValue() )
             
             try:
                 
@@ -1421,13 +1436,13 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 HydrusData.ShowText( 'Could not parse those zooms, so they were not saved!' )
                 
             
-            for listctrl_list in self._media_viewer_options.GetClientData():
+            for data in self._media_viewer_options.GetClientData():
                 
-                listctrl_list = list( listctrl_list )
+                data = list( data )
                 
-                mime = listctrl_list[0]
+                mime = data[0]
                 
-                value = listctrl_list[1:]
+                value = data[1:]
                 
                 self._new_options.SetMediaViewOptions( mime, value )
                 
@@ -1958,7 +1973,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         def EventFullscreensUpdate( self, event ):
             
-            ( width, height ) = wx.GetDisplaySize()
+            ( width, height ) = ClientGUITopLevelWindows.GetDisplaySize( self )
             
             estimated_bytes_per_fullscreen = 3 * width * height
             
@@ -2338,6 +2353,440 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             wx.MessageBox( traceback.format_exc() )
             
         
+
+class ManageSubscriptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
+    
+    def __init__( self, parent ):
+        
+        ClientGUIScrolledPanels.ManagePanel.__init__( self, parent )
+        
+        subscriptions = HydrusGlobals.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION )
+        
+        #
+        
+        columns = [ ( 'name', -1 ), ( 'site', 80 ), ( 'period', 80 ), ( 'last checked', 100 ), ( 'recent error?', 100 ), ( 'urls', 60 ), ( 'failures', 60 ), ( 'paused', 80 ), ( 'check now?', 100 ) ]
+        
+        self._subscriptions = ClientGUICommon.SaneListCtrlForSingleObject( self, 300, columns, delete_key_callback = self.Delete, activation_callback = self.Edit )
+        
+        self._add = ClientGUICommon.BetterButton( self, 'add', self.Add )
+        
+        menu_items = []
+        
+        menu_items.append( ( 'to clipboard', 'Serialise the script and put it on your clipboard.', self.ExportToClipboard ) )
+        menu_items.append( ( 'to png', 'Serialise the script and encode it to an image file you can easily share with other hydrus users.', self.ExportToPng ) )
+        
+        self._export = ClientGUICommon.MenuButton( self, 'export', menu_items )
+        
+        menu_items = []
+        
+        menu_items.append( ( 'from clipboard', 'Load a script from text in your clipboard.', self.ImportFromClipboard ) )
+        menu_items.append( ( 'from png', 'Load a script from an encoded png.', self.ImportFromPng ) )
+        
+        self._import = ClientGUICommon.MenuButton( self, 'import', menu_items )
+        
+        self._duplicate = ClientGUICommon.BetterButton( self, 'duplicate', self.Duplicate )
+        self._edit = ClientGUICommon.BetterButton( self, 'edit', self.Edit )
+        self._delete = ClientGUICommon.BetterButton( self, 'delete', self.Delete )
+        
+        self._retry_failures = ClientGUICommon.BetterButton( self, 'retry failures', self.RetryFailures )
+        self._pause_resume = ClientGUICommon.BetterButton( self, 'pause/resume', self.PauseResume )
+        self._check_now = ClientGUICommon.BetterButton( self, 'check now', self.CheckNow )
+        self._reset = ClientGUICommon.BetterButton( self, 'reset', self.Reset )
+        
+        #
+        
+        for subscription in subscriptions:
+            
+            ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
+            
+            self._subscriptions.Append( display_tuple, sort_tuple, subscription )
+            
+        
+        #
+        
+        text_hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        text_hbox.AddF( wx.StaticText( self, label = 'For more information about subscriptions, please check' ), CC.FLAGS_VCENTER )
+        text_hbox.AddF( wx.HyperlinkCtrl( self, id = -1, label = 'here', url = 'file://' + HC.HELP_DIR + '/getting_started_subscriptions.html' ), CC.FLAGS_VCENTER )
+        
+        action_box = wx.BoxSizer( wx.HORIZONTAL )
+        
+        action_box.AddF( self._retry_failures, CC.FLAGS_VCENTER )
+        action_box.AddF( self._pause_resume, CC.FLAGS_VCENTER )
+        action_box.AddF( self._check_now, CC.FLAGS_VCENTER )
+        action_box.AddF( self._reset, CC.FLAGS_VCENTER )
+        
+        button_box = wx.BoxSizer( wx.HORIZONTAL )
+        
+        button_box.AddF( self._add, CC.FLAGS_VCENTER )
+        button_box.AddF( self._export, CC.FLAGS_VCENTER )
+        button_box.AddF( self._import, CC.FLAGS_VCENTER )
+        button_box.AddF( self._duplicate, CC.FLAGS_VCENTER )
+        button_box.AddF( self._edit, CC.FLAGS_VCENTER )
+        button_box.AddF( self._delete, CC.FLAGS_VCENTER )
+        
+        vbox = wx.BoxSizer( wx.VERTICAL )
+        
+        vbox.AddF( text_hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.AddF( self._subscriptions, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.AddF( action_box, CC.FLAGS_BUTTON_SIZER )
+        vbox.AddF( button_box, CC.FLAGS_BUTTON_SIZER )
+        
+        self.SetSizer( vbox )
+        
+    
+    def _ConvertSubscriptionToTuples( self, subscription ):
+        
+        ( name, gallery_identifier, gallery_stream_identifiers, query, period, get_tags_if_redundant, initial_file_limit, periodic_file_limit, paused, import_file_options, import_tag_options, last_checked, last_error, check_now, seed_cache ) = subscription.ToTuple()
+        
+        pretty_site = HC.site_type_string_lookup[ gallery_identifier.GetSiteType() ]
+        pretty_last_checked = HydrusData.ConvertTimestampToPrettySync( last_checked )
+        
+        pretty_period = HydrusData.ConvertTimeDeltaToPrettyString( period )
+        
+        error_next_check_time = last_error + HC.UPDATE_DURATION
+        
+        if HydrusData.TimeHasPassed( error_next_check_time ):
+            
+            pretty_error = ''
+            
+        else:
+            
+            pretty_error = 'yes'
+            
+        
+        num_urls = seed_cache.GetSeedCount()
+        pretty_urls = HydrusData.ConvertIntToPrettyString( num_urls )
+        
+        num_failures = seed_cache.GetSeedCount( CC.STATUS_FAILED )
+        pretty_failures = HydrusData.ConvertIntToPrettyString( num_failures )
+        
+        if paused:
+            
+            pretty_paused = 'yes'
+            
+        else:
+            
+            pretty_paused = ''
+            
+        
+        if check_now:
+            
+            pretty_check_now = 'yes'
+            
+        else:
+            
+            pretty_check_now = ''
+            
+        
+        display_tuple = ( name, pretty_site, pretty_period, pretty_last_checked, pretty_error, pretty_urls, pretty_failures, pretty_paused, pretty_check_now )
+        sort_tuple = ( name, pretty_site, period, last_checked, pretty_error, num_urls, num_failures, paused, check_now )
+        
+        return ( display_tuple, sort_tuple )
+        
+    
+    def _GetExportObject( self ):
+        
+        to_export = HydrusSerialisable.SerialisableList()
+        
+        for subscription in self._subscriptions.GetSelectedClientData():
+            
+            to_export.append( subscription )
+            
+        
+        if len( to_export ) == 0:
+            
+            return None
+            
+        elif len( to_export ) == 1:
+            
+            return to_export[0]
+            
+        else:
+            
+            return to_export
+            
+        
+    
+    def _ImportObject( self, obj ):
+        
+        if isinstance( obj, HydrusSerialisable.SerialisableList ):
+            
+            for sub_obj in obj:
+                
+                self._ImportObject( sub_obj )
+                
+            
+        else:
+            
+            if isinstance( obj, ClientImporting.Subscription ):
+                
+                subscription = obj
+                
+                self._subscriptions.SetNonDupeName( subscription )
+                
+                ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
+                
+                self._subscriptions.Append( display_tuple, sort_tuple, subscription )
+                
+            else:
+                
+                wx.MessageBox( 'That was not a script--it was a: ' + type( obj ).__name__ )
+                
+            
+        
+    
+    def Add( self ):
+        
+        empty_subscription = ClientImporting.Subscription( 'new subscription' )
+        
+        with ClientGUITopLevelWindows.DialogEdit( self, 'edit subscription' ) as dlg_edit:
+            
+            panel = ClientGUIScrolledPanelsEdit.EditSubscriptionPanel( dlg_edit, empty_subscription )
+            
+            dlg_edit.SetPanel( panel )
+            
+            if dlg_edit.ShowModal() == wx.ID_OK:
+                
+                new_subscription = panel.GetValue()
+                
+                self._subscriptions.SetNonDupeName( new_subscription )
+                
+                ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( new_subscription )
+                
+                self._subscriptions.Append( display_tuple, sort_tuple, new_subscription )
+                
+            
+        
+    
+    def CheckNow( self ):
+        
+        for i in self._subscriptions.GetAllSelected():
+            
+            subscription = self._subscriptions.GetClientData( i )
+            
+            subscription.CheckNow()
+            
+            ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
+            
+            self._subscriptions.UpdateRow( i, display_tuple, sort_tuple, subscription )
+            
+        
+    
+    def CommitChanges( self ):
+        
+        subscriptions = self._subscriptions.GetClientData()
+        
+        HydrusGlobals.client_controller.Write( 'serialisables_overwrite', [ HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION ], subscriptions )
+        
+        HydrusGlobals.client_controller.pub( 'notify_new_subscriptions' )
+        
+    
+    def Delete( self ):
+        
+        self._subscriptions.RemoveAllSelected()
+        
+    
+    def Duplicate( self ):
+        
+        subs_to_dupe = []
+        
+        for subscription in self._subscriptions.GetSelectedClientData():
+            
+            subs_to_dupe.append( subscription )
+            
+        
+        for subscription in subs_to_dupe:
+            
+            dupe_subscription = subscription.Duplicate()
+            
+            self._subscriptions.SetNonDupeName( dupe_subscription )
+            
+            ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( dupe_subscription )
+            
+            self._subscriptions.Append( display_tuple, sort_tuple, dupe_subscription )
+            
+        
+    
+    def Edit( self ):
+        
+        for i in self._subscriptions.GetAllSelected():
+            
+            subscription = self._subscriptions.GetClientData( i )
+            
+            with ClientGUITopLevelWindows.DialogEdit( self, 'edit subscription' ) as dlg:
+                
+                original_name = subscription.GetName()
+                
+                panel = ClientGUIScrolledPanelsEdit.EditSubscriptionPanel( dlg, subscription )
+                
+                dlg.SetPanel( panel )
+                
+                if dlg.ShowModal() == wx.ID_OK:
+                    
+                    edited_subscription = panel.GetValue()
+                    
+                    if edited_subscription.GetName() != original_name:
+                        
+                        self._subscriptions.SetNonDupeName( edited_subscription )
+                        
+                    
+                    ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( edited_subscription )
+                    
+                    self._subscriptions.UpdateRow( i, display_tuple, sort_tuple, edited_subscription )
+                    
+                
+                
+            
+        
+    
+    def ExportToClipboard( self ):
+        
+        export_object = self._GetExportObject()
+        
+        if export_object is not None:
+            
+            json = export_object.DumpToString()
+            
+            HydrusGlobals.client_controller.pub( 'clipboard', 'text', json )
+            
+        
+    
+    def ExportToPng( self ):
+        
+        export_object = self._GetExportObject()
+        
+        if export_object is not None:
+            
+            with ClientGUITopLevelWindows.DialogNullipotent( self, 'export to png' ) as dlg:
+                
+                panel = ClientGUISerialisable.PngExportPanel( dlg, export_object )
+                
+                dlg.SetPanel( panel )
+                
+                dlg.ShowModal()
+                
+            
+        
+    
+    def ImportFromClipboard( self ):
+        
+        if wx.TheClipboard.Open():
+            
+            data = wx.TextDataObject()
+            
+            wx.TheClipboard.GetData( data )
+            
+            wx.TheClipboard.Close()
+            
+            raw_text = data.GetText()
+            
+            try:
+                
+                obj = HydrusSerialisable.CreateFromString( raw_text )
+                
+                self._ImportObject( obj )
+                
+            except Exception as e:
+                
+                wx.MessageBox( 'I could not understand what was in the clipboard' )
+                
+            
+        else:
+            
+            wx.MessageBox( 'I could not get permission to access the clipboard.' )
+            
+        
+    
+    def ImportFromPng( self ):
+        
+        with wx.FileDialog( self, 'select the png with the encoded script', wildcard = 'PNG (*.png)|*.png' ) as dlg:
+            
+            if dlg.ShowModal() == wx.ID_OK:
+                
+                path = HydrusData.ToUnicode( dlg.GetPath() )
+                
+                try:
+                    
+                    payload = ClientSerialisable.LoadFromPng( path )
+                    
+                except Exception as e:
+                    
+                    wx.MessageBox( str( e ) )
+                    
+                    return
+                    
+                
+                try:
+                    
+                    obj = HydrusSerialisable.CreateFromNetworkString( payload )
+                    
+                    self._ImportObject( obj )
+                    
+                except:
+                    
+                    wx.MessageBox( 'I could not understand what was encoded in the png!' )
+                    
+                
+            
+        
+    
+    def PauseResume( self ):
+        
+        for i in self._subscriptions.GetAllSelected():
+            
+            subscription = self._subscriptions.GetClientData( i )
+            
+            subscription.PauseResume()
+            
+            ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
+            
+            self._subscriptions.UpdateRow( i, display_tuple, sort_tuple, subscription )
+            
+        
+    
+    def Reset( self ):
+        
+        message = '''Resetting these subscriptions will delete all their remembered urls, meaning when they next run, they will try to download them all over again. This may be expensive in time and data. Only do it if you are willing to wait. Do you want to do it?'''
+        
+        with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
+            
+            if dlg.ShowModal() == wx.ID_YES:
+                
+                for i in self._subscriptions.GetAllSelected():
+                    
+                    subscription = self._subscriptions.GetClientData( i )
+                    
+                    subscription.Reset()
+                    
+                    ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
+                    
+                    self._subscriptions.UpdateRow( i, display_tuple, sort_tuple, subscription )
+                    
+                
+            
+        
+    
+    def RetryFailures( self ):
+        
+        for i in self._subscriptions.GetAllSelected():
+            
+            subscription = self._subscriptions.GetClientData( i )
+            
+            seed_cache = subscription.GetSeedCache()
+            
+            failed_seeds = seed_cache.GetSeeds( CC.STATUS_FAILED )
+            
+            for seed in failed_seeds:
+                
+                seed_cache.UpdateSeedStatus( seed, CC.STATUS_UNKNOWN )
+                
+                ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
+                
+                self._subscriptions.UpdateRow( i, display_tuple, sort_tuple, subscription )
+                
+            
+        
     
 class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
     
@@ -2446,6 +2895,9 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
     
     def EventCharHook( self, event ):
         
+        # the char hook event goes up. if it isn't skipped all the way, the subsequent text event will never occur
+        # however we don't want the char hook going all the way up sometimes!
+        
         if not HC.PLATFORM_LINUX:
             
             # If I let this go uncaught, it propagates to the media viewer above, so an Enter or a '+' closes the window or zooms in!
@@ -2464,7 +2916,10 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             # Top jej, the events weren't being generated after all in Linux, so here's a possibly borked patch for that:
             
-            HydrusGlobals.do_not_catch_char_hook = True
+            if event.KeyCode != wx.WXK_ESCAPE:
+                
+                HydrusGlobals.do_not_catch_char_hook = True
+                
             
             event.Skip()
             
@@ -2655,11 +3110,6 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         def _AddTags( self, tags, only_add = False, only_remove = False, forced_reason = None ):
             
-            if HydrusGlobals.client_controller.GetNewOptions().GetNoneableInteger( 'num_recent_tags' ) is not None:
-                
-                HydrusGlobals.client_controller.Write( 'push_recent_tags', self._tag_service_key, tags )
-                
-            
             if not self._i_am_local_tag_service and self._account.HasPermission( HC.RESOLVE_PETITIONS ):
                 
                 forced_reason = 'admin'
@@ -2735,6 +3185,11 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
                             
                         
                     
+                
+            
+            if len( choices ) == 0:
+                
+                return
                 
             
             # now we have options, let's ask the user what they want to do
@@ -2828,7 +3283,13 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     message = 'Enter a reason for ' + tag_text + ' to be removed. A janitor will review your petition.'
                     
-                    with ClientGUIDialogs.DialogTextEntry( self, message ) as dlg:
+                    suggestions = []
+                    
+                    suggestions.append( 'mangled parse/typo' )
+                    suggestions.append( 'not applicable' )
+                    suggestions.append( 'should be namespaced' )
+                    
+                    with ClientGUIDialogs.DialogTextEntry( self, message, suggestions = suggestions ) as dlg:
                         
                         if dlg.ShowModal() == wx.ID_OK:
                             
@@ -2850,6 +3311,8 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             content_updates = []
             
+            recent_tags = set()
+            
             for tag in tags:
                 
                 if choice_action == HC.CONTENT_UPDATE_ADD: media_to_affect = ( m for m in self._media if tag not in m.GetTagsManager().GetCurrent( self._tag_service_key ) )
@@ -2861,24 +3324,38 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 hashes = set( itertools.chain.from_iterable( ( m.GetHashes() for m in media_to_affect ) ) )
                 
-                if choice_action == HC.CONTENT_UPDATE_PETITION:
+                if len( hashes ) > 0:
                     
-                    content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, choice_action, ( tag, hashes, reason ) ) )
+                    if choice_action == HC.CONTENT_UPDATE_PETITION:
+                        
+                        content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, choice_action, ( tag, hashes, reason ) ) )
+                        
+                    else:
+                        
+                        content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, choice_action, ( tag, hashes ) ) )
+                        
                     
-                else:
-                    
-                    content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, choice_action, ( tag, hashes ) ) )
+                    if choice_action in ( HC.CONTENT_UPDATE_ADD, HC.CONTENT_UPDATE_PEND ):
+                        
+                        recent_tags.add( tag )
+                        
+                        if self._add_parents_checkbox.GetValue():
+                            
+                            tag_parents_manager = HydrusGlobals.client_controller.GetManager( 'tag_parents' )
+                            
+                            parents = tag_parents_manager.GetParents( self._tag_service_key, tag )
+                            
+                            content_updates.extend( ( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, choice_action, ( parent, hashes ) ) for parent in parents ) )
+                            
+                        
                     
                 
-                if choice_action in ( HC.CONTENT_UPDATE_ADD, HC.CONTENT_UPDATE_PEND ) and self._add_parents_checkbox.GetValue():
-                    
-                    tag_parents_manager = HydrusGlobals.client_controller.GetManager( 'tag_parents' )
-                    
-                    parents = tag_parents_manager.GetParents( self._tag_service_key, tag )
-                    
-                    content_updates.extend( ( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, choice_action, ( parent, hashes ) ) for parent in parents ) )
-                    
+            
+            if len( recent_tags ) > 0 and HydrusGlobals.client_controller.GetNewOptions().GetNoneableInteger( 'num_recent_tags' ) is not None:
                 
+                HydrusGlobals.client_controller.Write( 'push_recent_tags', self._tag_service_key, recent_tags )
+                
+            
             
             for m in self._media:
                 

@@ -1015,15 +1015,15 @@ def GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id ):
     
     suffix = str( file_service_id ) + '_' + str( tag_service_id )
     
-    files_table_name = 'external_caches.specific_files_cache_' + suffix
+    cache_files_table_name = 'external_caches.specific_files_cache_' + suffix
     
-    current_mappings_table_name = 'external_caches.specific_current_mappings_cache_' + suffix
+    cache_current_mappings_table_name = 'external_caches.specific_current_mappings_cache_' + suffix
     
-    pending_mappings_table_name = 'external_caches.specific_pending_mappings_cache_' + suffix
+    cache_pending_mappings_table_name = 'external_caches.specific_pending_mappings_cache_' + suffix
     
     ac_cache_table_name = 'external_caches.specific_ac_cache_' + suffix
     
-    return ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name )
+    return ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name )
     
 class DB( HydrusDB.HydrusDB ):
     
@@ -1032,6 +1032,8 @@ class DB( HydrusDB.HydrusDB ):
     def __init__( self, controller, db_dir, db_name, no_wal = False ):
         
         self._updates_dir = os.path.join( db_dir, 'client_updates' )
+        
+        self._initial_messages = []
         
         HydrusDB.HydrusDB.__init__( self, controller, db_dir, db_name, no_wal = no_wal )
         
@@ -1061,13 +1063,15 @@ class DB( HydrusDB.HydrusDB ):
         
         if len( valid_hash_ids ) > 0:
             
-            self._c.executemany( 'INSERT OR IGNORE INTO current_files VALUES ( ?, ?, ? );', ( ( service_id, hash_id, timestamp ) for ( hash_id, timestamp ) in rows if hash_id in valid_hash_ids ) )
+            valid_rows = [ ( hash_id, timestamp ) for ( hash_id, timestamp ) in rows if hash_id in valid_hash_ids ]
             
             splayed_valid_hash_ids = HydrusData.SplayListForDB( valid_hash_ids )
             
-            self._c.execute( 'DELETE FROM deleted_files WHERE service_id = ? AND hash_id IN ' + splayed_valid_hash_ids + ';', ( service_id, ) )
+            # insert the files
             
-            num_deleted = self._GetRowCount()
+            self._c.executemany( 'INSERT OR IGNORE INTO current_files VALUES ( ?, ?, ? );', ( ( service_id, hash_id, timestamp ) for ( hash_id, timestamp ) in valid_rows ) )
+            
+            self._c.execute( 'DELETE FROM file_transfers WHERE service_id = ? AND hash_id IN ' + splayed_valid_hash_ids + ';', ( service_id, ) )
             
             info = self._c.execute( 'SELECT size, mime FROM files_info WHERE hash_id IN ' + splayed_valid_hash_ids + ';' ).fetchall()
             
@@ -1077,32 +1081,39 @@ class DB( HydrusDB.HydrusDB ):
             
             service_info_updates = []
             
-            service_info_updates.append( ( -num_deleted, service_id, HC.SERVICE_INFO_NUM_DELETED_FILES ) )
             service_info_updates.append( ( delta_size, service_id, HC.SERVICE_INFO_TOTAL_SIZE ) )
             service_info_updates.append( ( num_files, service_id, HC.SERVICE_INFO_NUM_FILES ) )
             service_info_updates.append( ( num_inbox, service_id, HC.SERVICE_INFO_NUM_INBOX ) )
             
-            self._c.executemany( 'UPDATE service_info SET info = info + ? WHERE service_id = ? AND info_type = ?;', service_info_updates )
-            
-            self._c.execute( 'DELETE FROM file_transfers WHERE service_id = ? AND hash_id IN ' + splayed_valid_hash_ids + ';', ( service_id, ) )
-            
-            if service_id == self._local_file_service_id:
-                
-                self._DeleteFiles( self._trash_service_id, valid_hash_ids, files_being_undeleted = True )
-                
-            
-            if service_id == self._trash_service_id:
-                
-                now = HydrusData.GetNow()
-                
-                self._c.executemany( 'INSERT OR IGNORE INTO file_trash ( hash_id, timestamp ) VALUES ( ?, ? );', ( ( hash_id, now ) for hash_id in valid_hash_ids ) )
-                
+            # now do special stuff
             
             service = self._GetService( service_id )
             
             service_type = service.GetServiceType()
             
-            if service_type in ( HC.LOCAL_FILE, HC.FILE_REPOSITORY ):
+            # remove any records of previous deletion
+            
+            if service_id == self._combined_local_file_service_id or service_type == HC.FILE_REPOSITORY:
+                
+                self._c.execute( 'DELETE FROM deleted_files WHERE service_id = ? AND hash_id IN ' + splayed_valid_hash_ids + ';', ( service_id, ) )
+                
+                num_deleted = self._GetRowCount()
+                
+                service_info_updates.append( ( -num_deleted, service_id, HC.SERVICE_INFO_NUM_DELETED_FILES ) )
+                
+            
+            # if we are adding to a local file domain, remove any from the trash and add to combined local file service if needed
+            
+            if service_type == HC.LOCAL_FILE_DOMAIN:
+                
+                self._DeleteFiles( self._trash_service_id, valid_hash_ids )
+                
+                self._AddFiles( self._combined_local_file_service_id, valid_rows )
+                
+            
+            # if we track tags for this service, update the a/c cache
+            
+            if service_type in HC.AUTOCOMPLETE_CACHE_SPECIFIC_FILE_SERVICES:
                 
                 tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
                 
@@ -1111,6 +1122,10 @@ class DB( HydrusDB.HydrusDB ):
                     self._CacheSpecificMappingsAddFiles( service_id, tag_service_id, valid_hash_ids )
                     
                 
+            
+            # push the service updates, done
+            
+            self._c.executemany( 'UPDATE service_info SET info = info + ? WHERE service_id = ? AND info_type = ?;', service_info_updates )
             
         
     
@@ -1123,21 +1138,18 @@ class DB( HydrusDB.HydrusDB ):
     
     def _AddService( self, service_key, service_type, name, info ):
         
-        if service_type in HC.LOCAL_SERVICES:
+        if service_type == HC.LOCAL_BOORU:
             
-            if service_type == HC.LOCAL_BOORU:
-                
-                current_time_struct = time.gmtime()
-                
-                ( current_year, current_month ) = ( current_time_struct.tm_year, current_time_struct.tm_mon )
-                
-                if 'used_monthly_data' not in info: info[ 'used_monthly_data' ] = 0
-                if 'max_monthly_data' not in info: info[ 'max_monthly_data' ] = None
-                if 'used_monthly_requests' not in info: info[ 'used_monthly_requests' ] = 0
-                if 'current_data_month' not in info: info[ 'current_data_month' ] = ( current_year, current_month )
-                if 'port' not in info: info[ 'port' ] = None
-                if 'upnp' not in info: info[ 'upnp' ] = None
-                
+            current_time_struct = time.gmtime()
+            
+            ( current_year, current_month ) = ( current_time_struct.tm_year, current_time_struct.tm_mon )
+            
+            if 'used_monthly_data' not in info: info[ 'used_monthly_data' ] = 0
+            if 'max_monthly_data' not in info: info[ 'max_monthly_data' ] = None
+            if 'used_monthly_requests' not in info: info[ 'used_monthly_requests' ] = 0
+            if 'current_data_month' not in info: info[ 'current_data_month' ] = ( current_year, current_month )
+            if 'port' not in info: info[ 'port' ] = None
+            if 'upnp' not in info: info[ 'upnp' ] = None
             
         
         if service_type in HC.REMOTE_SERVICES:
@@ -1228,7 +1240,7 @@ class DB( HydrusDB.HydrusDB ):
             
             self._CacheCombinedFilesMappingsGenerate( service_id )
             
-            file_service_ids = self._GetServiceIds( ( HC.LOCAL_FILE, HC.FILE_REPOSITORY ) )
+            file_service_ids = self._GetServiceIds( HC.AUTOCOMPLETE_CACHE_SPECIFIC_FILE_SERVICES )
             
             for file_service_id in file_service_ids:
                 
@@ -1236,7 +1248,7 @@ class DB( HydrusDB.HydrusDB ):
                 
             
         
-        if service_type in ( HC.LOCAL_FILE, HC.FILE_REPOSITORY ):
+        if service_type in HC.AUTOCOMPLETE_CACHE_SPECIFIC_FILE_SERVICES:
             
             tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
             
@@ -1264,7 +1276,7 @@ class DB( HydrusDB.HydrusDB ):
         
         for db_name in db_names:
             
-            all_names.update( ( name for ( name, ) in self._c.execute( 'SELECT name FROM ' + db_name + '.sqlite_master;' ) ) )
+            all_names.update( ( name for ( name, ) in self._c.execute( 'SELECT name FROM ' + db_name + '.sqlite_master WHERE type = ?;', ( 'table', ) ) ) )
             
         
         all_names.discard( 'sqlite_stat1' )
@@ -1414,7 +1426,7 @@ class DB( HydrusDB.HydrusDB ):
         
         ac_cache_table_name = GenerateCombinedFilesMappingsCacheTableName( service_id )
         
-        self._c.execute( 'DROP TABLE ' + ac_cache_table_name + ';' )
+        self._c.execute( 'DROP TABLE IF EXISTS ' + ac_cache_table_name + ';' )
         
     
     def _CacheCombinedFilesMappingsGenerate( self, service_id ):
@@ -1516,113 +1528,209 @@ class DB( HydrusDB.HydrusDB ):
         self._c.executemany( 'DELETE FROM ' + ac_cache_table_name + ' WHERE namespace_id = ? AND tag_id = ? AND current_count = ? AND pending_count = ?;', ( ( namespace_id, tag_id, 0, 0 ) for ( namespace_id, tag_id, current_delta, pending_delta ) in count_ids ) )
         
     
-    def _CacheSimilarFilesDelete( self, hash_id, phash_ids ):
+    def _CacheSimilarFilesAddLeaf( self, phash_id, phash ):
         
-        phash_ids = set( phash_ids )
+        result = self._c.execute( 'SELECT phash_id FROM shape_vptree WHERE parent_id IS NULL;' ).fetchone()
         
-        self._c.executemany( 'DELETE FROM external_caches.shape_perceptual_hash_map WHERE phash_id = ? AND hash_id = ?;', ( ( phash_id, hash_id ) for phash_id in phash_ids ) )
+        if result is None:
+            
+            parent_id = None
+            
+        else:
+            
+            ( root_node_phash_id, ) = result
+            
+            ancestors_we_are_inside = []
+            ancestors_we_are_outside = []
+            
+            an_ancestor_is_unbalanced = False
+            
+            next_ancestor_id = root_node_phash_id
+            
+            while next_ancestor_id is not None:
+                
+                ancestor_id = next_ancestor_id
+                
+                ( ancestor_phash, ancestor_radius, ancestor_inner_id, ancestor_inner_population, ancestor_outer_id, ancestor_outer_population ) = self._c.execute( 'SELECT phash, radius, inner_id, inner_population, outer_id, outer_population FROM shape_perceptual_hashes, shape_vptree USING ( phash_id ) WHERE phash_id = ?;', ( ancestor_id, ) ).fetchone()
+                
+                distance_to_ancestor = HydrusData.GetHammingDistance( phash, ancestor_phash )
+                
+                if ancestor_radius is None or distance_to_ancestor <= ancestor_radius:
+                    
+                    ancestors_we_are_inside.append( ancestor_id )
+                    ancestor_inner_population += 1
+                    next_ancestor_id = ancestor_inner_id
+                    
+                    if ancestor_inner_id is None:
+                        
+                        self._c.execute( 'UPDATE shape_vptree SET inner_id = ?, radius = ? WHERE phash_id = ?;', ( phash_id, distance_to_ancestor, ancestor_id ) )
+                        
+                        parent_id = ancestor_id
+                        
+                    
+                else:
+                    
+                    ancestors_we_are_outside.append( ancestor_id )
+                    ancestor_outer_population += 1
+                    next_ancestor_id = ancestor_outer_id
+                    
+                    if ancestor_outer_id is None:
+                        
+                        self._c.execute( 'UPDATE shape_vptree SET outer_id = ? WHERE phash_id = ?;', ( phash_id, ancestor_id ) )
+                        
+                        parent_id = ancestor_id
+                        
+                    
+                
+                if not an_ancestor_is_unbalanced and ancestor_inner_population + ancestor_outer_population > 16:
+                    
+                    larger = float( max( ancestor_inner_population, ancestor_outer_population ) )
+                    smaller = float( min( ancestor_inner_population, ancestor_outer_population ) )
+                    
+                    if smaller / larger < 0.5:
+                        
+                        self._c.execute( 'INSERT OR IGNORE INTO shape_maintenance_branch_regen ( phash_id ) VALUES ( ? );', ( ancestor_id, ) )
+                        
+                        # we only do this for the eldest ancestor, as the eventual rebalancing will affect all children
+                        
+                        an_ancestor_is_unbalanced = True
+                        
+                    
+                
+            
+            self._c.executemany( 'UPDATE shape_vptree SET inner_population = inner_population + 1 WHERE phash_id = ?;', ( ( ancestor_id, ) for ancestor_id in ancestors_we_are_inside ) )
+            self._c.executemany( 'UPDATE shape_vptree SET outer_population = outer_population + 1 WHERE phash_id = ?;', ( ( ancestor_id, ) for ancestor_id in ancestors_we_are_outside ) )
+            
         
-        useful_phash_ids = { phash for ( phash, ) in self._c.execute( 'SELECT phash_id FROM external_caches.shape_perceptual_hash_map WHERE phash_id IN ' + HydrusData.SplayListForDB( phash_ids ) + ';' ) }
+        radius = None
+        inner_id = None
+        inner_population = 0
+        outer_id = None
+        outer_population = 0
+        
+        self._c.execute( 'INSERT INTO shape_vptree ( phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population ) VALUES ( ?, ?, ?, ?, ?, ?, ? );', ( phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population ) )
+        
+    
+    def _CacheSimilarFilesDelete( self, hash_id, phash_ids = None ):
+        
+        if phash_ids is None:
+            
+            phash_ids = { phash_id for ( phash_id, ) in self._c.execute( 'SELECT phash_id FROM shape_perceptual_hash_map WHERE hash_id = ?;', ( hash_id, ) ) }
+            
+            self._c.execute( 'DELETE FROM shape_perceptual_hash_map WHERE hash_id = ?;', ( hash_id, ) )
+            
+        else:
+            
+            phash_ids = set( phash_ids )
+            
+            self._c.executemany( 'DELETE FROM shape_perceptual_hash_map WHERE phash_id = ? AND hash_id = ?;', ( ( phash_id, hash_id ) for phash_id in phash_ids ) )
+            
+        
+        useful_phash_ids = { phash for ( phash, ) in self._c.execute( 'SELECT phash_id FROM shape_perceptual_hash_map WHERE phash_id IN ' + HydrusData.SplayListForDB( phash_ids ) + ';' ) }
         
         deletee_phash_ids = phash_ids.difference( useful_phash_ids )
         
-        # for every deletee_phash_id:
-            # add to the rebalance maintenance table so they can be cleared out during maintenance
-        
-        # it'd be nice to call this on physical file deletion, but w/e
-        
-    
-    def _CacheSimilarFilesGeneratePHashes( self, hash_ids = None ):
-        
-        if hash_ids is None:
-            
-            # do all phashable hash_ids, selected from file_map X all local files, or something
-            
-            pass
-            
-        
-        # insert or ignore all hash_ids into a 'regen these phashes on maintenance' table
+        self._c.executemany( 'INSERT OR IGNORE INTO shape_maintenance_branch_regen ( phash_id ) VALUES ( ? );', ( ( phash_id, ) for phash_id in deletee_phash_ids ) )
         
     
     def _CacheSimilarFilesGenerateBranch( self, job_key, parent_id, phash_id, phash, children ):
         
-        # report to job_key and splash screen
-        
-        ghd = HydrusData.GetHammingDistance
-        
         process_queue = [ ( parent_id, phash_id, phash, children ) ]
         
+        insert_rows = []
+        
+        num_done = 0
+        num_to_do = len( children ) + 1
+        
         while len( process_queue ) > 0:
+            
+            job_key.SetVariable( 'popup_text_2', 'generating new branch -- ' + HydrusData.ConvertValueRangeToPrettyString( num_done, num_to_do ) )
             
             ( parent_id, phash_id, phash, children ) = process_queue.pop( 0 )
             
             if len( children ) == 0:
                 
-                left_id = None
-                right_id = None
+                inner_id = None
+                inner_population = 0
+                
+                outer_id = None
+                outer_population = 0
                 
                 radius = None
                 
             else:
                 
-                children = [ ( ghd( phash, child_phash ), child_id, child_phash ) for ( child_id, child_phash ) in children ]
+                children = [ ( HydrusData.GetHammingDistance( phash, child_phash ), child_id, child_phash ) for ( child_id, child_phash ) in children ]
                 
                 children.sort()
                 
                 median_index = len( children ) / 2
                 
-                radius = children[ median_index ][0]
+                median_radius = children[ median_index ][0]
                 
-                left_children = [ ( child_id, child_phash ) for ( distance, child_id, child_phash ) in children if distance <= radius ]
-                right_children = [ ( child_id, child_phash ) for ( distance, child_id, child_phash ) in children if distance > radius ]
+                inner_children = [ ( child_id, child_phash ) for ( distance, child_id, child_phash ) in children if distance < median_radius ]
+                radius_children = [ ( child_id, child_phash ) for ( distance, child_id, child_phash ) in children if distance == median_radius ]
+                outer_children = [ ( child_id, child_phash ) for ( distance, child_id, child_phash ) in children if distance > median_radius ]
                 
-                ( left_id, left_phash ) = HydrusData.RandomPop( left_children )
-                
-                if len( right_children ) == 0:
+                if len( inner_children ) <= len( outer_children ):
                     
-                    right_id = None
+                    radius = median_radius
+                    
+                    inner_children.extend( radius_children )
                     
                 else:
                     
-                    ( right_id, right_phash ) = HydrusData.RandomPop( right_children )
+                    radius = median_radius - 1
+                    
+                    outer_children.extend( radius_children )
+                    
+                
+                inner_population = len( inner_children )
+                outer_population = len( outer_children )
+                
+                ( inner_id, inner_phash ) = self._CacheSimilarFilesPopBestRootNode( inner_children ) #HydrusData.MedianPop( inner_children )
+                
+                if len( outer_children ) == 0:
+                    
+                    outer_id = None
+                    
+                else:
+                    
+                    ( outer_id, outer_phash ) = self._CacheSimilarFilesPopBestRootNode( outer_children ) #HydrusData.MedianPop( outer_children )
                     
                 
             
-            # insert phash_id, phash, radius, left_id, left_count, right_id, right_count, parent_id
+            insert_rows.append( ( phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population ) )
             
-            if left_id is not None:
+            if inner_id is not None:
                 
-                process_queue.append( ( phash_id, left_id, left_phash, left_children ) )
+                process_queue.append( ( phash_id, inner_id, inner_phash, inner_children ) )
                 
             
-            if right_id is not None:
+            if outer_id is not None:
                 
-                process_queue.append( ( phash_id, right_id, right_phash, right_children ) )
+                process_queue.append( ( phash_id, outer_id, outer_phash, outer_children ) )
                 
-                
+            
+            num_done += 1
             
         
-        pass
+        job_key.SetVariable( 'popup_text_2', 'branch constructed, now committing' )
+        
+        self._c.executemany( 'INSERT INTO shape_vptree ( phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population ) VALUES ( ?, ?, ?, ?, ?, ?, ? );', insert_rows )
         
     
     def _CacheSimilarFilesGetPHashId( self, phash ):
         
-        result = self._c.execute( 'SELECT phash_id FROM external_caches.shape_perceptual_hashes WHERE phash = ?;', ( sqlite3.Binary( phash ), ) ).fetchone()
+        result = self._c.execute( 'SELECT phash_id FROM shape_perceptual_hashes WHERE phash = ?;', ( sqlite3.Binary( phash ), ) ).fetchone()
         
         if result is None:
             
-            self._c.execute( 'INSERT INTO external_caches.shape_perceptual_hashes ( phash ) VALUES ( ? );', ( sqlite3.Binary( phash ), ) )
+            self._c.execute( 'INSERT INTO shape_perceptual_hashes ( phash ) VALUES ( ? );', ( sqlite3.Binary( phash ), ) )
             
             phash_id = self._c.lastrowid
             
-            # walk down to bottom of tree and insert it
-                # if there is no tree yet, create root node
-            # if bottom is empty on both sides, update left and set radius
-            # else update right
-            # update all the left and right counts as you go back up
-            # if a left/right count is out of whack in either direction, say more than two thirds on one side, schedule that node for rebalancing
-                # but in this case, only schedule the largest node
-            # check the left and right counts and rebalance things
+            self._CacheSimilarFilesAddLeaf( phash_id, phash )
             
         else:
             
@@ -1634,9 +1742,9 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSimilarFilesGetMaintenanceStatus( self ):
         
-        # count up number of phashes
-        # count up number of files that still need to be calced
-        # count up number of nodes to be rebalanced
+        ( num_current_phashes, ) = self._c.execute( 'SELECT COUNT( * ) FROM shape_perceptual_hashes;' ).fetchone()
+        ( num_phashes_to_regen, ) = self._c.execute( 'SELECT COUNT( * ) FROM shape_maintenance_phash_regen;' ).fetchone()
+        ( num_branches_to_regen, ) = self._c.execute( 'SELECT COUNT( * ) FROM shape_maintenance_branch_regen;' ).fetchone()
         
         # gui will present this as a general 'still 100,000 still to go!' and 'completely ready to go!'
         
@@ -1644,196 +1752,471 @@ class DB( HydrusDB.HydrusDB ):
         
         # can add the arbitrary dupe search cache to this as well
         
-        pass
+        return ( num_current_phashes, num_phashes_to_regen, num_branches_to_regen )
         
     
-    def _CacheSimilarFilesInsert( self, hash_id, phashes ):
+    def _CacheSimilarFilesAssociatePHashes( self, hash_id, phashes ):
+        
+        phash_ids = set()
         
         for phash in phashes:
             
             phash_id = self._CacheSimilarFilesGetPHashId( phash )
             
-            self._c.execute( 'INSERT OR IGNORE INTO external_caches.shape_perceptual_hash_map ( phash_id, hash_id ) VALUES ( ?, ? );', ( phash_id, hash_id ) )
+            self._c.execute( 'INSERT OR IGNORE INTO shape_perceptual_hash_map ( phash_id, hash_id ) VALUES ( ?, ? );', ( phash_id, hash_id ) )
+            
+            phash_ids.add( phash_id )
             
         
-    
-    def _CacheSimilarFilesMaintain( self, job_key, stop_time ):
-        
-        # broadcast to job_key on how you are doing, for the maintenance popup
-        
-        # while hash_ids still in in 'phash recalc during maintenance' table:
-            # check stop_time
-            # fetch one
-            # get lockless file path or whatever
-            # gen its phashes
-                # this needs a hydrusfilehandling.getphashes that will deal with it cleverly
-                # if file doesn't exist or otherwise doesn't work, phashes = []
-            # get phash_id, hash_id pairs
-            # get pairs already in db for hash_id
-            # delete any no longer needed through the normal call
-            # insert new ones through the normal call
-            # remove the hash_id from the maintenance table
-        
-        # while there are phashes in the rebalance maintenance table:
-            # check stop time
-            # select the one with the largest sum( left, right )
-            # rebalance branch
-        
-        pass
+        return phash_ids
         
     
-    def _CacheSimilarFilesNeedsMaintenance( self ):
+    def _CacheSimilarFilesMaintain( self, stop_time ):
         
-        # if branches need rebalancing or phashes need generating, say yes
+        job_key = ClientThreading.JobKey( cancellable = True )
         
-        pass
+        job_key.SetVariable( 'popup_title', 'similar files metadata maintenance' )
         
-    
-    def _CacheSimilarFilesRebalanceBranch( self, job_key, phash_id ):
+        job_key_pubbed = False
         
-        # prep, removal of old branch
+        hash_ids = [ hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM shape_maintenance_phash_regen;' ) ]
         
-        # fetch parent_id
-        parent_id = 'blah'
+        client_files_manager = self._controller.GetClientFilesManager()
         
-        # fetch ( phash_id, phash ) pairs of all descendants (can do easy with a recursive call)
-        rebalance_nodes = 'blah'
+        num_to_do = len( hash_ids )
         
-        rebalance_phash_ids = { p_id for ( p_id, p_h ) in rebalance_nodes }
-        
-        # delete everything from the maintenance rebalance table
-        # delete row and descendants from vptree
-        
-        useful_phash_ids = { p_id for ( p_id, ) in self._c.execute( 'SELECT phash_id FROM external_caches.shape_perceptual_hash_map WHERE phash_id IN ' + HydrusData.SplayListForDB( rebalance_phash_ids ) + ';' ) }
-        
-        deletee_phash_ids = rebalance_phash_ids.difference( useful_phash_ids )
-        
-        self._c.executemany( 'DELETE FROM external_caches.shape_perceptual_hashes WHERE phash_id = ?;', ( ( p_id, ) for p_id in deletee_phash_ids ) )
-        
-        # now create the new branch
-        
-        ( new_phash_id, new_phash ) = HydrusData.RandomPop( rebalance_nodes )
-        
-        if parent_id is not None:
+        for ( i, hash_id ) in enumerate( hash_ids ):
             
-            ( parent_left_id, ) = ( 'blah', ) # fetch the parent's current left_id
-            
-            if parent_left_id == phash_id:
+            if not job_key_pubbed:
                 
-                column_name = 'left_id'
+                self._controller.pub( 'message', job_key )
+                
+                job_key_pubbed = True
+                
+            
+            ( i_paused, should_quit ) = job_key.WaitIfNeeded()
+            
+            if should_quit or HydrusData.TimeHasPassed( stop_time ):
+                
+                return
+                
+            
+            text = 'regenerating similar file metadata - ' + HydrusData.ConvertValueRangeToPrettyString( i, num_to_do )
+            
+            HydrusGlobals.client_controller.pub( 'splash_set_status_text', text )
+            job_key.SetVariable( 'popup_text_1', text )
+            job_key.SetVariable( 'popup_gauge_1', ( i, num_to_do ) )
+            
+            try:
+                
+                hash = self._GetHash( hash_id )
+                mime = self._GetMime( hash_id )
+                
+                if mime in HC.MIMES_WE_CAN_PHASH:
+                    
+                    path = client_files_manager.GetFilePath( hash, mime )
+                    
+                    if mime in ( HC.IMAGE_JPEG, HC.IMAGE_PNG ):
+                        
+                        try:
+                            
+                            phashes = ClientImageHandling.GenerateShapePerceptualHashes( path )
+                            
+                        except Exception as e:
+                            
+                            HydrusData.Print( 'Could not generate phashes for ' + path )
+                            
+                            HydrusData.PrintException( e )
+                            
+                            phashes = []
+                            
+                        
+                    
+                else:
+                    
+                    phashes = []
+                    
+                
+            except HydrusExceptions.FileMissingException:
+                
+                phashes = []
+                
+            
+            existing_phash_ids = { phash_id for ( phash_id, ) in self._c.execute( 'SELECT phash_id FROM shape_perceptual_hash_map WHERE hash_id = ?;', ( hash_id, ) ) }
+            
+            correct_phash_ids = self._CacheSimilarFilesAssociatePHashes( hash_id, phashes )
+            
+            deletee_phash_ids = existing_phash_ids.difference( correct_phash_ids )
+            
+            self._CacheSimilarFilesDelete( hash_id, deletee_phash_ids )
+            
+            self._c.execute( 'DELETE FROM shape_maintenance_phash_regen WHERE hash_id = ?;', ( hash_id, ) )
+            
+        
+        rebalance_phash_ids = [ phash_id for ( phash_id, ) in self._c.execute( 'SELECT phash_id FROM shape_maintenance_branch_regen;' ) ]
+        
+        num_to_do = len( rebalance_phash_ids )
+        
+        while len( rebalance_phash_ids ) > 0:
+            
+            if not job_key_pubbed:
+                
+                self._controller.pub( 'message', job_key )
+                
+                job_key_pubbed = True
+                
+            
+            ( i_paused, should_quit ) = job_key.WaitIfNeeded()
+            
+            if should_quit or HydrusData.TimeHasPassed( stop_time ):
+                
+                return
+                
+            
+            num_done = num_to_do - len( rebalance_phash_ids )
+            
+            text = 'regenerating unbalanced similar file search data - ' + HydrusData.ConvertValueRangeToPrettyString( num_done, num_to_do )
+            
+            HydrusGlobals.client_controller.pub( 'splash_set_status_text', text )
+            job_key.SetVariable( 'popup_text_1', text )
+            job_key.SetVariable( 'popup_gauge_1', ( num_done, num_to_do ) )
+            
+            with HydrusDB.TemporaryIntegerTable( self._c, rebalance_phash_ids, 'phash_id' ) as temp_table_name:
+                
+                ( biggest_phash_id, ) = self._c.execute( 'SELECT phash_id FROM shape_vptree, ' + temp_table_name + ' USING ( phash_id ) ORDER BY inner_population + outer_population DESC;' ).fetchone()
+                
+            
+            self._CacheSimilarFilesRegenerateBranch( job_key, biggest_phash_id )
+            
+            rebalance_phash_ids = [ phash_id for ( phash_id, ) in self._c.execute( 'SELECT phash_id FROM shape_maintenance_branch_regen;' ) ]
+            
+        
+        job_key.SetVariable( 'popup_text_1', 'done!' )
+        job_key.DeleteVariable( 'popup_gauge_1' )
+        job_key.DeleteVariable( 'popup_text_2' )
+        
+        job_key.Finish()
+        job_key.Delete( 30 )
+        
+    
+    def _CacheSimilarFilesMaintenanceDue( self ):
+        
+        result = self._c.execute( 'SELECT 1 FROM shape_maintenance_phash_regen;' ).fetchone()
+        
+        if result is not None:
+            
+            return True
+            
+        
+        result = self._c.execute( 'SELECT 1 FROM shape_maintenance_branch_regen;' ).fetchone()
+
+        if result is not None:
+            
+            return True
+            
+        
+        return False
+        
+    
+    def _CacheSimilarFilesPopBestRootNode( self, node_rows ):
+        
+        if len( node_rows ) == 1:
+            
+            root_row = node_rows.pop(0)
+            
+            return root_row
+            
+        
+        MAX_VIEWPOINTS = 256
+        MAX_SAMPLE = 64
+        
+        if len( node_rows ) > MAX_VIEWPOINTS:
+            
+            viewpoints = random.sample( node_rows, MAX_VIEWPOINTS )
+            
+        else:
+            
+            viewpoints = node_rows
+            
+        
+        if len( node_rows ) > MAX_SAMPLE:
+            
+            sample = random.sample( node_rows, MAX_SAMPLE )
+            
+        else:
+            
+            sample = node_rows
+            
+        
+        final_scores = []
+        
+        for ( v_id, v_phash ) in viewpoints:
+            
+            views = [ HydrusData.GetHammingDistance( v_phash, s_phash ) for ( s_id, s_phash ) in sample if v_id != s_id ]
+            
+            views.sort()
+            
+            # let's figure out the ratio of left_children to right_children, preferring 1:1, and convert it to a discrete integer score
+            
+            median_index = len( views ) / 2
+            
+            radius = views[ median_index ]
+            
+            num_left = float( len( [ 1 for view in views if view < radius ] ) )
+            num_radius = float( len( [ 1 for view in views if view == radius ] ) )
+            num_right = float( len( [ 1 for view in views if view > radius ] ) )
+            
+            if num_left <= num_right:
+                
+                num_left += num_radius
                 
             else:
                 
-                column_name = 'right_id'
+                num_right += num_radius
                 
             
-            # update parent row, set column_name = phash_id
+            smaller = min( num_left, num_right )
+            larger = max( num_left, num_right )
+            
+            ratio = smaller / larger
+            
+            ratio_score = int( ratio * MAX_SAMPLE / 2 )
+            
+            # now let's calc the standard deviation--larger sd tends to mean less sphere overlap when searching
+            
+            mean_view = sum( views ) / float( len( views ) )
+            squared_diffs = [ ( view - mean_view  ) ** 2 for view in views ]
+            sd = ( sum( squared_diffs ) / len( squared_diffs ) ) ** 0.5
+            
+            final_scores.append( ( ratio_score, sd, v_id ) )
             
         
-        self._CacheSimilarFilesGenerateBranch( job_key, parent_id, new_phash_id, new_phash, rebalance_nodes )
+        final_scores.sort()
+        
+        # we now have a list like [ ( 11, 4.0, [id] ), ( 15, 3.7, [id] ), ( 15, 4.3, [id] ) ]
+        
+        ( ratio_gumpf, sd_gumpf, root_id ) = final_scores.pop()
+        
+        for ( i, ( v_id, v_phash ) ) in enumerate( node_rows ):
+            
+            if v_id == root_id:
+                
+                root_row = node_rows.pop( i )
+                
+                return root_row
+                
+            
         
     
-    def _CacheSimilarFilesRegenerateVPTree( self, job_key ):
+    def _CacheSimilarFilesRegenerateBranch( self, job_key, phash_id ):
         
-        # clear the table
+        job_key.SetVariable( 'popup_text_2', 'reviewing existing branch' )
         
-        # the main table -- shape_vptree
-        # something like:
-            # phash_id (p idx), phash, radius, left_id, left_count, right_id, right_count, creation_ratio, parent_id (idx)
+        # grab everything in the branch
         
-        # report to job_key and splash screen
+        ( parent_id, ) = self._c.execute( 'SELECT parent_id FROM shape_vptree WHERE phash_id = ?;', ( phash_id, ) ).fetchone()
         
-        all_nodes = self._c.execute( 'SELECT phash_id, phash FROM external_caches.shape_perceptual_hashes;' ).fetchall()
+        cte_table_name = 'branch ( branch_phash_id )'
+        initial_select = 'SELECT ?'
+        recursive_select = 'SELECT phash_id FROM shape_vptree, branch ON parent_id = branch_phash_id'
         
-        ( root_id, root_phash ) = HydrusData.RandomPop( all_nodes )
+        with_clause = 'WITH RECURSIVE ' + cte_table_name + ' AS ( ' + initial_select + ' UNION ALL ' +  recursive_select +  ')'
+        
+        unbalanced_nodes = self._c.execute( with_clause + ' SELECT branch_phash_id, phash FROM branch, shape_perceptual_hashes ON phash_id = branch_phash_id;', ( phash_id, ) ).fetchall()
+        
+        # removal of old branch, maintenance schedule, and orphan phashes
+        
+        job_key.SetVariable( 'popup_text_2', HydrusData.ConvertIntToPrettyString( len( unbalanced_nodes ) ) + ' leaves found--now clearing out old branch' )
+        
+        unbalanced_phash_ids = { p_id for ( p_id, p_h ) in unbalanced_nodes }
+        
+        self._c.executemany( 'DELETE FROM shape_vptree WHERE phash_id = ?;', ( ( p_id, ) for p_id in unbalanced_phash_ids ) )
+        
+        self._c.executemany( 'DELETE FROM shape_maintenance_branch_regen WHERE phash_id = ?;', ( ( p_id, ) for p_id in unbalanced_phash_ids ) )
+        
+        with HydrusDB.TemporaryIntegerTable( self._c, unbalanced_phash_ids, 'phash_id' ) as temp_table_name:
+            
+            useful_phash_ids = { p_id for ( p_id, ) in self._c.execute( 'SELECT phash_id FROM shape_perceptual_hash_map, ' + temp_table_name + ' USING ( phash_id );' ) }
+            
+        
+        orphan_phash_ids = unbalanced_phash_ids.difference( useful_phash_ids )
+        
+        self._c.executemany( 'DELETE FROM shape_perceptual_hashes WHERE phash_id = ?;', ( ( p_id, ) for p_id in orphan_phash_ids ) )
+        
+        useful_nodes = [ row for row in unbalanced_nodes if row[0] in useful_phash_ids ]
+        
+        useful_population = len( useful_nodes )
+        
+        # now create the new branch, starting by choosing a new root and updating the parent's left/right reference to that
+        
+        if useful_population > 0:
+            
+            ( new_phash_id, new_phash ) = self._CacheSimilarFilesPopBestRootNode( useful_nodes ) #HydrusData.RandomPop( useful_nodes )
+            
+        else:
+            
+            new_phash_id = None
+            
+        
+        if parent_id is not None:
+            
+            ( parent_inner_id, ) = self._c.execute( 'SELECT inner_id FROM shape_vptree WHERE phash_id = ?;', ( parent_id, ) ).fetchone()
+            
+            if parent_inner_id == phash_id:
+                
+                query = 'UPDATE shape_vptree SET inner_id = ?, inner_population = ? WHERE phash_id = ?;'
+                
+            else:
+                
+                query = 'UPDATE shape_vptree SET outer_id = ?, outer_population = ? WHERE phash_id = ?;'
+                
+            
+            self._c.execute( query, ( new_phash_id, useful_population, parent_id ) )
+            
+        
+        if useful_population > 0:
+            
+            self._CacheSimilarFilesGenerateBranch( job_key, parent_id, new_phash_id, new_phash, useful_nodes )
+            
+        
+    
+    def _CacheSimilarFilesRegenerateTree( self ):
+        
+        job_key = ClientThreading.JobKey()
+        
+        job_key.SetVariable( 'popup_title', 'regenerating similar file search data' )
+        
+        self._controller.pub( 'message', job_key )
+        
+        job_key.SetVariable( 'popup_text_1', 'gathering all leaves' )
+        
+        self._c.execute( 'DELETE FROM shape_vptree;' )
+        
+        all_nodes = self._c.execute( 'SELECT phash_id, phash FROM shape_perceptual_hashes;' ).fetchall()
+        
+        job_key.SetVariable( 'popup_text_1', HydrusData.ConvertIntToPrettyString( len( all_nodes ) ) + ' leaves found, now regenerating' )
+        
+        ( root_id, root_phash ) = self._CacheSimilarFilesPopBestRootNode( all_nodes ) #HydrusData.RandomPop( all_nodes )
         
         self._CacheSimilarFilesGenerateBranch( job_key, None, root_id, root_phash, all_nodes )
+        
+        job_key.SetVariable( 'popup_text_1', 'done!' )
+        job_key.DeleteVariable( 'popup_text_2' )
+        
+    
+    def _CacheSimilarFilesSchedulePHashRegeneration( self, hash_ids = None ):
+        
+        if hash_ids is None:
+            
+            hash_ids = [ hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM files_info, current_files USING ( hash_id ) WHERE service_id = ? AND mime IN ' + HydrusData.SplayListForDB( HC.MIMES_WE_CAN_PHASH ) + ';', ( self._combined_local_file_service_id, ) ) ]
+            
+        
+        self._c.executemany( 'INSERT OR IGNORE INTO shape_maintenance_phash_regen ( hash_id ) VALUES ( ? );', ( ( hash_id, ) for hash_id in hash_ids ) )
         
     
     def _CacheSimilarFilesSearch( self, hash_id, max_hamming_distance ):
         
         search_radius = max_hamming_distance
         
-        result = 'blah' # self._c.execute( select root node ).fetchone()
+        result = self._c.execute( 'SELECT phash_id FROM shape_vptree WHERE parent_id IS NULL;' ).fetchone()
         
         if result is None:
             
             return []
             
         
-        search_phashes = 'blah' # fetch search phashes for hash_id
+        ( root_node_phash_id, ) = result
+        
+        search_phashes = [ phash for ( phash, ) in self._c.execute( 'SELECT phash FROM shape_perceptual_hashes, shape_perceptual_hash_map USING ( phash_id ) WHERE hash_id = ?;', ( hash_id, ) ) ]
         
         if len( search_phashes ) == 0:
             
             return []
             
         
-        ( root_node_phash_id, ) = result
-        
         potentials = [ ( root_node_phash_id, tuple( search_phashes ) ) ]
-        similar = set()
+        similar_phash_ids = set()
+        
+        num_cycles = 0
         
         while len( potentials ) > 0:
             
+            num_cycles += 1
+            
             ( node_phash_id, search_phashes ) = potentials.pop( 0 )
             
-            ( node_phash, node_radius, inner_phash_id, outer_phash_id ) = ( 'blah', 5, 1, 2 ) # sql here
+            ( node_phash, node_radius, inner_phash_id, outer_phash_id ) = self._c.execute( 'SELECT phash, radius, inner_id, outer_id FROM shape_perceptual_hashes, shape_vptree USING ( phash_id ) WHERE phash_id = ?;', ( node_phash_id, ) ).fetchone()
             
             inner_search_phashes = []
             outer_search_phashes = []
             
             for search_phash in search_phashes:
                 
+                # first check the node--is it similar?
+                
                 node_hamming_distance = HydrusData.GetHammingDistance( search_phash, node_phash )
                 
                 if node_hamming_distance <= search_radius:
                     
-                    similar.add( node_phash_id )
+                    similar_phash_ids.add( node_phash_id )
                     
                 
-                # we now have two spheres, separated by node_hamming_distance
-                # we want to search inside and/or outside the node_sphere if the search_sphere intersects with those spaces
-                # there are four possibles:
-                # (----N----)-(--S--)    intersects with outer only - distance between N and S > their radii
-                # (----N---(-)-S--)      intersects with both
-                # (----N-(--S-)-)        intersects with both
-                # (---(-N-S--)-)         intersects with inner only - distance between N and S + radius_S does not exceed radius_N
+                # now how about its children?
                 
-                spheres_disjoint = node_hamming_distance > node_radius + search_radius
-                search_sphere_subset_of_node_sphere = node_hamming_distance + search_radius <= node_radius
-                
-                if not spheres_disjoint: # i.e. they intersect at some point
+                if node_radius is not None:
                     
-                    inner_search_phashes.append( search_phash )
+                    # we have two spheres--node and search--their centers separated by node_hamming_distance
+                    # we want to search inside/outside the node_sphere if the search_sphere intersects with those spaces
+                    # there are four possibles:
+                    # (----N----)-(--S--)    intersects with outer only - distance between N and S > their radii
+                    # (----N---(-)-S--)      intersects with both
+                    # (----N-(--S-)-)        intersects with both
+                    # (---(-N-S--)-)         intersects with inner only - distance between N and S + radius_S does not exceed radius_N
                     
-                
-                if not search_sphere_subset_of_node_sphere: # i.e. search sphere intersects with non-node sphere space at some point
+                    spheres_disjoint = node_hamming_distance > node_radius + search_radius
+                    search_sphere_subset_of_node_sphere = node_hamming_distance + search_radius <= node_radius
                     
-                    outer_search_phashes.append( search_phash )
+                    if not spheres_disjoint: # i.e. they intersect at some point
+                        
+                        inner_search_phashes.append( search_phash )
+                        
+                    
+                    if not search_sphere_subset_of_node_sphere: # i.e. search sphere intersects with non-node sphere space at some point
+                        
+                        outer_search_phashes.append( search_phash )
+                        
                     
                 
             
-            if len( inner_search_phashes ) > 0:
+            if inner_phash_id is not None and len( inner_search_phashes ) > 0:
                 
                 potentials.append( ( inner_phash_id, tuple( inner_search_phashes ) ) )
                 
             
-            if len( outer_search_phashes ) > 0:
+            if outer_phash_id is not None and len( outer_search_phashes ) > 0:
                 
                 potentials.append( ( outer_phash_id, tuple( outer_search_phashes ) ) )
                 
             
         
-        similar_hash_ids = 'blah' # fetch from the phash_id->hash_id table
+        if HydrusGlobals.db_report_mode:
+            
+            HydrusData.ShowText( 'Similar file search completed in ' + HydrusData.ConvertIntToPrettyString( num_cycles ) + ' cycles.' )
+            
         
-        return similar
+        with HydrusDB.TemporaryIntegerTable( self._c, similar_phash_ids, 'phash_id' ) as temp_table_name:
+            
+            similar_hash_ids = [ hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM shape_perceptual_hash_map, ' + temp_table_name + ' USING ( phash_id );' ) ]
+            
+        
+        return similar_hash_ids
         
     
     def _CacheSpecificMappingsAddFiles( self, file_service_id, tag_service_id, hash_ids ):
         
-        ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
-        self._c.executemany( 'INSERT OR IGNORE INTO ' + files_table_name + ' VALUES ( ? );', ( ( hash_id, ) for hash_id in hash_ids ) )
+        self._c.executemany( 'INSERT OR IGNORE INTO ' + cache_files_table_name + ' VALUES ( ? );', ( ( hash_id, ) for hash_id in hash_ids ) )
         
         ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( tag_service_id )
         
@@ -1862,7 +2245,7 @@ class DB( HydrusDB.HydrusDB ):
                 
                 if num_current > 0:
                     
-                    self._c.executemany( 'INSERT OR IGNORE INTO ' + current_mappings_table_name + ' ( hash_id, namespace_id, tag_id ) VALUES ( ?, ?, ? );', ( ( hash_id, namespace_id, tag_id ) for hash_id in current_hash_ids ) )
+                    self._c.executemany( 'INSERT OR IGNORE INTO ' + cache_current_mappings_table_name + ' ( hash_id, namespace_id, tag_id ) VALUES ( ?, ?, ? );', ( ( hash_id, namespace_id, tag_id ) for hash_id in current_hash_ids ) )
                     
                 
                 pending_hash_ids = pending_mapping_ids_dict[ ( namespace_id, tag_id ) ]
@@ -1871,7 +2254,7 @@ class DB( HydrusDB.HydrusDB ):
                 
                 if num_pending > 0:
                     
-                    self._c.executemany( 'INSERT OR IGNORE INTO ' + pending_mappings_table_name + ' ( hash_id, namespace_id, tag_id ) VALUES ( ?, ?, ? );', ( ( hash_id, namespace_id, tag_id ) for hash_id in pending_hash_ids ) )
+                    self._c.executemany( 'INSERT OR IGNORE INTO ' + cache_pending_mappings_table_name + ' ( hash_id, namespace_id, tag_id ) VALUES ( ?, ?, ? );', ( ( hash_id, namespace_id, tag_id ) for hash_id in pending_hash_ids ) )
                     
                 
                 if num_current > 0 or num_pending > 0:
@@ -1891,7 +2274,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsAddMappings( self, file_service_id, tag_service_id, mappings_ids ):
         
-        ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         for ( namespace_id, tag_id, hash_ids ) in mappings_ids:
             
@@ -1899,13 +2282,13 @@ class DB( HydrusDB.HydrusDB ):
             
             if len( hash_ids ) > 0:
                 
-                self._c.executemany( 'DELETE FROM ' + pending_mappings_table_name + ' WHERE hash_id = ? AND namespace_id = ? AND tag_id = ?;', ( ( hash_id, namespace_id, tag_id ) for hash_id in hash_ids ) )
+                self._c.executemany( 'DELETE FROM ' + cache_pending_mappings_table_name + ' WHERE hash_id = ? AND namespace_id = ? AND tag_id = ?;', ( ( hash_id, namespace_id, tag_id ) for hash_id in hash_ids ) )
                 
                 num_pending_rescinded = self._GetRowCount()
                 
                 #
                 
-                self._c.executemany( 'INSERT OR IGNORE INTO ' + current_mappings_table_name + ' ( hash_id, namespace_id, tag_id ) VALUES ( ?, ?, ? );', ( ( hash_id, namespace_id, tag_id ) for hash_id in hash_ids ) )
+                self._c.executemany( 'INSERT OR IGNORE INTO ' + cache_current_mappings_table_name + ' ( hash_id, namespace_id, tag_id ) VALUES ( ?, ?, ? );', ( ( hash_id, namespace_id, tag_id ) for hash_id in hash_ids ) )
                 
                 num_added = self._GetRowCount()
                 
@@ -1925,22 +2308,22 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsDrop( self, file_service_id, tag_service_id ):
         
-        ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
-        self._c.execute( 'DROP TABLE ' + files_table_name + ';' )
+        self._c.execute( 'DROP TABLE IF EXISTS ' + cache_files_table_name + ';' )
         
-        self._c.execute( 'DROP TABLE ' + current_mappings_table_name + ';' )
+        self._c.execute( 'DROP TABLE IF EXISTS ' + cache_current_mappings_table_name + ';' )
         
-        self._c.execute( 'DROP TABLE ' + pending_mappings_table_name + ';' )
+        self._c.execute( 'DROP TABLE IF EXISTS ' + cache_pending_mappings_table_name + ';' )
         
-        self._c.execute( 'DROP TABLE ' + ac_cache_table_name + ';' )
+        self._c.execute( 'DROP TABLE IF EXISTS ' + ac_cache_table_name + ';' )
         
     
     def _CacheSpecificMappingsDeleteFiles( self, file_service_id, tag_service_id, hash_ids ):
         
-        ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
-        self._c.executemany( 'DELETE FROM ' + files_table_name + ' WHERE hash_id = ?;', ( ( hash_id, ) for hash_id in hash_ids ) )
+        self._c.executemany( 'DELETE FROM ' + cache_files_table_name + ' WHERE hash_id = ?;', ( ( hash_id, ) for hash_id in hash_ids ) )
         
         ac_cache_changes = []
         
@@ -1948,11 +2331,11 @@ class DB( HydrusDB.HydrusDB ):
             
             splayed_group_of_hash_ids = HydrusData.SplayListForDB( group_of_hash_ids )
             
-            current_mapping_ids_raw = self._c.execute( 'SELECT namespace_id, tag_id, hash_id FROM ' + current_mappings_table_name + ' WHERE hash_id IN ' + splayed_group_of_hash_ids + ';' ).fetchall()
+            current_mapping_ids_raw = self._c.execute( 'SELECT namespace_id, tag_id, hash_id FROM ' + cache_current_mappings_table_name + ' WHERE hash_id IN ' + splayed_group_of_hash_ids + ';' ).fetchall()
             
             current_mapping_ids_dict = HydrusData.BuildKeyToSetDict( [ ( ( namespace_id, tag_id ), hash_id ) for ( namespace_id, tag_id, hash_id ) in current_mapping_ids_raw ] )
             
-            pending_mapping_ids_raw = self._c.execute( 'SELECT namespace_id, tag_id, hash_id FROM ' + pending_mappings_table_name + ' WHERE hash_id IN ' + splayed_group_of_hash_ids + ';' ).fetchall()
+            pending_mapping_ids_raw = self._c.execute( 'SELECT namespace_id, tag_id, hash_id FROM ' + cache_pending_mappings_table_name + ' WHERE hash_id IN ' + splayed_group_of_hash_ids + ';' ).fetchall()
             
             pending_mapping_ids_dict = HydrusData.BuildKeyToSetDict( [ ( ( namespace_id, tag_id ), hash_id ) for ( namespace_id, tag_id, hash_id ) in pending_mapping_ids_raw ] )
             
@@ -1967,7 +2350,7 @@ class DB( HydrusDB.HydrusDB ):
                 
                 if num_current > 0:
                     
-                    self._c.executemany( 'DELETE FROM ' + current_mappings_table_name + ' WHERE namespace_id = ? AND tag_id = ? AND hash_id = ?;', ( ( namespace_id, tag_id, hash_id ) for hash_id in current_hash_ids ) )
+                    self._c.executemany( 'DELETE FROM ' + cache_current_mappings_table_name + ' WHERE namespace_id = ? AND tag_id = ? AND hash_id = ?;', ( ( namespace_id, tag_id, hash_id ) for hash_id in current_hash_ids ) )
                     
                 
                 pending_hash_ids = pending_mapping_ids_dict[ ( namespace_id, tag_id ) ]
@@ -1976,7 +2359,7 @@ class DB( HydrusDB.HydrusDB ):
                 
                 if num_pending > 0:
                     
-                    self._c.executemany( 'DELETE FROM ' + pending_mappings_table_name + ' WHERE namespace_id = ? AND tag_id = ? AND hash_id = ?;', ( ( namespace_id, tag_id, hash_id ) for hash_id in pending_hash_ids ) )
+                    self._c.executemany( 'DELETE FROM ' + cache_pending_mappings_table_name + ' WHERE namespace_id = ? AND tag_id = ? AND hash_id = ?;', ( ( namespace_id, tag_id, hash_id ) for hash_id in pending_hash_ids ) )
                     
                 
                 ac_cache_changes.append( ( namespace_id, tag_id, num_current, num_pending ) )
@@ -1993,7 +2376,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsDeleteMappings( self, file_service_id, tag_service_id, mappings_ids ):
         
-        ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         for ( namespace_id, tag_id, hash_ids ) in mappings_ids:
             
@@ -2001,7 +2384,7 @@ class DB( HydrusDB.HydrusDB ):
             
             if len( hash_ids ) > 0:
                 
-                self._c.executemany( 'DELETE FROM ' + current_mappings_table_name + ' WHERE hash_id = ? AND namespace_id = ? AND tag_id = ?;', ( ( hash_id, namespace_id, tag_id ) for hash_id in hash_ids ) )
+                self._c.executemany( 'DELETE FROM ' + cache_current_mappings_table_name + ' WHERE hash_id = ? AND namespace_id = ? AND tag_id = ?;', ( ( hash_id, namespace_id, tag_id ) for hash_id in hash_ids ) )
                 
                 num_deleted = self._GetRowCount()
                 
@@ -2017,20 +2400,20 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsFilterHashIds( self, file_service_id, tag_service_id, hash_ids ):
         
-        ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
-        return [ hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM ' + files_table_name + ' WHERE hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) + ';' ) ]
+        return [ hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM ' + cache_files_table_name + ' WHERE hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) + ';' ) ]
         
     
     def _CacheSpecificMappingsGenerate( self, file_service_id, tag_service_id ):
         
-        ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
-        self._c.execute( 'CREATE TABLE ' + files_table_name + ' ( hash_id INTEGER PRIMARY KEY );' )
+        self._c.execute( 'CREATE TABLE ' + cache_files_table_name + ' ( hash_id INTEGER PRIMARY KEY );' )
         
-        self._c.execute( 'CREATE TABLE ' + current_mappings_table_name + ' ( hash_id INTEGER, namespace_id INTEGER, tag_id INTEGER, PRIMARY KEY( hash_id, namespace_id, tag_id ) ) WITHOUT ROWID;' )
+        self._c.execute( 'CREATE TABLE ' + cache_current_mappings_table_name + ' ( hash_id INTEGER, namespace_id INTEGER, tag_id INTEGER, PRIMARY KEY( hash_id, namespace_id, tag_id ) ) WITHOUT ROWID;' )
         
-        self._c.execute( 'CREATE TABLE ' + pending_mappings_table_name + ' ( hash_id INTEGER, namespace_id INTEGER, tag_id INTEGER, PRIMARY KEY( hash_id, namespace_id, tag_id ) ) WITHOUT ROWID;' )
+        self._c.execute( 'CREATE TABLE ' + cache_pending_mappings_table_name + ' ( hash_id INTEGER, namespace_id INTEGER, tag_id INTEGER, PRIMARY KEY( hash_id, namespace_id, tag_id ) ) WITHOUT ROWID;' )
         
         self._c.execute( 'CREATE TABLE ' + ac_cache_table_name + ' ( namespace_id INTEGER, tag_id INTEGER, current_count INTEGER, pending_count INTEGER, PRIMARY KEY( namespace_id, tag_id ) ) WITHOUT ROWID;' )
         
@@ -2046,7 +2429,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsGetAutocompleteCounts( self, file_service_id, tag_service_id, namespace_ids_to_tag_ids ):
         
-        ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         results = []
         
@@ -2060,7 +2443,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsPendMappings( self, file_service_id, tag_service_id, mappings_ids ):
         
-        ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         for ( namespace_id, tag_id, hash_ids ) in mappings_ids:
             
@@ -2068,7 +2451,7 @@ class DB( HydrusDB.HydrusDB ):
             
             if len( hash_ids ) > 0:
                 
-                self._c.executemany( 'INSERT OR IGNORE INTO ' + pending_mappings_table_name + ' ( hash_id, namespace_id, tag_id ) VALUES ( ?, ?, ? );', ( ( hash_id, namespace_id, tag_id ) for hash_id in hash_ids ) )
+                self._c.executemany( 'INSERT OR IGNORE INTO ' + cache_pending_mappings_table_name + ' ( hash_id, namespace_id, tag_id ) VALUES ( ?, ?, ? );', ( ( hash_id, namespace_id, tag_id ) for hash_id in hash_ids ) )
                 
                 num_added = self._GetRowCount()
                 
@@ -2085,7 +2468,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsRescindPendingMappings( self, file_service_id, tag_service_id, mappings_ids ):
         
-        ( files_table_name, current_mappings_table_name, pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         for ( namespace_id, tag_id, hash_ids ) in mappings_ids:
             
@@ -2093,7 +2476,7 @@ class DB( HydrusDB.HydrusDB ):
             
             if len( hash_ids ) > 0:
                 
-                self._c.executemany( 'DELETE FROM ' + pending_mappings_table_name + ' WHERE hash_id = ? AND namespace_id = ? AND tag_id = ?;', ( ( hash_id, namespace_id, tag_id ) for hash_id in hash_ids ) )
+                self._c.executemany( 'DELETE FROM ' + cache_pending_mappings_table_name + ' WHERE hash_id = ? AND namespace_id = ? AND tag_id = ?;', ( ( hash_id, namespace_id, tag_id ) for hash_id in hash_ids ) )
                 
                 num_deleted = self._GetRowCount()
                 
@@ -2172,7 +2555,7 @@ class DB( HydrusDB.HydrusDB ):
         
         self._controller.pub( 'message', job_key )
         
-        info = self._c.execute( 'SELECT hash_id, mime FROM current_files, files_info USING ( hash_id ) WHERE service_id IN ( ?, ? );', ( self._local_file_service_id, self._trash_service_id ) ).fetchall()
+        info = self._c.execute( 'SELECT hash_id, mime FROM current_files, files_info USING ( hash_id ) WHERE service_id = ?;', ( self._combined_local_file_service_id, ) ).fetchall()
         
         missing_count = 0
         deletee_hash_ids = []
@@ -2234,6 +2617,7 @@ class DB( HydrusDB.HydrusDB ):
         
         self._DeleteFiles( self._local_file_service_id, deletee_hash_ids )
         self._DeleteFiles( self._trash_service_id, deletee_hash_ids )
+        self._DeleteFiles( self._combined_local_file_service_id, deletee_hash_ids )
         
         final_text = 'done! '
         
@@ -2331,9 +2715,6 @@ class DB( HydrusDB.HydrusDB ):
         
         self._c.execute( 'CREATE TABLE file_transfers ( service_id INTEGER REFERENCES services ON DELETE CASCADE, hash_id INTEGER, PRIMARY KEY( service_id, hash_id ) );' )
         self._c.execute( 'CREATE INDEX file_transfers_hash_id ON file_transfers ( hash_id );' )
-        
-        self._c.execute( 'CREATE TABLE file_trash ( hash_id INTEGER PRIMARY KEY, timestamp INTEGER );' )
-        self._c.execute( 'CREATE INDEX file_trash_timestamp ON file_trash ( timestamp );' )
         
         self._c.execute( 'CREATE TABLE file_petitions ( service_id INTEGER REFERENCES services ON DELETE CASCADE, hash_id INTEGER, reason_id INTEGER, PRIMARY KEY( service_id, hash_id, reason_id ) );' )
         self._c.execute( 'CREATE INDEX file_petitions_hash_id_index ON file_petitions ( hash_id );' )
@@ -2433,6 +2814,12 @@ class DB( HydrusDB.HydrusDB ):
         self._c.execute( 'CREATE TABLE external_caches.shape_perceptual_hash_map ( phash_id INTEGER, hash_id INTEGER, PRIMARY KEY ( phash_id, hash_id ) );' )
         self._c.execute( 'CREATE INDEX external_caches.shape_perceptual_hash_map_hash_id_index ON shape_perceptual_hash_map ( hash_id );' )
         
+        self._c.execute( 'CREATE TABLE external_caches.shape_vptree ( phash_id INTEGER PRIMARY KEY, parent_id INTEGER, radius INTEGER, inner_id INTEGER, inner_population INTEGER, outer_id INTEGER, outer_population INTEGER );' )
+        self._c.execute( 'CREATE INDEX external_caches.shape_vptree_parent_id_index ON shape_vptree ( parent_id );' )
+        
+        self._c.execute( 'CREATE TABLE external_caches.shape_maintenance_phash_regen ( hash_id INTEGER PRIMARY KEY );' )
+        self._c.execute( 'CREATE TABLE external_caches.shape_maintenance_branch_regen ( phash_id INTEGER PRIMARY KEY );' )
+        
         # master
         
         self._c.execute( 'CREATE TABLE IF NOT EXISTS external_master.hashes ( hash_id INTEGER PRIMARY KEY, hash BLOB_BYTES UNIQUE );' )
@@ -2458,8 +2845,9 @@ class DB( HydrusDB.HydrusDB ):
         
         init_service_info = []
         
-        init_service_info.append( ( CC.LOCAL_FILE_SERVICE_KEY, HC.LOCAL_FILE, CC.LOCAL_FILE_SERVICE_KEY ) )
-        init_service_info.append( ( CC.TRASH_SERVICE_KEY, HC.LOCAL_FILE, CC.TRASH_SERVICE_KEY ) )
+        init_service_info.append( ( CC.COMBINED_LOCAL_FILE_SERVICE_KEY, HC.COMBINED_LOCAL_FILE, CC.COMBINED_LOCAL_FILE_SERVICE_KEY ) )
+        init_service_info.append( ( CC.LOCAL_FILE_SERVICE_KEY, HC.LOCAL_FILE_DOMAIN, 'my files' ) )
+        init_service_info.append( ( CC.TRASH_SERVICE_KEY, HC.LOCAL_FILE_TRASH_DOMAIN, CC.TRASH_SERVICE_KEY ) )
         init_service_info.append( ( CC.LOCAL_TAG_SERVICE_KEY, HC.LOCAL_TAG, CC.LOCAL_TAG_SERVICE_KEY ) )
         init_service_info.append( ( CC.COMBINED_FILE_SERVICE_KEY, HC.COMBINED_FILE, CC.COMBINED_FILE_SERVICE_KEY ) )
         init_service_info.append( ( CC.COMBINED_TAG_SERVICE_KEY, HC.COMBINED_TAG, CC.COMBINED_TAG_SERVICE_KEY ) )
@@ -2491,19 +2879,23 @@ class DB( HydrusDB.HydrusDB ):
         self._c.execute( 'COMMIT;' )
         
     
-    def _DeleteFiles( self, service_id, hash_ids, files_being_undeleted = False ):
+    def _DeleteFiles( self, service_id, hash_ids ):
         
         splayed_hash_ids = HydrusData.SplayListForDB( hash_ids )
         
-        rows = self._c.execute( 'SELECT hash_id, timestamp FROM current_files WHERE service_id = ? AND hash_id IN ' + splayed_hash_ids + ';', ( service_id, ) ).fetchall()
-        
-        valid_hash_ids = { row[ 0 ] for row in rows }
+        valid_hash_ids = { hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM current_files WHERE service_id = ? AND hash_id IN ' + splayed_hash_ids + ';', ( service_id, ) ) }
         
         if len( valid_hash_ids ) > 0:
             
             splayed_valid_hash_ids = HydrusData.SplayListForDB( valid_hash_ids )
             
-            info = self._c.execute( 'SELECT size, mime FROM files_info WHERE hash_id IN ' + splayed_hash_ids + ';' ).fetchall()
+            # remove them from the service
+            
+            self._c.execute( 'DELETE FROM current_files WHERE service_id = ? AND hash_id IN ' + splayed_valid_hash_ids + ';', ( service_id, ) )
+            
+            self._c.execute( 'DELETE FROM file_petitions WHERE service_id = ? AND hash_id IN ' + splayed_valid_hash_ids + ';', ( service_id, ) )
+            
+            info = self._c.execute( 'SELECT size, mime FROM files_info WHERE hash_id IN ' + splayed_valid_hash_ids + ';' ).fetchall()
             
             num_files = len( valid_hash_ids )
             delta_size = sum( ( size for ( size, mime ) in info ) )
@@ -2515,42 +2907,24 @@ class DB( HydrusDB.HydrusDB ):
             service_info_updates.append( ( -num_files, service_id, HC.SERVICE_INFO_NUM_FILES ) )
             service_info_updates.append( ( -num_inbox, service_id, HC.SERVICE_INFO_NUM_INBOX ) )
             
-            if service_id != self._trash_service_id:
-                
-                # trash service doesn't keep track of what is deleted, as this is redundant
-                
-                service_info_updates.append( ( num_files, service_id, HC.SERVICE_INFO_NUM_DELETED_FILES ) )
-                
-                self._c.executemany( 'INSERT OR IGNORE INTO deleted_files ( service_id, hash_id ) VALUES ( ?, ? );', [ ( service_id, hash_id ) for hash_id in hash_ids ] )
-                
-            
-            self._c.executemany( 'UPDATE service_info SET info = info + ? WHERE service_id = ? AND info_type = ?;', service_info_updates )
-            
-            self._c.execute( 'DELETE FROM current_files WHERE service_id = ? AND hash_id IN ' + splayed_hash_ids + ';', ( service_id, ) )
-            self._c.execute( 'DELETE FROM file_petitions WHERE service_id = ? AND hash_id IN ' + splayed_hash_ids + ';', ( service_id, ) )
-            
-            if service_id == self._local_file_service_id:
-                
-                self._AddFiles( self._trash_service_id, rows )
-                
-            
-            if service_id == self._trash_service_id:
-                
-                self._c.execute( 'DELETE FROM file_trash WHERE hash_id IN ' + splayed_hash_ids + ';' )
-                
-                if not files_being_undeleted:
-                    
-                    self._ArchiveFiles( hash_ids )
-                    
-                    self._DeletePhysicalFiles( hash_ids )
-                    
-                
+            # now do special stuff
             
             service = self._GetService( service_id )
             
             service_type = service.GetServiceType()
             
-            if service_type in ( HC.LOCAL_FILE, HC.FILE_REPOSITORY ):
+            # record the deleted row if appropriate
+            
+            if service_id == self._combined_local_file_service_id or service_type == HC.FILE_REPOSITORY:
+                
+                service_info_updates.append( ( num_files, service_id, HC.SERVICE_INFO_NUM_DELETED_FILES ) )
+                
+                self._c.executemany( 'INSERT OR IGNORE INTO deleted_files ( service_id, hash_id ) VALUES ( ?, ? );', [ ( service_id, hash_id ) for hash_id in valid_hash_ids ] )
+                
+            
+            # if we maintain tag counts for this service, update
+            
+            if service_type in HC.AUTOCOMPLETE_CACHE_SPECIFIC_FILE_SERVICES:
                 
                 tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
                 
@@ -2560,8 +2934,43 @@ class DB( HydrusDB.HydrusDB ):
                     
                 
             
+            # if the files are no longer in any local file services, send them to the trash
+            
+            local_file_service_ids = self._GetServiceIds( ( HC.LOCAL_FILE_DOMAIN, ) )
+            
+            if service_id in local_file_service_ids:
+                
+                splayed_local_file_service_ids = HydrusData.SplayListForDB( local_file_service_ids )
+                
+                non_orphan_hash_ids = { hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM current_files WHERE hash_id IN ' + splayed_valid_hash_ids + ' AND service_id IN ' + splayed_local_file_service_ids + ';' ) }
+                
+                orphan_hash_ids = valid_hash_ids.difference( non_orphan_hash_ids )
+                
+                if len( orphan_hash_ids ) > 0:
+                    
+                    now = HydrusData.GetNow()
+                    
+                    delete_rows = [ ( hash_id, now ) for hash_id in orphan_hash_ids ]
+                    
+                    self._AddFiles( self._trash_service_id, delete_rows )
+                    
+                
+            
+            # if the files are being fully deleted, then physically delete them
+            
+            if service_id == self._combined_local_file_service_id:
+                
+                self._DeletePhysicalFiles( valid_hash_ids )
+                
+            
+            # push the info updates, notify
+            
+            self._c.executemany( 'UPDATE service_info SET info = info + ? WHERE service_id = ? AND info_type = ?;', service_info_updates )
+            
             self.pub_after_commit( 'notify_new_pending' )
             
+        
+        return valid_hash_ids
         
     
     def _DeleteHydrusSessionKey( self, service_key ):
@@ -2627,6 +3036,8 @@ class DB( HydrusDB.HydrusDB ):
     
     def _DeletePhysicalFiles( self, hash_ids ):
         
+        self._ArchiveFiles( hash_ids )
+        
         hash_ids = set( hash_ids )
         
         potentially_pending_upload_hash_ids = { hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM file_transfers;', ) }
@@ -2653,6 +3064,11 @@ class DB( HydrusDB.HydrusDB ):
             self._controller.CallToThread( client_files_manager.DelayedDeleteThumbnails, thumbnail_hashes )
             
         
+        for hash_id in hash_ids:
+            
+            self._CacheSimilarFilesDelete( hash_id )
+            
+        
     
     def _DeleteService( self, service_id, delete_update_dir = True ):
         
@@ -2676,7 +3092,7 @@ class DB( HydrusDB.HydrusDB ):
             
             self._CacheCombinedFilesMappingsDrop( service_id )
             
-            file_service_ids = self._GetServiceIds( ( HC.LOCAL_FILE, HC.FILE_REPOSITORY ) )
+            file_service_ids = self._GetServiceIds( HC.AUTOCOMPLETE_CACHE_SPECIFIC_FILE_SERVICES )
             
             for file_service_id in file_service_ids:
                 
@@ -2684,7 +3100,7 @@ class DB( HydrusDB.HydrusDB ):
                 
             
         
-        if service_type in ( HC.LOCAL_FILE, HC.FILE_REPOSITORY ):
+        if service_type in HC.AUTOCOMPLETE_CACHE_SPECIFIC_FILE_SERVICES:
             
             tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
             
@@ -3151,7 +3567,10 @@ class DB( HydrusDB.HydrusDB ):
         return result
         
     
-    def _GetDownloads( self ): return { hash for ( hash, ) in self._c.execute( 'SELECT hash FROM file_transfers, hashes USING ( hash_id ) WHERE service_id = ?;', ( self._local_file_service_id, ) ) }
+    def _GetDownloads( self ):
+        
+        return { hash for ( hash, ) in self._c.execute( 'SELECT hash FROM file_transfers, hashes USING ( hash_id ) WHERE service_id = ?;', ( self._combined_local_file_service_id, ) ) }
+        
     
     def _GetFileHashes( self, given_hashes, given_hash_type, desired_hash_type ):
         
@@ -3203,7 +3622,10 @@ class DB( HydrusDB.HydrusDB ):
         
         predicates = []
         
-        if service_type in ( HC.COMBINED_FILE, HC.COMBINED_TAG ): predicates.extend( [ ClientSearch.Predicate( predicate_type, None ) for predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_EVERYTHING, HC.PREDICATE_TYPE_SYSTEM_UNTAGGED, HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS, HC.PREDICATE_TYPE_SYSTEM_LIMIT, HC.PREDICATE_TYPE_SYSTEM_HASH ] ] )
+        if service_type in ( HC.COMBINED_FILE, HC.COMBINED_TAG ):
+            
+            predicates.extend( [ ClientSearch.Predicate( predicate_type, None ) for predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_EVERYTHING, HC.PREDICATE_TYPE_SYSTEM_UNTAGGED, HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS, HC.PREDICATE_TYPE_SYSTEM_LIMIT, HC.PREDICATE_TYPE_SYSTEM_HASH ] ] )
+            
         elif service_type in HC.TAG_SERVICES:
             
             service_info = self._GetServiceInfoSpecific( service_id, service_type, { HC.SERVICE_INFO_NUM_FILES } )
@@ -3214,7 +3636,7 @@ class DB( HydrusDB.HydrusDB ):
             
             predicates.extend( [ ClientSearch.Predicate( predicate_type, None ) for predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_UNTAGGED, HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS, HC.PREDICATE_TYPE_SYSTEM_LIMIT, HC.PREDICATE_TYPE_SYSTEM_HASH ] ] )
             
-        elif service_type in ( HC.LOCAL_FILE, HC.FILE_REPOSITORY ):
+        elif service_type in HC.FILE_SERVICES:
             
             service_info = self._GetServiceInfoSpecific( service_id, service_type, { HC.SERVICE_INFO_NUM_FILES, HC.SERVICE_INFO_NUM_INBOX } )
             
@@ -3224,7 +3646,7 @@ class DB( HydrusDB.HydrusDB ):
             
             if service_type == HC.FILE_REPOSITORY:
                 
-                ( num_local, ) = self._c.execute( 'SELECT COUNT( * ) FROM current_files AS remote_current_files, current_files USING ( hash_id ) WHERE remote_current_files.service_id = ? AND current_files.service_id = ?;', ( service_id, self._local_file_service_id ) ).fetchone()
+                ( num_local, ) = self._c.execute( 'SELECT COUNT( * ) FROM current_files AS remote_current_files, current_files USING ( hash_id ) WHERE remote_current_files.service_id = ? AND current_files.service_id = ?;', ( service_id, self._combined_local_file_service_id ) ).fetchone()
                 
                 num_not_local = num_everything - num_local
                 
@@ -3429,6 +3851,40 @@ class DB( HydrusDB.HydrusDB ):
         
         simple_preds = system_predicates.GetSimpleInfo()
         
+        # This now overrides any other predicates, including file domain
+        
+        if 'hash' in simple_preds:
+            
+            query_hash_ids = set()
+            
+            ( search_hash, search_hash_type ) = simple_preds[ 'hash' ]
+            
+            if search_hash_type != 'sha256':
+                
+                result = self._GetFileHashes( [ search_hash ], search_hash_type, 'sha256' )
+                
+                if len( result ) > 0:
+                    
+                    ( search_hash, ) = result
+                    
+                    hash_id = self._GetHashId( search_hash )
+                    
+                    query_hash_ids = { hash_id }
+                    
+                
+            else:
+                
+                if self._HashExists( search_hash ):
+                    
+                    hash_id = self._GetHashId( search_hash )
+                    
+                    query_hash_ids = { hash_id }
+                    
+                
+            
+            return query_hash_ids
+            
+        
         if 'min_size' in simple_preds: files_info_predicates.append( 'size > ' + str( simple_preds[ 'min_size' ] ) )
         if 'size' in simple_preds: files_info_predicates.append( 'size = ' + str( simple_preds[ 'size' ] ) )
         if 'max_size' in simple_preds: files_info_predicates.append( 'size < ' + str( simple_preds[ 'max_size' ] ) )
@@ -3570,53 +4026,13 @@ class DB( HydrusDB.HydrusDB ):
         
         #
         
-        if 'hash' in simple_preds:
-            
-            ( search_hash, search_hash_type ) = simple_preds[ 'hash' ]
-            
-            if search_hash_type != 'sha256':
-                
-                result = self._GetFileHashes( [ search_hash ], search_hash_type, 'sha256' )
-                
-                if len( result ) == 0:
-                    
-                    query_hash_ids = set()
-                    
-                else:
-                    
-                    ( search_hash, ) = result
-                    
-                    hash_id = self._GetHashId( search_hash )
-                    
-                    query_hash_ids.intersection_update( { hash_id } )
-                    
-                
-            else:
-                
-                hash_id = self._GetHashId( search_hash )
-                
-                query_hash_ids.intersection_update( { hash_id } )
-                
-            
-        
-        #
-        
         if system_predicates.HasSimilarTo():
             
             ( similar_to_hash, max_hamming ) = system_predicates.GetSimilarTo()
             
             hash_id = self._GetHashId( similar_to_hash )
             
-            phashes = [ phash for ( phash, ) in self._c.execute( 'SELECT phash FROM shape_perceptual_hashes, shape_perceptual_hash_map USING ( phash_id ) WHERE hash_id = ?;', ( hash_id, ) ) ]
-            
-            similar_hash_ids = set()
-            
-            for phash in phashes:
-                
-                some_similar_hash_ids = [ hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM shape_perceptual_hashes, shape_perceptual_hash_map USING ( phash_id ) WHERE hydrus_hamming( phash, ? ) <= ?;', ( sqlite3.Binary( phash ), max_hamming ) ) ]
-                
-                similar_hash_ids.update( some_similar_hash_ids )
-                
+            similar_hash_ids = self._CacheSimilarFilesSearch( hash_id, max_hamming )
             
             query_hash_ids.intersection_update( similar_hash_ids )
             
@@ -3687,7 +4103,7 @@ class DB( HydrusDB.HydrusDB ):
         must_be_inbox = system_predicates.MustBeInbox()
         must_be_archive = system_predicates.MustBeArchive()
         
-        if file_service_type == HC.LOCAL_FILE:
+        if file_service_type in HC.LOCAL_FILE_SERVICES:
             
             if must_not_be_local:
                 
@@ -3696,7 +4112,7 @@ class DB( HydrusDB.HydrusDB ):
             
         elif must_be_local or must_not_be_local:
             
-            local_hash_ids = [ id for ( id, ) in self._c.execute( 'SELECT hash_id FROM current_files WHERE service_id = ?;', ( self._local_file_service_id, ) ) ]
+            local_hash_ids = [ id for ( id, ) in self._c.execute( 'SELECT hash_id FROM current_files WHERE service_id = ?;', ( self._combined_local_file_service_id, ) ) ]
             
             if must_be_local:
                 
@@ -4172,14 +4588,21 @@ class DB( HydrusDB.HydrusDB ):
     
     def _GetHashIdStatus( self, hash_id ):
     
-        result = self._c.execute( 'SELECT 1 FROM deleted_files WHERE service_id = ? AND hash_id = ?;', ( self._local_file_service_id, hash_id ) ).fetchone()
+        result = self._c.execute( 'SELECT 1 FROM deleted_files WHERE service_id = ? AND hash_id = ?;', ( self._combined_local_file_service_id, hash_id ) ).fetchone()
         
         if result is not None:
             
             return ( CC.STATUS_DELETED, None )
             
         
-        result = self._c.execute( 'SELECT 1 FROM current_files WHERE service_id = ? AND hash_id = ?;', ( self._local_file_service_id, hash_id ) ).fetchone()
+        result = self._c.execute( 'SELECT 1 FROM current_files WHERE service_id = ? AND hash_id = ?;', ( self._trash_service_id, hash_id ) ).fetchone()
+        
+        if result is not None:
+            
+            return ( CC.STATUS_DELETED, None )
+            
+        
+        result = self._c.execute( 'SELECT 1 FROM current_files WHERE service_id = ? AND hash_id = ?;', ( self._combined_local_file_service_id, hash_id ) ).fetchone()
         
         if result is not None:
             
@@ -4425,9 +4848,9 @@ class DB( HydrusDB.HydrusDB ):
         return self._GetMediaResults( query_hash_ids )
         
     
-    def _GetMime( self, service_id, hash_id ):
+    def _GetMime( self, hash_id ):
         
-        result = self._c.execute( 'SELECT mime FROM files_info WHERE service_id = ? AND hash_id = ?;', ( service_id, hash_id ) ).fetchone()
+        result = self._c.execute( 'SELECT mime FROM files_info WHERE hash_id = ?;', ( hash_id, ) ).fetchone()
         
         if result is None:
             
@@ -4920,7 +5343,7 @@ class DB( HydrusDB.HydrusDB ):
         
         hash_ids = { hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM current_files, files_info USING ( hash_id ) WHERE mime IN ' + HydrusData.SplayListForDB( HC.MIMES_WITH_THUMBNAILS ) + ' AND service_id = ?;', ( service_id, ) ) }
         
-        hash_ids.difference_update( ( hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM current_files WHERE service_id = ?;', ( self._local_file_service_id, ) ) ) )
+        hash_ids.difference_update( ( hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM current_files WHERE service_id = ?;', ( self._combined_local_file_service_id, ) ) ) )
         
         hashes = set( self._GetHashes( hash_ids ) )
         
@@ -5048,9 +5471,13 @@ class DB( HydrusDB.HydrusDB ):
         
         service_type = service.GetServiceType()
         
-        if service_type == HC.LOCAL_FILE:
+        if service_type == HC.COMBINED_LOCAL_FILE:
             
             info_types = { HC.SERVICE_INFO_NUM_FILES, HC.SERVICE_INFO_TOTAL_SIZE, HC.SERVICE_INFO_NUM_DELETED_FILES }
+            
+        elif service_type in ( HC.LOCAL_FILE_DOMAIN, HC.LOCAL_FILE_TRASH_DOMAIN ):
+            
+            info_types = { HC.SERVICE_INFO_NUM_FILES, HC.SERVICE_INFO_TOTAL_SIZE }
             
         elif service_type == HC.FILE_REPOSITORY:
             
@@ -5120,7 +5547,7 @@ class DB( HydrusDB.HydrusDB ):
                 
                 save_it = True
                 
-                if service_type in ( HC.LOCAL_FILE, HC.FILE_REPOSITORY, HC.IPFS ):
+                if service_type in HC.FILE_SERVICES:
                     
                     if info_type in ( HC.SERVICE_INFO_NUM_PENDING_FILES, HC.SERVICE_INFO_NUM_PETITIONED_FILES ): save_it = False
                     
@@ -5345,10 +5772,10 @@ class DB( HydrusDB.HydrusDB ):
             
             timestamp_cutoff = HydrusData.GetNow() - minimum_age
             
-            age_phrase = ' WHERE timestamp < ' + str( timestamp_cutoff ) + ' ORDER BY timestamp ASC'
+            age_phrase = ' AND timestamp < ' + str( timestamp_cutoff ) + ' ORDER BY timestamp ASC'
             
         
-        hash_ids = { hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM file_trash' + age_phrase + limit_phrase + ';' ) }
+        hash_ids = { hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM current_files WHERE service_id = ?' + age_phrase + limit_phrase + ';', ( self._trash_service_id, ) ) }
         
         return self._GetHashes( hash_ids )
         
@@ -5478,7 +5905,7 @@ class DB( HydrusDB.HydrusDB ):
                 
                 self._ArchiveFiles( ( hash_id, ) )
                 
-                self.pub_content_updates_after_commit( { CC.LOCAL_FILE_SERVICE_KEY : [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_ARCHIVE, set( ( hash, ) ) ) ] } )
+                self.pub_content_updates_after_commit( { CC.COMBINED_LOCAL_FILE_SERVICE_KEY : [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_ARCHIVE, set( ( hash, ) ) ) ] } )
                 
             
         elif status == CC.STATUS_NEW:
@@ -5520,11 +5947,11 @@ class DB( HydrusDB.HydrusDB ):
                 client_files_manager.LocklessAddFullSizeThumbnail( hash, thumbnail )
                 
             
-            if mime in ( HC.IMAGE_JPEG, HC.IMAGE_PNG ):
+            if mime in HC.MIMES_WE_CAN_PHASH:
                 
                 phashes = ClientImageHandling.GenerateShapePerceptualHashes( temp_path )
                 
-                self._CacheSimilarFilesInsert( hash_id, phashes )
+                self._CacheSimilarFilesAssociatePHashes( hash_id, phashes )
                 
             
             # lockless because this db call is made by the locked client files manager
@@ -5614,6 +6041,7 @@ class DB( HydrusDB.HydrusDB ):
         
         self._local_file_service_id = self._GetServiceId( CC.LOCAL_FILE_SERVICE_KEY )
         self._trash_service_id = self._GetServiceId( CC.TRASH_SERVICE_KEY )
+        self._combined_local_file_service_id = self._GetServiceId( CC.COMBINED_LOCAL_FILE_SERVICE_KEY )
         self._local_tag_service_id = self._GetServiceId( CC.LOCAL_TAG_SERVICE_KEY )
         self._combined_file_service_id = self._GetServiceId( CC.COMBINED_FILE_SERVICE_KEY )
         self._combined_tag_service_id = self._GetServiceId( CC.COMBINED_TAG_SERVICE_KEY )
@@ -5643,7 +6071,7 @@ class DB( HydrusDB.HydrusDB ):
                 
                 hash_id = self._GetHashId( hash )
                 
-                result = self._c.execute( 'SELECT 1 FROM current_files WHERE service_id IN ( ?, ? ) AND hash_id = ?;', ( self._local_file_service_id, self._trash_service_id, hash_id ) ).fetchone()
+                result = self._c.execute( 'SELECT 1 FROM current_files WHERE service_id = ? AND hash_id = ?;', ( self._combined_local_file_service_id, hash_id ) ).fetchone()
                 
                 if result is None:
                     
@@ -5793,7 +6221,7 @@ class DB( HydrusDB.HydrusDB ):
         
         for db_name in db_names:
             
-            all_names.update( ( name for ( name, ) in self._c.execute( 'SELECT name FROM ' + db_name + '.sqlite_master;' ) ) )
+            all_names.update( ( name for ( name, ) in self._c.execute( 'SELECT name FROM ' + db_name + '.sqlite_master WHERE type = ?;', ( 'table', ) ) ) )
             
         
         names_to_analyze = { name for name in all_names if name not in existing_names_to_timestamps or HydrusData.TimeHasPassed( existing_names_to_timestamps[ name ] + stale_time_delta ) }
@@ -5805,7 +6233,7 @@ class DB( HydrusDB.HydrusDB ):
             return True
             
         
-        return False
+        return self._CacheSimilarFilesMaintenanceDue()
         
     
     def _ManageDBError( self, job, e ):
@@ -5828,6 +6256,19 @@ class DB( HydrusDB.HydrusDB ):
         else:
             
             HydrusData.ShowException( e )
+            
+        
+    
+    def _OverwriteJSONDumps( self, dump_types, objs ):
+        
+        for dump_type in dump_types:
+            
+            self._DeleteJSONDumpNamed( dump_type )
+            
+        
+        for obj in objs:
+            
+            self._SetJSONDump( obj )
             
         
     
@@ -5975,7 +6416,7 @@ class DB( HydrusDB.HydrusDB ):
                 
                 ( data_type, action, row ) = content_update.ToTuple()
                 
-                if service_type in ( HC.FILE_REPOSITORY, HC.LOCAL_FILE, HC.IPFS ):
+                if service_type in HC.FILE_SERVICES:
                     
                     if data_type == HC.CONTENT_TYPE_FILES:
                         
@@ -5992,7 +6433,7 @@ class DB( HydrusDB.HydrusDB ):
                             
                         elif action == HC.CONTENT_UPDATE_ADD:
                             
-                            if service_type in ( HC.FILE_REPOSITORY, HC.LOCAL_FILE ):
+                            if service_type in HC.LOCAL_FILE_SERVICES or service_type == HC.FILE_REPOSITORY:
                                 
                                 ( hash, size, mime, timestamp, width, height, duration, num_frames, num_words ) = row
                                 
@@ -6021,7 +6462,7 @@ class DB( HydrusDB.HydrusDB ):
                             
                             self._c.executemany( 'INSERT OR IGNORE INTO file_transfers ( service_id, hash_id ) VALUES ( ?, ? );', [ ( service_id, hash_id ) for hash_id in hash_ids ] )
                             
-                            if service_key == CC.LOCAL_FILE_SERVICE_KEY: notify_new_downloads = True
+                            if service_key == CC.COMBINED_LOCAL_FILE_SERVICE_KEY: notify_new_downloads = True
                             else: notify_new_pending = True
                             
                         elif action == HC.CONTENT_UPDATE_PETITION:
@@ -6066,8 +6507,23 @@ class DB( HydrusDB.HydrusDB ):
                             
                             if action == HC.CONTENT_UPDATE_ARCHIVE: self._ArchiveFiles( hash_ids )
                             elif action == HC.CONTENT_UPDATE_INBOX: self._InboxFiles( hash_ids )
-                            elif action == HC.CONTENT_UPDATE_DELETE: self._DeleteFiles( service_id, hash_ids )
-                            elif action == HC.CONTENT_UPDATE_UNDELETE: self._UndeleteFiles( hash_ids )
+                            elif action == HC.CONTENT_UPDATE_DELETE:
+                                
+                                deleted_hash_ids = self._DeleteFiles( service_id, hash_ids )
+                                
+                                if service_id == self._trash_service_id:
+                                    
+                                    self._DeleteFiles( self._combined_local_file_service_id, deleted_hash_ids )
+                                    
+                                
+                            elif action == HC.CONTENT_UPDATE_UNDELETE:
+                                
+                                splayed_hash_ids = HydrusData.SplayListForDB( hash_ids )
+                                
+                                rows = self._c.execute( 'SELECT hash_id, timestamp FROM current_files WHERE service_id = ? AND hash_id IN ' + splayed_hash_ids + ';', ( self._combined_local_file_service_id, ) ).fetchall()
+                                
+                                self._AddFiles( self._local_file_service_id, rows )
+                                
                             
                         
                     elif data_type == HC.CONTENT_TYPE_DIRECTORIES:
@@ -6447,8 +6903,14 @@ class DB( HydrusDB.HydrusDB ):
         
         if do_pubsubs:
             
-            if notify_new_downloads: self.pub_after_commit( 'notify_new_downloads' )
-            if notify_new_pending: self.pub_after_commit( 'notify_new_pending' )
+            if notify_new_downloads:
+                
+                self.pub_after_commit( 'notify_new_downloads' )
+                
+            if notify_new_pending:
+                
+                self.pub_after_commit( 'notify_new_pending' )
+                
             if notify_new_siblings:
                 
                 self.pub_after_commit( 'notify_new_siblings_data' )
@@ -6703,20 +7165,13 @@ class DB( HydrusDB.HydrusDB ):
         self._controller.pub( 'message', job_key )
         
         tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
-        file_service_ids = self._GetServiceIds( ( HC.LOCAL_FILE, HC.FILE_REPOSITORY ) )
+        file_service_ids = self._GetServiceIds( HC.AUTOCOMPLETE_CACHE_SPECIFIC_FILE_SERVICES )
         
         for ( file_service_id, tag_service_id ) in itertools.product( file_service_ids, tag_service_ids ):
             
             job_key.SetVariable( 'popup_text_1', 'generating specific ac_cache ' + str( file_service_id ) + '_' + str( tag_service_id ) )
             
-            try:
-                
-                self._CacheSpecificMappingsDrop( file_service_id, tag_service_id )
-                
-            except:
-                
-                pass
-                
+            self._CacheSpecificMappingsDrop( file_service_id, tag_service_id )
             
             self._CacheSpecificMappingsGenerate( file_service_id, tag_service_id )
             
@@ -6725,14 +7180,7 @@ class DB( HydrusDB.HydrusDB ):
             
             job_key.SetVariable( 'popup_text_1', 'generating combined files ac_cache ' + str( tag_service_id ) )
             
-            try:
-                
-                self._CacheCombinedFilesMappingsDrop( tag_service_id )
-                
-            except:
-                
-                pass
-                
+            self._CacheCombinedFilesMappingsDrop( tag_service_id )
             
             self._CacheCombinedFilesMappingsGenerate( tag_service_id )
             
@@ -7051,18 +7499,6 @@ class DB( HydrusDB.HydrusDB ):
         else:
             
             return True
-            
-        
-    
-    def _UndeleteFiles( self, hash_ids ):
-        
-        splayed_hash_ids = HydrusData.SplayListForDB( hash_ids )
-        
-        rows = self._c.execute( 'SELECT hash_id, timestamp FROM current_files WHERE service_id = ? AND hash_id IN ' + splayed_hash_ids + ';', ( self._trash_service_id, ) ).fetchall()
-        
-        if len( rows ) > 0:
-            
-            self._AddFiles( self._local_file_service_id, rows )
             
         
     
@@ -7452,7 +7888,7 @@ class DB( HydrusDB.HydrusDB ):
         
         if version == 201:
             
-            file_service_ids = self._GetServiceIds( ( HC.LOCAL_FILE, HC.FILE_REPOSITORY ) )
+            file_service_ids = self._GetServiceIds( ( HC.LOCAL_FILE_DOMAIN, HC.FILE_REPOSITORY ) )
             tag_service_ids = self._GetServiceIds( ( HC.LOCAL_TAG, HC.TAG_REPOSITORY ) )
             
             for ( file_service_id, tag_service_id ) in itertools.product( file_service_ids, tag_service_ids ):
@@ -8217,11 +8653,11 @@ class DB( HydrusDB.HydrusDB ):
                 
                 def GetPHashId( phash ):
                     
-                    result = self._c.execute( 'SELECT phash_id FROM external_caches.shape_perceptual_hashes WHERE phash = ?;', ( sqlite3.Binary( phash ), ) ).fetchone()
+                    result = self._c.execute( 'SELECT phash_id FROM shape_perceptual_hashes WHERE phash = ?;', ( sqlite3.Binary( phash ), ) ).fetchone()
                     
                     if result is None:
                         
-                        self._c.execute( 'INSERT INTO external_caches.shape_perceptual_hashes ( phash ) VALUES ( ? );', ( sqlite3.Binary( phash ), ) )
+                        self._c.execute( 'INSERT INTO shape_perceptual_hashes ( phash ) VALUES ( ? );', ( sqlite3.Binary( phash ), ) )
                         
                         phash_id = self._c.lastrowid
                         
@@ -8246,7 +8682,7 @@ class DB( HydrusDB.HydrusDB ):
                     
                     phash_id = GetPHashId( phash )
                     
-                    self._c.execute( 'INSERT OR IGNORE INTO external_caches.shape_perceptual_hash_map ( phash_id, hash_id ) VALUES ( ?, ? );', ( phash_id, hash_id ) )
+                    self._c.execute( 'INSERT OR IGNORE INTO shape_perceptual_hash_map ( phash_id, hash_id ) VALUES ( ?, ? );', ( phash_id, hash_id ) )
                     
                 
             except Exception as e:
@@ -8278,6 +8714,156 @@ class DB( HydrusDB.HydrusDB ):
                 
                 self._controller.pub( 'splash_set_status_text', 'removing trash deletion record failed, error written to log' )
                 
+            
+        
+        if version == 234:
+            
+            self._c.execute( 'CREATE TABLE external_caches.shape_vptree ( phash_id INTEGER PRIMARY KEY, parent_id INTEGER, radius INTEGER, inner_id INTEGER, inner_population INTEGER, outer_id INTEGER, outer_population INTEGER );' )
+            self._c.execute( 'CREATE INDEX external_caches.shape_vptree_parent_id_index ON shape_vptree ( parent_id );' )
+            
+            self._c.execute( 'CREATE TABLE external_caches.shape_maintenance_phash_regen ( hash_id INTEGER PRIMARY KEY );' )
+            self._c.execute( 'CREATE TABLE external_caches.shape_maintenance_branch_regen ( phash_id INTEGER PRIMARY KEY );' )
+            
+            # now to populate it!
+            
+            prefix = 'generating faster duplicate search data - '
+            self._controller.pub( 'splash_set_status_text', prefix + 'gathering leaves' )
+            
+            all_nodes = self._c.execute( 'SELECT phash_id, phash FROM shape_perceptual_hashes;' ).fetchall()
+            
+            if len( all_nodes ) > 0:
+                
+                ( root_id, root_phash ) = HydrusData.RandomPop( all_nodes )
+                
+                process_queue = [ ( None, root_id, root_phash, all_nodes ) ]
+                
+                insert_rows = []
+                
+                num_done = 0
+                num_to_do = len( all_nodes ) + 1
+                
+                while len( process_queue ) > 0:
+                    
+                    if num_done % 500 == 0:
+                        
+                        self._controller.pub( 'splash_set_status_text', prefix + HydrusData.ConvertValueRangeToPrettyString( num_done, num_to_do ) )
+                        
+                    
+                    ( parent_id, phash_id, phash, children ) = process_queue.pop( 0 )
+                    
+                    if len( children ) == 0:
+                        
+                        inner_id = None
+                        inner_population = 0
+                        
+                        outer_id = None
+                        outer_population = 0
+                        
+                        radius = None
+                        
+                    else:
+                        
+                        children = [ ( HydrusData.GetHammingDistance( phash, child_phash ), child_id, child_phash ) for ( child_id, child_phash ) in children ]
+                        
+                        children.sort()
+                        
+                        median_index = len( children ) / 2
+                        
+                        radius = children[ median_index ][0]
+                        
+                        inner_children = [ ( child_id, child_phash ) for ( distance, child_id, child_phash ) in children if distance <= radius ]
+                        outer_children = [ ( child_id, child_phash ) for ( distance, child_id, child_phash ) in children if distance > radius ]
+                        
+                        inner_population =  len( inner_children )
+                        outer_population =  len( outer_children )
+                        
+                        ( inner_id, inner_phash ) = HydrusData.MedianPop( inner_children )
+                        
+                        if len( outer_children ) == 0:
+                            
+                            outer_id = None
+                            
+                        else:
+                            
+                            ( outer_id, outer_phash ) = HydrusData.MedianPop( outer_children )
+                            
+                        
+                    
+                    insert_rows.append( ( phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population ) )
+                    
+                    if inner_id is not None:
+                        
+                        process_queue.append( ( phash_id, inner_id, inner_phash, inner_children ) )
+                        
+                    
+                    if outer_id is not None:
+                        
+                        process_queue.append( ( phash_id, outer_id, outer_phash, outer_children ) )
+                        
+                    
+                    num_done += 1
+                    
+                
+                self._controller.pub( 'splash_set_status_text', prefix + 'committing' )
+                
+                self._c.executemany( 'INSERT INTO shape_vptree ( phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population ) VALUES ( ?, ?, ?, ?, ?, ?, ? );', insert_rows )
+                
+            
+        
+        if version == 236:
+            
+            self._controller.pub( 'splash_set_status_text', 'updating local files services' )
+            
+            # update existing services
+            
+            self._c.execute( 'UPDATE services SET name = ? WHERE service_key = ?;', ( 'my files', sqlite3.Binary( CC.LOCAL_FILE_SERVICE_KEY ) ) )
+            
+            self._c.execute( 'UPDATE services SET service_type = ? WHERE service_key = ?;', ( HC.LOCAL_FILE_TRASH_DOMAIN, sqlite3.Binary( CC.TRASH_SERVICE_KEY ) ) )
+            
+            # create new umbrella service that represents if we have the file or not locally
+            
+            self._AddService( CC.COMBINED_LOCAL_FILE_SERVICE_KEY, HC.COMBINED_LOCAL_FILE, CC.COMBINED_LOCAL_FILE_SERVICE_KEY, {} )
+            
+            combined_local_file_service_id = self._GetServiceId( CC.COMBINED_LOCAL_FILE_SERVICE_KEY )
+            local_file_service_id = self._GetServiceId( CC.LOCAL_FILE_SERVICE_KEY )
+            trash_service_id = self._GetServiceId( CC.TRASH_SERVICE_KEY )
+            
+            # copy all local/trash records to the new umbrella service, and move deleted_files and pending_files responsibility over
+            
+            rows = self._c.execute( 'SELECT hash_id, timestamp FROM current_files WHERE service_id IN ( ?, ? );', ( local_file_service_id, trash_service_id ) ).fetchall()
+            
+            self._c.executemany( 'INSERT OR IGNORE INTO current_files VALUES ( ?, ?, ? );', ( ( combined_local_file_service_id, hash_id, timestamp ) for ( hash_id, timestamp ) in rows ) )
+            
+            self._c.execute( 'UPDATE deleted_files SET service_id = ? WHERE service_id = ?;', ( combined_local_file_service_id, local_file_service_id ) )
+            
+            self._c.execute( 'DELETE FROM service_info WHERE service_id = ? AND info_type = ?;', ( local_file_service_id, HC.SERVICE_INFO_NUM_DELETED_FILES ) )
+            
+            self._c.execute( 'UPDATE file_transfers SET service_id = ? WHERE service_id = ?;', ( combined_local_file_service_id, local_file_service_id ) )
+            
+            # now it has files, refresh the ac cache
+            
+            self._controller.pub( 'splash_set_status_text', 'creating autocomplete cache for new service' )
+            
+            tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
+            
+            for tag_service_id in tag_service_ids:
+                
+                self._CacheSpecificMappingsDrop( combined_local_file_service_id, tag_service_id )
+                
+                self._CacheSpecificMappingsGenerate( combined_local_file_service_id, tag_service_id )
+                
+            
+            # trash current_files rows can now have their own timestamp
+            
+            trash_rows = self._c.execute( 'SELECT hash_id, timestamp FROM file_trash;' ).fetchall()
+            
+            self._c.executemany( 'UPDATE current_files SET timestamp = ? WHERE service_id = ? AND hash_id = ?;', ( ( timestamp, trash_service_id, hash_id ) for ( hash_id, timestamp ) in rows ) )
+            
+            self._c.execute( 'DROP TABLE file_trash;' )
+            
+            message = 'I have fixed an important miscounting bug in the autocomplete cache. Please go database->maintenance->regenerate autocomplete cache when it is convenient.'
+            
+            self.pub_initial_message( message )
             
         
         self._controller.pub( 'splash_set_title_text', 'updated db to v' + str( version + 1 ) )
@@ -8350,9 +8936,9 @@ class DB( HydrusDB.HydrusDB ):
         if petitioned_mappings_ids is None: petitioned_mappings_ids = []
         if petitioned_rescinded_mappings_ids is None: petitioned_rescinded_mappings_ids = []
         
-        file_service_ids = self._GetServiceIds( ( HC.LOCAL_FILE, HC.FILE_REPOSITORY ) )
+        file_service_ids = self._GetServiceIds( HC.AUTOCOMPLETE_CACHE_SPECIFIC_FILE_SERVICES )
         
-        # this method grew into a monster that merged deleted, pending and current according to a heirarchy of services
+        # this method grew into a monster that merged deleted, pending and current according to a hierarchy of services
         # this cost a lot of CPU time and was extremely difficult to maintain
         # now it attempts a simpler union, not letting delete overwrite a current or pending
         
@@ -8933,14 +9519,17 @@ class DB( HydrusDB.HydrusDB ):
         elif action == 'imageboard': result = self._SetYAMLDump( YAML_DUMP_ID_IMAGEBOARD, *args, **kwargs )
         elif action == 'import_file': result = self._ImportFile( *args, **kwargs )
         elif action == 'local_booru_share': result = self._SetYAMLDump( YAML_DUMP_ID_LOCAL_BOORU, *args, **kwargs )
+        elif action == 'maintain_similar_files': result = self._CacheSimilarFilesMaintain( *args, **kwargs )
         elif action == 'push_recent_tags': result = self._PushRecentTags( *args, **kwargs )
-        elif action == 'regenerate_ac_cache': result = self._RegenerateACCache( *args, **kwargs )        
+        elif action == 'regenerate_ac_cache': result = self._RegenerateACCache( *args, **kwargs )
+        elif action == 'regenerate_similar_files': result = self._CacheSimilarFilesRegenerateTree( *args, **kwargs )
         elif action == 'relocate_client_files': result = self._RelocateClientFiles( *args, **kwargs )
         elif action == 'remote_booru': result = self._SetYAMLDump( YAML_DUMP_ID_REMOTE_BOORU, *args, **kwargs )
         elif action == 'reset_service': result = self._ResetService( *args, **kwargs )
         elif action == 'save_options': result = self._SaveOptions( *args, **kwargs )
         elif action == 'serialisable_simple': result = self._SetJSONSimple( *args, **kwargs )
         elif action == 'serialisable': result = self._SetJSONDump( *args, **kwargs )
+        elif action == 'serialisables_overwrite': result = self._OverwriteJSONDumps( *args, **kwargs )
         elif action == 'service_updates': result = self._ProcessServiceUpdates( *args, **kwargs )
         elif action == 'set_password': result = self._SetPassword( *args, **kwargs )
         elif action == 'sync_hashes_to_tag_archive': result = self._SyncHashesToTagArchive( *args, **kwargs )
@@ -8960,10 +9549,20 @@ class DB( HydrusDB.HydrusDB ):
         self.pub_after_commit( 'content_updates_gui', service_keys_to_content_updates )
         
     
+    def pub_initial_message( self, message ):
+        
+        self._initial_messages.append( message )
+        
+    
     def pub_service_updates_after_commit( self, service_keys_to_service_updates ):
         
         self.pub_after_commit( 'service_updates_data', service_keys_to_service_updates )
         self.pub_after_commit( 'service_updates_gui', service_keys_to_service_updates )
+        
+    
+    def GetInitialMessages( self ):
+        
+        return self._initial_messages
         
     
     def GetUpdatesDir( self ):
