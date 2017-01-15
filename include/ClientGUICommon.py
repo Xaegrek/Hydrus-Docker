@@ -644,6 +644,7 @@ class ExportPatternButton( wx.Button ):
     ID_NN_TAGS = 2
     ID_NAMESPACE = 3
     ID_TAG = 4
+    ID_MD5 = 5
     
     def __init__( self, parent ):
         
@@ -660,6 +661,7 @@ class ExportPatternButton( wx.Button ):
         phrase = None
         
         if id == self.ID_HASH: phrase = '{hash}'
+        if id == self.ID_MD5: phrase = '{md5}'
         if id == self.ID_TAGS: phrase = '{tags}'
         if id == self.ID_NN_TAGS: phrase = '{nn tags}'
         if id == self.ID_NAMESPACE: phrase = '[...]'
@@ -678,6 +680,7 @@ class ExportPatternButton( wx.Button ):
         menu.AppendSeparator()
         
         menu.Append( self.ID_HASH, 'the file\'s hash - {hash}' )
+        menu.Append( self.ID_MD5, 'the file\'s md5 hash - {md5}' )
         menu.Append( self.ID_TAGS, 'all the file\'s tags - {tags}' )
         menu.Append( self.ID_NN_TAGS, 'all the file\'s non-namespaced tags - {nn tags}' )
         

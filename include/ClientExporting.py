@@ -2,6 +2,7 @@ import ClientConstants as CC
 import ClientData
 import ClientFiles
 import ClientSearch
+import hashlib
 import HydrusConstants as HC
 import HydrusData
 import HydrusGlobals
@@ -53,6 +54,19 @@ def GenerateExportFilename( media, terms ):
                 
                 filename += hash.encode( 'hex' )
                 
+            elif term == 'md5': 
+                hash = media.GetHash() 
+                mime = media.GetMime() 
+ 
+                h_md5 = hashlib.md5() 
+                p = HydrusGlobals.client_controller.GetClientFilesManager().GetFilePath(hash, mime) 
+ 
+                with open(p, 'rb') as f: 
+                    for block in HydrusPaths.ReadFileLikeAsBlocks(f): 
+                        h_md5.update(block) 
+ 
+                md5 = h_md5.digest() 
+                filename += md5.encode('hex') 
             
         elif term_type == 'tag':
             
@@ -181,7 +195,7 @@ class ExportFolder( HydrusSerialisable.SerialisableBaseNamed ):
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER
     SERIALISABLE_VERSION = 2
     
-    def __init__( self, name, path = '', export_type = HC.EXPORT_FOLDER_TYPE_REGULAR, file_search_context = None, period = 3600, phrase = '{hash}' ):
+    def __init__( self, name, path = '', export_type = HC.EXPORT_FOLDER_TYPE_REGULAR, file_search_context = None, period = 3600, phrase = '{md5}' ):
         
         HydrusSerialisable.SerialisableBaseNamed.__init__( self, name )
         

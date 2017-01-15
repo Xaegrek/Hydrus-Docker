@@ -1459,7 +1459,7 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
         export_type = HC.EXPORT_FOLDER_TYPE_REGULAR
         file_search_context = ClientSearch.FileSearchContext( file_service_key = CC.LOCAL_FILE_SERVICE_KEY )
         period = 15 * 60
-        phrase = '{hash}'
+        phrase = '{md5}'
         
         export_folder = ClientExporting.ExportFolder( name, path, export_type = export_type, file_search_context = file_search_context, period = period, phrase = phrase )
         

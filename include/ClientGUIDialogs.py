@@ -4375,7 +4375,7 @@ class DialogSetupExport( Dialog ):
         
         self._directory_picker.SetPath( export_path )
         
-        self._pattern.SetValue( '{hash}' )
+        self._pattern.SetValue( '{md5}' )
         
         #
         
