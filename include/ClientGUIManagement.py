@@ -50,6 +50,7 @@ MANAGEMENT_TYPE_IMPORT_THREAD_WATCHER = 4
 MANAGEMENT_TYPE_PETITIONS = 5
 MANAGEMENT_TYPE_QUERY = 6
 MANAGEMENT_TYPE_IMPORT_URLS = 7
+MANAGEMENT_TYPE_DUPLICATE_FILTER = 8
 
 management_panel_types_to_classes = {}
 
@@ -57,16 +58,23 @@ def CreateManagementController( management_type, file_service_key = None ):
     
     if file_service_key is None:
         
-        file_service_key = CC.LOCAL_FILE_SERVICE_KEY
+        file_service_key = CC.COMBINED_LOCAL_FILE_SERVICE_KEY
         
     
     management_controller = ManagementController()
     
     # sort
     # collect
+    # nah, these are only valid for types with regular file lists
     
     management_controller.SetType( management_type )
     management_controller.SetKey( 'file_service', file_service_key )
+    
+    return management_controller
+    
+def CreateManagementControllerDuplicateFilter():
+    
+    management_controller = CreateManagementController( MANAGEMENT_TYPE_DUPLICATE_FILTER )
     
     return management_controller
     
@@ -1431,6 +1439,386 @@ class ManagementPanelDumper( ManagementPanel ):
     
 management_panel_types_to_classes[ MANAGEMENT_TYPE_DUMPER ] = ManagementPanelDumper
 '''
+class ManagementPanelDuplicateFilter( ManagementPanel ):
+    
+    def __init__( self, parent, page, controller, management_controller ):
+        
+        ManagementPanel.__init__( self, parent, page, controller, management_controller )
+        
+        self._job = None
+        self._job_key = None
+        
+        menu_items = []
+        
+        menu_items.append( ( 'refresh', 'This panel does not update itself when files are added or deleted elsewhere in the client. Hitting this will refresh the numbers from the database.', self._RefreshAndUpdateStatus ) )
+        menu_items.append( ( 'reset potentials', 'This will delete all the potential duplicate pairs found so far and reset their files\' search status.', self._ResetUnknown ) )
+        
+        self._cog_button = ClientGUICommon.MenuBitmapButton( self, CC.GlobalBMPs.cog, menu_items )
+        
+        self._preparing_panel = ClientGUICommon.StaticBox( self, 'preparation' )
+        
+        # refresh button that just calls update
+        
+        self._num_phashes_to_regen = wx.StaticText( self._preparing_panel )
+        self._num_branches_to_regen = wx.StaticText( self._preparing_panel )
+        
+        self._phashes_button = ClientGUICommon.BetterBitmapButton( self._preparing_panel, CC.GlobalBMPs.play, self._RegeneratePhashes )
+        self._branches_button = ClientGUICommon.BetterBitmapButton( self._preparing_panel, CC.GlobalBMPs.play, self._RebalanceTree )
+        
+        #
+        
+        self._searching_panel = ClientGUICommon.StaticBox( self, 'discovery' )
+        
+        menu_items = []
+        
+        menu_items.append( ( 'exact match', 'Search for exact matches.', self._SetSearchDistanceExact ) )
+        menu_items.append( ( 'very similar', 'Search for very similar files.', self._SetSearchDistanceVerySimilar ) )
+        menu_items.append( ( 'similar', 'Search for similar files.', self._SetSearchDistanceSimilar ) )
+        menu_items.append( ( 'speculative', 'Search for files that are probably similar.', self._SetSearchDistanceSpeculative ) )
+        
+        self._search_distance_button = ClientGUICommon.MenuButton( self._searching_panel, 'similarity', menu_items )
+        
+        self._search_distance_spinctrl = wx.SpinCtrl( self._searching_panel, min = 0, max = 64, size = ( 50, -1 ) )
+        self._search_distance_spinctrl.Bind( wx.EVT_SPINCTRL, self.EventSearchDistanceChanged )
+        
+        self._num_searched = ClientGUICommon.TextAndGauge( self._searching_panel )
+        
+        self._search_button = ClientGUICommon.BetterBitmapButton( self._searching_panel, CC.GlobalBMPs.play, self._SearchForDuplicates )
+        
+        #
+        
+        self._filtering_panel = ClientGUICommon.StaticBox( self, 'filtering' )
+        
+        self._num_unknown_duplicates = wx.StaticText( self._filtering_panel )
+        self._num_same_file_duplicates = wx.StaticText( self._filtering_panel )
+        self._num_alternate_duplicates = wx.StaticText( self._filtering_panel )
+        
+        #
+        
+        new_options = self._controller.GetNewOptions()
+        
+        self._search_distance_spinctrl.SetValue( new_options.GetInteger( 'similar_files_duplicate_pairs_search_distance' ) )
+        
+        #
+        
+        gridbox_1 = wx.FlexGridSizer( 0, 3 )
+        
+        gridbox_1.AddGrowableCol( 0, 1 )
+        
+        gridbox_1.AddF( self._num_phashes_to_regen, CC.FLAGS_VCENTER )
+        gridbox_1.AddF( ( 10, 10 ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        gridbox_1.AddF( self._phashes_button, CC.FLAGS_VCENTER )
+        gridbox_1.AddF( self._num_branches_to_regen, CC.FLAGS_VCENTER )
+        gridbox_1.AddF( ( 10, 10 ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        gridbox_1.AddF( self._branches_button, CC.FLAGS_VCENTER )
+        
+        self._preparing_panel.AddF( gridbox_1, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        
+        #
+        
+        distance_hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        distance_hbox.AddF( wx.StaticText( self._searching_panel, label = 'search distance: ' ), CC.FLAGS_VCENTER )
+        distance_hbox.AddF( self._search_distance_button, CC.FLAGS_EXPAND_BOTH_WAYS )
+        distance_hbox.AddF( self._search_distance_spinctrl, CC.FLAGS_VCENTER )
+        
+        gridbox_2 = wx.FlexGridSizer( 0, 2 )
+        
+        gridbox_2.AddGrowableCol( 0, 1 )
+        
+        gridbox_2.AddF( self._num_searched, CC.FLAGS_EXPAND_PERPENDICULAR )
+        gridbox_2.AddF( self._search_button, CC.FLAGS_VCENTER )
+        
+        self._searching_panel.AddF( distance_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._searching_panel.AddF( gridbox_2, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        
+        #
+        
+        self._filtering_panel.AddF( self._num_unknown_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.AddF( self._num_same_file_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.AddF( self._num_alternate_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
+        
+        #
+        
+        vbox = wx.BoxSizer( wx.VERTICAL )
+        
+        vbox.AddF( self._cog_button, CC.FLAGS_LONE_BUTTON )
+        vbox.AddF( self._preparing_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.AddF( self._searching_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.AddF( self._filtering_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        
+        self.SetSizer( vbox )
+        
+        self.Bind( wx.EVT_TIMER, self.TIMEREventUpdateDBJob, id = ID_TIMER_UPDATE )
+        self._update_db_job_timer = wx.Timer( self, id = ID_TIMER_UPDATE )
+        
+        #
+        
+        self._RefreshAndUpdateStatus()
+        
+    
+    def _RebalanceTree( self ):
+        
+        self._job = 'branches'
+        
+        self._StartStopDBJob()
+        
+    
+    def _RegeneratePhashes( self ):
+        
+        self._job = 'phashes'
+        
+        self._StartStopDBJob()
+        
+    
+    def _ResetUnknown( self ):
+        
+        text = 'This will delete all the potential duplicate pairs and reset their files\' search status.'
+        text += os.linesep * 2
+        text += 'This can be useful if you have accidentally searched too broadly and are now swamped with too many false positives.'
+        
+        with ClientGUIDialogs.DialogYesNo( self, text ) as dlg:
+            
+            if dlg.ShowModal() == wx.ID_YES:
+                
+                self._controller.Write( 'delete_unknown_duplicate_pairs' )
+                
+                self._RefreshAndUpdateStatus()
+            
+        
+    
+    def _SearchForDuplicates( self ):
+        
+        self._job = 'search'
+        
+        self._StartStopDBJob()
+        
+    
+    def _SetSearchDistance( self, value ):
+        
+        self._search_distance_spinctrl.SetValue( value )
+        
+        self._UpdateStatus()
+        
+    
+    def _SetSearchDistanceExact( self ):
+        
+        self._SetSearchDistance( HC.HAMMING_EXACT_MATCH )
+        
+    
+    def _SetSearchDistanceSimilar( self ):
+        
+        self._SetSearchDistance( HC.HAMMING_SIMILAR )
+        
+    
+    def _SetSearchDistanceSpeculative( self ):
+        
+        self._SetSearchDistance( HC.HAMMING_SPECULATIVE )
+        
+    
+    def _SetSearchDistanceVerySimilar( self ):
+        
+        self._SetSearchDistance( HC.HAMMING_VERY_SIMILAR )
+        
+    
+    def _StartStopDBJob( self ):
+        
+        if self._job_key is None:
+            
+            self._cog_button.Disable()
+            self._phashes_button.Disable()
+            self._branches_button.Disable()
+            self._search_button.Disable()
+            self._search_distance_button.Disable()
+            self._search_distance_spinctrl.Disable()
+            
+            self._job_key = ClientThreading.JobKey( cancellable = True )
+            
+            if self._job == 'phashes':
+                
+                self._phashes_button.Enable()
+                self._phashes_button.SetBitmap( CC.GlobalBMPs.stop )
+                
+                self._controller.Write( 'maintain_similar_files_phashes', job_key = self._job_key )
+                
+            elif self._job == 'branches':
+                
+                self._branches_button.Enable()
+                self._branches_button.SetBitmap( CC.GlobalBMPs.stop )
+                
+                self._controller.Write( 'maintain_similar_files_tree', job_key = self._job_key )
+                
+            elif self._job == 'search':
+                
+                self._search_button.Enable()
+                self._search_button.SetBitmap( CC.GlobalBMPs.stop )
+                
+                search_distance = self._search_distance_spinctrl.GetValue()
+                
+                self._controller.Write( 'maintain_similar_files_duplicate_pairs', search_distance, job_key = self._job_key )
+                
+            
+            self._update_db_job_timer.Start( 250, wx.TIMER_CONTINUOUS )
+            
+        else:
+            
+            self._job_key.Cancel()
+            
+        
+    
+    def _UpdateJob( self ):
+        
+        if self._job_key.IsDone():
+            
+            self._job_key = None
+            
+            self._update_db_job_timer.Stop()
+            
+            self._RefreshAndUpdateStatus()
+            
+            return
+            
+        
+        if self._job == 'phashes':
+            
+            text = self._job_key.GetIfHasVariable( 'popup_text_1' )
+            
+            if text is not None:
+                
+                self._num_phashes_to_regen.SetLabelText( text )
+                
+            
+        elif self._job == 'branches':
+            
+            text = self._job_key.GetIfHasVariable( 'popup_text_1' )
+            
+            if text is not None:
+                
+                self._num_branches_to_regen.SetLabelText( text )
+                
+            
+        elif self._job == 'search':
+            
+            text = self._job_key.GetIfHasVariable( 'popup_text_1' )
+            gauge = self._job_key.GetIfHasVariable( 'popup_gauge_1' )
+            
+            if text is not None and gauge is not None:
+                
+                ( value, range ) = gauge
+                
+                self._num_searched.SetValue( text, value, range )
+                
+            
+        
+    
+    def _RefreshAndUpdateStatus( self ):
+        
+        self._similar_files_maintenance_status = self._controller.Read( 'similar_files_maintenance_status' )
+        
+        self._UpdateStatus()
+        
+    
+    def _UpdateStatus( self ):
+        
+        ( searched_distances_to_count, duplicate_types_to_count, num_phashes_to_regen, num_branches_to_regen ) = self._similar_files_maintenance_status
+        
+        self._cog_button.Enable()
+        
+        self._phashes_button.SetBitmap( CC.GlobalBMPs.play )
+        self._branches_button.SetBitmap( CC.GlobalBMPs.play )
+        self._search_button.SetBitmap( CC.GlobalBMPs.play )
+        
+        total_num_files = sum( searched_distances_to_count.values() )
+        
+        if num_phashes_to_regen == 0:
+            
+            self._num_phashes_to_regen.SetLabelText( 'All ' + HydrusData.ConvertIntToPrettyString( total_num_files ) + ' eligible files up to date!' )
+            
+            self._phashes_button.Disable()
+            
+        else:
+            
+            num_done = total_num_files - num_phashes_to_regen
+            
+            self._num_phashes_to_regen.SetLabelText( HydrusData.ConvertValueRangeToPrettyString( num_done, total_num_files ) + 'eligible files up to date.' )
+            
+            self._phashes_button.Enable()
+            
+        
+        if num_branches_to_regen == 0:
+            
+            self._num_branches_to_regen.SetLabelText( 'Search tree is fast!' )
+            
+            self._branches_button.Disable()
+            
+        else:
+            
+            self._num_branches_to_regen.SetLabelText( HydrusData.ConvertIntToPrettyString( num_branches_to_regen ) + ' search branches to rebalance.' )
+            
+            self._branches_button.Enable()
+            
+        
+        self._search_distance_button.Enable()
+        self._search_distance_spinctrl.Enable()
+        
+        search_distance = self._search_distance_spinctrl.GetValue()
+        
+        new_options = self._controller.GetNewOptions()
+        
+        new_options.SetInteger( 'similar_files_duplicate_pairs_search_distance', search_distance )
+        
+        if search_distance in HC.hamming_string_lookup:
+            
+            button_label = HC.hamming_string_lookup[ search_distance ]
+            
+        else:
+            
+            button_label = 'custom'
+            
+        
+        self._search_distance_button.SetLabelText( button_label )
+        
+        num_searched = sum( ( count for ( value, count ) in searched_distances_to_count.items() if value is not None and value >= search_distance ) )
+        
+        if num_searched == total_num_files:
+            
+            self._num_searched.SetValue( 'All potential duplicates found at this distance.', total_num_files, total_num_files )
+            
+            self._search_button.Disable()
+            
+        else:
+            
+            if num_searched == 0:
+                
+                self._num_searched.SetValue( 'Have not yet searched at this distance.', 0, total_num_files )
+                
+            else:
+                
+                self._num_searched.SetValue( 'Searched ' + HydrusData.ConvertValueRangeToPrettyString( num_searched, total_num_files ) + ' files at this distance.', num_searched, total_num_files )
+                
+            
+            self._search_button.Enable()
+            
+        
+        num_unknown = duplicate_types_to_count[ HC.DUPLICATE_UNKNOWN ]
+        
+        self._num_unknown_duplicates.SetLabelText( HydrusData.ConvertIntToPrettyString( num_unknown ) + ' potential duplicates found.' )
+        self._num_same_file_duplicates.SetLabelText( HydrusData.ConvertIntToPrettyString( duplicate_types_to_count[ HC.DUPLICATE_SAME_FILE ] ) + ' same file pairs filtered.' )
+        self._num_alternate_duplicates.SetLabelText( HydrusData.ConvertIntToPrettyString( duplicate_types_to_count[ HC.DUPLICATE_ALTERNATE ] ) + ' alternate file pairs filtered.' )
+        
+    
+    def EventSearchDistanceChanged( self, event ):
+        
+        self._UpdateStatus()
+        
+    
+    def TIMEREventUpdateDBJob( self, event ):
+        
+        self._UpdateJob()
+        
+    
+management_panel_types_to_classes[ MANAGEMENT_TYPE_DUPLICATE_FILTER ] = ManagementPanelDuplicateFilter
+
 class ManagementPanelGalleryImport( ManagementPanel ):
     
     def __init__( self, parent, page, controller, management_controller ):

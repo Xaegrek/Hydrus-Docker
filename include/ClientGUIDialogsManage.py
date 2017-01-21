@@ -1515,7 +1515,7 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
         
         for index in indices:
             
-            export_folder = self._export_folders.GetClientData( index )
+            export_folder = self._export_folders.GetObject( index )
             
             original_name = export_folder.GetName()
             
@@ -1557,7 +1557,7 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
         
         existing_db_names = set( HydrusGlobals.client_controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER ) )
         
-        export_folders = self._export_folders.GetClientData()
+        export_folders = self._export_folders.GetObjects()
         
         good_names = set()
         
@@ -2592,7 +2592,7 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
         
         for index in indices:
             
-            import_folder = self._import_folders.GetClientData( index )
+            import_folder = self._import_folders.GetObject( index )
             
             original_name = import_folder.GetName()
             
@@ -2636,7 +2636,7 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
         
         good_names = set()
         
-        import_folders = self._import_folders.GetClientData()
+        import_folders = self._import_folders.GetObjects()
         
         for import_folder in import_folders:
             
@@ -3149,16 +3149,16 @@ class DialogManagePixivAccount( ClientGUIDialogs.Dialog ):
     
     def EventOK( self, event ):
         
-        id = self._id.GetValue()
+        pixiv_id = self._id.GetValue()
         password = self._password.GetValue()
         
-        if id == '' and password == '':
+        if pixiv_id == '' and password == '':
             
             HydrusGlobals.client_controller.Write( 'serialisable_simple', 'pixiv_account', None )
             
         else:
             
-            HydrusGlobals.client_controller.Write( 'serialisable_simple', 'pixiv_account', ( id, password ) )
+            HydrusGlobals.client_controller.Write( 'serialisable_simple', 'pixiv_account', ( pixiv_id, password ) )
             
         
         self.EndModal( wx.ID_OK )
@@ -3166,27 +3166,23 @@ class DialogManagePixivAccount( ClientGUIDialogs.Dialog ):
     
     def EventTest( self, event ):
         
-        id = self._id.GetValue()
+        pixiv_id = self._id.GetValue()
         password = self._password.GetValue()
         
-        form_fields = {}
-        
-        form_fields[ 'mode' ] = 'login'
-        form_fields[ 'pixiv_id' ] = id
-        form_fields[ 'pass' ] = password
-        
-        body = urllib.urlencode( form_fields )
-        
-        headers = {}
-        headers[ 'Content-Type' ] = 'application/x-www-form-urlencoded'
-        
-        ( response_gumpf, cookies ) = HydrusGlobals.client_controller.DoHTTP( HC.POST, 'http://www.pixiv.net/login.php', request_headers = headers, body = body, return_cookies = True )
-        
-        # _ only given to logged in php sessions
-        if 'PHPSESSID' in cookies and '_' in cookies[ 'PHPSESSID' ]: self._status.SetLabelText( 'OK!' )
-        else: self._status.SetLabelText( 'Did not work!' )
-        
-        wx.CallLater( 2000, self._status.SetLabel, '' )
+        try:
+            
+            manager = HydrusGlobals.client_controller.GetManager( 'web_sessions' )
+            
+            cookies = manager.GetPixivCookies( pixiv_id, password )
+            
+            self._status.SetLabelText( 'OK!' )
+            
+            wx.CallLater( 5000, self._status.SetLabel, '' )
+            
+        except HydrusExceptions.ForbiddenException as e:
+            
+            self._status.SetLabelText( 'Did not work! ' + repr( e ) )
+            
         
     
 class DialogManageRatings( ClientGUIDialogs.Dialog ):

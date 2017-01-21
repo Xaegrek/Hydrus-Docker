@@ -586,7 +586,18 @@ class HTTPConnection( object ):
             
         except socket.error as e:
             
-            if e.errno == errno.WSAEACCES:
+            if HC.PLATFORM_WINDOWS:
+                
+                access_errors = [ errno.EACCES, errno.WSAEACCES ]
+                connection_reset_errors = [ errno.ECONNRESET, errno.WSAECONNRESET ]
+                
+            else:
+                
+                access_errors = [ errno.EACCES ]
+                connection_reset_errors = [ errno.ECONNRESET ]
+                
+            
+            if e.errno in access_errors:
                 
                 text = 'The hydrus client did not have permission to make a connection to ' + HydrusData.ToUnicode( self._host )
                 
@@ -599,11 +610,18 @@ class HTTPConnection( object ):
                 
                 raise HydrusExceptions.FirewallException( text )
                 
-            elif e.errno == errno.WSAECONNRESET:
+            elif e.errno in connection_reset_errors:
                 
                 time.sleep( 5 )
                 
                 if attempt_number <= 3:
+                    
+                    if self._hydrus_network:
+                        
+                        # we are talking to a new hydrus server, which uses https, and hence an http call gives badstatusline
+                        
+                        self._scheme = 'https'
+                        
                     
                     self._RefreshConnection()
                     
@@ -626,6 +644,13 @@ class HTTPConnection( object ):
             time.sleep( 5 )
             
             if attempt_number <= 3:
+                
+                if self._hydrus_network:
+                    
+                    # we are talking to a new hydrus server, which uses https, and hence an http call gives badstatusline
+                    
+                    self._scheme = 'https'
+                    
                 
                 self._RefreshConnection()
                 
@@ -671,7 +696,16 @@ class HTTPConnection( object ):
             
         except socket.error as e:
             
-            if e.errno == errno.WSAECONNRESET:
+            if HC.PLATFORM_WINDOWS:
+                
+                connection_reset_errors = [ errno.ECONNRESET, errno.WSAECONNRESET ]
+                
+            else:
+                
+                connection_reset_errors = [ errno.ECONNRESET ]
+                
+            
+            if e.errno in connection_reset_errors:
                 
                 raise recoverable_exc( 'Connection reset by remote host.' )
                 

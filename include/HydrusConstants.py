@@ -25,6 +25,9 @@ HELP_DIR = os.path.join( BASE_DIR, 'help' )
 INCLUDE_DIR = os.path.join( BASE_DIR, 'include' )
 STATIC_DIR = os.path.join( BASE_DIR, 'static' )
 
+DEFAULT_DB_DIR = os.path.join( BASE_DIR, 'db' )
+LICENSE_PATH = os.path.join( BASE_DIR, 'license.txt' )
+
 #
 
 PLATFORM_WINDOWS = False
@@ -46,7 +49,7 @@ options = {}
 # Misc
 
 NETWORK_VERSION = 17
-SOFTWARE_VERSION = 239
+SOFTWARE_VERSION = 241
 
 UNSCALED_THUMBNAIL_DIMENSIONS = ( 200, 200 )
 
@@ -100,6 +103,11 @@ content_update_string_lookup[ CONTENT_UPDATE_DENY_PEND ] = 'deny pend'
 content_update_string_lookup[ CONTENT_UPDATE_DENY_PETITION ] = 'deny petition'
 content_update_string_lookup[ CONTENT_UPDATE_UNDELETE ] = 'undelete'
 
+DUPLICATE_UNKNOWN = 0
+DUPLICATE_NOT_DUPLICATE = 1
+DUPLICATE_SAME_FILE = 2
+DUPLICATE_ALTERNATE = 3
+
 ENCODING_RAW = 0
 ENCODING_HEX = 1
 ENCODING_BASE64 = 2
@@ -115,6 +123,18 @@ IMPORT_FOLDER_TYPE_SYNCHRONISE = 1
 
 EXPORT_FOLDER_TYPE_REGULAR = 0
 EXPORT_FOLDER_TYPE_SYNCHRONISE = 1
+
+HAMMING_EXACT_MATCH = 0
+HAMMING_VERY_SIMILAR = 2
+HAMMING_SIMILAR = 4
+HAMMING_SPECULATIVE = 8
+
+hamming_string_lookup = {}
+
+hamming_string_lookup[ HAMMING_EXACT_MATCH ] = 'exact match'
+hamming_string_lookup[ HAMMING_VERY_SIMILAR ] = 'very similar'
+hamming_string_lookup[ HAMMING_SIMILAR ] = 'similar'
+hamming_string_lookup[ HAMMING_SPECULATIVE ] = 'speculative'
 
 HYDRUS_CLIENT = 0
 HYDRUS_SERVER = 1
