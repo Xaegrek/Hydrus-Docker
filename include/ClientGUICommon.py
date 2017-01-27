@@ -187,11 +187,11 @@ class AnimatedStaticTextTimestamp( wx.StaticText ):
     
 class BetterBitmapButton( wx.BitmapButton ):
     
-    def __init__( self, parent, bitmap, callable, *args, **kwargs ):
+    def __init__( self, parent, bitmap, func, *args, **kwargs ):
         
         wx.BitmapButton.__init__( self, parent, bitmap = bitmap )
         
-        self._callable = callable
+        self._func = func
         self._args = args
         self._kwargs = kwargs
         self.Bind( wx.EVT_BUTTON, self.EventButton )
@@ -199,16 +199,16 @@ class BetterBitmapButton( wx.BitmapButton ):
     
     def EventButton( self, event ):
         
-        self._callable( *self._args,  **self._kwargs )
+        self._func( *self._args,  **self._kwargs )
         
     
 class BetterButton( wx.Button ):
     
-    def __init__( self, parent, label, callable, *args, **kwargs ):
+    def __init__( self, parent, label, func, *args, **kwargs ):
         
         wx.Button.__init__( self, parent, label = label )
         
-        self._callable = callable
+        self._func = func
         self._args = args
         self._kwargs = kwargs
         self.Bind( wx.EVT_BUTTON, self.EventButton )
@@ -216,7 +216,7 @@ class BetterButton( wx.Button ):
     
     def EventButton( self, event ):
         
-        self._callable( *self._args,  **self._kwargs )
+        self._func( *self._args,  **self._kwargs )
         
     
 class BetterChoice( wx.Choice ):
@@ -764,7 +764,11 @@ class Gauge( wx.Gauge ):
     
     def SetRange( self, max ):
         
-        if max > 1000:
+        if max is None:
+            
+            self.Pulse()
+            
+        elif max > 1000:
             
             self._actual_max = max
             wx.Gauge.SetRange( self, 1000 )
@@ -778,8 +782,18 @@ class Gauge( wx.Gauge ):
     
     def SetValue( self, value ):
         
-        if self._actual_max is None: wx.Gauge.SetValue( self, value )
-        else: wx.Gauge.SetValue( self, min( int( 1000 * ( float( value ) / self._actual_max ) ), 1000 ) )
+        if value is None:
+            
+            self.Pulse()
+            
+        elif self._actual_max is None:
+            
+            wx.Gauge.SetValue( self, value )
+            
+        else:
+            
+            wx.Gauge.SetValue( self, min( int( 1000 * ( float( value ) / self._actual_max ) ), 1000 ) )
+            
         
     
 class ListBook( wx.Panel ):
@@ -3236,13 +3250,39 @@ class MenuBitmapButton( BetterBitmapButton ):
         self._menu_items = menu_items
         
     
+    def _DoBooloanCheck( self, boolean_name ):
+        
+        new_options = HydrusGlobals.client_controller.GetNewOptions()
+        
+        new_options.InvertBoolean( boolean_name )
+        
+    
     def DoMenu( self ):
         
         menu = wx.Menu()
         
-        for ( title, description, callable ) in self._menu_items:
+        for ( item_type, title, description, data ) in self._menu_items:
             
-            ClientGUIMenus.AppendMenuItem( menu, title, description, self, callable )
+            if item_type == 'normal':
+                
+                callable = data
+                
+                ClientGUIMenus.AppendMenuItem( self, menu, title, description, callable )
+                
+            elif item_type == 'check':
+                
+                new_options = HydrusGlobals.client_controller.GetNewOptions()
+                
+                boolean_name = data
+                
+                initial_value = new_options.GetBoolean( boolean_name )
+                
+                ClientGUIMenus.AppendMenuCheckItem( self, menu, title, description, initial_value, self._DoBooloanCheck, boolean_name )
+                
+            elif item_type == 'separator':
+                
+                menu.AppendSeparator()
+                
             
         
         HydrusGlobals.client_controller.PopupMenu( self, menu )
@@ -3257,13 +3297,39 @@ class MenuButton( BetterButton ):
         self._menu_items = menu_items
         
     
+    def _DoBooloanCheck( self, boolean_name ):
+        
+        new_options = HydrusGlobals.client_controller.GetNewOptions()
+        
+        new_options.InvertBoolean( boolean_name )
+        
+    
     def DoMenu( self ):
         
         menu = wx.Menu()
         
-        for ( title, description, callable ) in self._menu_items:
+        for ( item_type, title, description, data ) in self._menu_items:
             
-            ClientGUIMenus.AppendMenuItem( menu, title, description, self, callable )
+            if item_type == 'normal':
+                
+                callable = data
+                
+                ClientGUIMenus.AppendMenuItem( self, menu, title, description, callable )
+                
+            elif item_type == 'check':
+                
+                new_options = HydrusGlobals.client_controller.GetNewOptions()
+                
+                boolean_name = data
+                
+                initial_value = new_options.GetBoolean( boolean_name )
+                
+                ClientGUIMenus.AppendMenuCheckItem( self, menu, title, description, initial_value, self._DoBooloanCheck, boolean_name )
+                
+            elif item_type == 'separator':
+                
+                menu.AppendSeparator()
+                
             
         
         HydrusGlobals.client_controller.PopupMenu( self, menu )
@@ -3523,6 +3589,10 @@ class PopupMessage( PopupWindow ):
         self._gauge_2.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
         self._gauge_2.Hide()
         
+        self._download = TextAndGauge( self )
+        self._download.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
+        self._download.Hide()
+        
         self._copy_to_clipboard_button = wx.Button( self )
         self._copy_to_clipboard_button.Bind( wx.EVT_BUTTON, self.EventCopyToClipboardButton )
         self._copy_to_clipboard_button.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
@@ -3568,6 +3638,7 @@ class PopupMessage( PopupWindow ):
         vbox.AddF( self._gauge_1, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._text_2, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._gauge_2, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.AddF( self._download, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         vbox.AddF( self._copy_to_clipboard_button, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._show_files_button, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._show_tb_button, CC.FLAGS_EXPAND_PERPENDICULAR )
@@ -3793,6 +3864,21 @@ class PopupMessage( PopupWindow ):
         else:
             
             self._gauge_2.Hide()
+            
+        
+        popup_download = self._job_key.GetIfHasVariable( 'popup_download' )
+        
+        if popup_download is not None:
+            
+            ( text, gauge_value, gauge_range ) = popup_download
+            
+            self._download.SetValue( text, gauge_value, gauge_range )
+            
+            self._download.Show()
+            
+        else:
+            
+            self._download.Hide()
             
         
         popup_clipboard = self._job_key.GetIfHasVariable( 'popup_clipboard' )
@@ -5630,8 +5716,15 @@ class TextAndGauge( wx.Panel ):
         
         self._st.SetLabelText( text )
         
-        self._gauge.SetRange( range )
-        self._gauge.SetValue( value )
+        if value is None or range is None:
+            
+            self._gauge.Pulse()
+            
+        else:
+            
+            self._gauge.SetRange( range )
+            self._gauge.SetValue( value )
+            
         
     
 ( TimeDeltaEvent, EVT_TIME_DELTA ) = wx.lib.newevent.NewCommandEvent()
