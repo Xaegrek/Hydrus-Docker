@@ -3,16 +3,19 @@ import ClientData
 import ClientFiles
 import ClientLocalServer
 import ClientMedia
+import ClientServices
 import hashlib
 import httplib
 import HydrusConstants as HC
 import HydrusEncryption
+import HydrusNetwork
 import HydrusPaths
 import HydrusServer
 import HydrusServerResources
 import HydrusSerialisable
 import itertools
 import os
+import random
 import ServerFiles
 import ServerServer
 import shutil
@@ -40,22 +43,29 @@ with open( os.path.join( HC.STATIC_DIR, 'hydrus_small.png' ), 'rb' ) as f:
 class TestServer( unittest.TestCase ):
     
     @classmethod
-    def setUpClass( self ):
+    def setUpClass( cls ):
         
         services = []
         
-        self._file_service = ClientData.GenerateService( HydrusData.GenerateKey(), HC.FILE_REPOSITORY, 'file repo', {} )
-        self._tag_service = ClientData.GenerateService( HydrusData.GenerateKey(), HC.TAG_REPOSITORY, 'tag repo', {} )
-        self._admin_service = ClientData.GenerateService( HydrusData.GenerateKey(), HC.SERVER_ADMIN, 'server admin', {} )
+        cls._serverside_file_service = HydrusNetwork.GenerateService( HydrusData.GenerateKey(), HC.FILE_REPOSITORY, 'file repo', HC.DEFAULT_SERVICE_PORT + 1 )
+        cls._serverside_tag_service = HydrusNetwork.GenerateService( HydrusData.GenerateKey(), HC.TAG_REPOSITORY, 'tag repo', HC.DEFAULT_SERVICE_PORT )
+        cls._serverside_admin_service = HydrusNetwork.GenerateService( HydrusData.GenerateKey(), HC.SERVER_ADMIN, 'server admin', HC.DEFAULT_SERVER_ADMIN_PORT )
+        
+        cls._clientside_file_service = ClientServices.GenerateService( HydrusData.GenerateKey(), HC.FILE_REPOSITORY, 'file repo' )
+        cls._clientside_tag_service = ClientServices.GenerateService( HydrusData.GenerateKey(), HC.TAG_REPOSITORY, 'tag repo' )
+        cls._clientside_admin_service = ClientServices.GenerateService( HydrusData.GenerateKey(), HC.SERVER_ADMIN, 'server admin' )
+        
+        cls._clientside_file_service.SetCredentials( HydrusNetwork.Credentials( '127.0.0.1', HC.DEFAULT_SERVICE_PORT + 1 ) )
+        cls._clientside_tag_service.SetCredentials( HydrusNetwork.Credentials( '127.0.0.1', HC.DEFAULT_SERVICE_PORT ) )
+        cls._clientside_admin_service.SetCredentials( HydrusNetwork.Credentials( '127.0.0.1', HC.DEFAULT_SERVER_ADMIN_PORT ) )
+        
+        cls._local_booru = ClientServices.GenerateService( HydrusData.GenerateKey(), HC.LOCAL_BOORU, 'local booru' )
         
         services_manager = HydrusGlobals.test_controller.GetServicesManager()
         
-        services_manager._keys_to_services[ self._file_service.GetServiceKey() ] = self._file_service
-        services_manager._keys_to_services[ self._tag_service.GetServiceKey() ] = self._tag_service
-        services_manager._keys_to_services[ self._admin_service.GetServiceKey() ] = self._admin_service
-        
-        HydrusPaths.MakeSureDirectoryExists( ServerFiles.GetExpectedUpdateDir( self._file_service.GetServiceKey() ) )
-        HydrusPaths.MakeSureDirectoryExists( ServerFiles.GetExpectedUpdateDir( self._tag_service.GetServiceKey() ) )
+        services_manager._keys_to_services[ cls._clientside_file_service.GetServiceKey() ] = cls._clientside_file_service
+        services_manager._keys_to_services[ cls._clientside_tag_service.GetServiceKey() ] = cls._clientside_tag_service
+        services_manager._keys_to_services[ cls._clientside_admin_service.GetServiceKey() ] = cls._clientside_admin_service
         
         permissions = [ HC.GET_DATA, HC.POST_DATA, HC.POST_PETITIONS, HC.RESOLVE_PETITIONS, HC.MANAGE_USERS, HC.GENERAL_ADMIN, HC.EDIT_SERVICES ]
         
@@ -66,30 +76,29 @@ class TestServer( unittest.TestCase ):
         used_bytes = 0
         used_requests = 0
         
-        self._account = HydrusData.Account( account_key, account_type, created, expires, used_bytes, used_requests )
+        cls._account = HydrusData.Account( account_key, account_type, created, expires, used_bytes, used_requests )
         
-        self._access_key = HydrusData.GenerateKey()
-        self._file_hash = HydrusData.GenerateKey()
+        cls._access_key = HydrusData.GenerateKey()
+        cls._file_hash = HydrusData.GenerateKey()
         
         def TWISTEDSetup():
             
-            self._ssl_cert_path = os.path.join( TestConstants.DB_DIR, 'server.crt' )
-            self._ssl_key_path = os.path.join( TestConstants.DB_DIR, 'server.key' )
+            cls._ssl_cert_path = os.path.join( TestConstants.DB_DIR, 'server.crt' )
+            cls._ssl_key_path = os.path.join( TestConstants.DB_DIR, 'server.key' )
             
             # if db test ran, this is still hanging around and read-only, so don't bother to fail overwriting
-            if not os.path.exists( self._ssl_cert_path ):
+            if not os.path.exists( cls._ssl_cert_path ):
                 
-                HydrusEncryption.GenerateOpenSSLCertAndKeyFile( self._ssl_cert_path, self._ssl_key_path )
+                HydrusEncryption.GenerateOpenSSLCertAndKeyFile( cls._ssl_cert_path, cls._ssl_key_path )
                 
             
-            context_factory = twisted.internet.ssl.DefaultOpenSSLContextFactory( self._ssl_key_path, self._ssl_cert_path )
+            context_factory = twisted.internet.ssl.DefaultOpenSSLContextFactory( cls._ssl_key_path, cls._ssl_cert_path )
             
-            reactor.listenSSL( HC.DEFAULT_SERVER_ADMIN_PORT, ServerServer.HydrusServiceAdmin( self._admin_service.GetServiceKey(), HC.SERVER_ADMIN, 'hello' ), context_factory )
-            reactor.listenSSL( HC.DEFAULT_SERVICE_PORT, ServerServer.HydrusServiceRepositoryFile( self._file_service.GetServiceKey(), HC.FILE_REPOSITORY, 'hello' ), context_factory )
-            reactor.listenSSL( HC.DEFAULT_SERVICE_PORT + 1, ServerServer.HydrusServiceRepositoryTag( self._tag_service.GetServiceKey(), HC.TAG_REPOSITORY, 'hello' ), context_factory )
+            reactor.listenSSL( HC.DEFAULT_SERVER_ADMIN_PORT, ServerServer.HydrusServiceAdmin( cls._serverside_admin_service ), context_factory )
+            reactor.listenSSL( HC.DEFAULT_SERVICE_PORT + 1, ServerServer.HydrusServiceRepositoryFile( cls._serverside_file_service ), context_factory )
+            reactor.listenSSL( HC.DEFAULT_SERVICE_PORT, ServerServer.HydrusServiceRepositoryTag( cls._serverside_tag_service ), context_factory )
             
-            reactor.listenTCP( HC.DEFAULT_LOCAL_FILE_PORT, ClientLocalServer.HydrusServiceLocal( CC.COMBINED_LOCAL_FILE_SERVICE_KEY, HC.COMBINED_LOCAL_FILE, 'hello' ) )
-            reactor.listenTCP( HC.DEFAULT_LOCAL_BOORU_PORT, ClientLocalServer.HydrusServiceBooru( CC.LOCAL_BOORU_SERVICE_KEY, HC.LOCAL_BOORU, 'hello' ) )
+            reactor.listenTCP( HC.DEFAULT_LOCAL_BOORU_PORT, ClientLocalServer.HydrusServiceBooru( cls._local_booru ) )
             
         
         reactor.callFromThread( TWISTEDSetup )
@@ -120,10 +129,7 @@ class TestServer( unittest.TestCase ):
         
         data = response.read()
         
-        p1 = data == HydrusServerResources.CLIENT_ROOT_MESSAGE
-        p2 = data == HydrusServerResources.ROOT_MESSAGE_BEGIN + 'hello' + HydrusServerResources.ROOT_MESSAGE_END
-        
-        self.assertTrue( p1 or p2 )
+        self.assertEqual( response.status, 200 )
         
         #
         
@@ -138,52 +144,7 @@ class TestServer( unittest.TestCase ):
         self.assertEqual( data, favicon )
         
     
-    def _test_local_file( self, host, port ):
-        
-        connection = httplib.HTTPConnection( host, port, timeout = 10 )
-        
-        #
-        
-        client_files_default = os.path.join( TestConstants.DB_DIR, 'client_files' )
-
-        hash_encoded = self._file_hash.encode( 'hex' )
-        
-        prefix = hash_encoded[:2]
-        
-        path =  os.path.join( client_files_default, 'f' + prefix, hash_encoded + '.jpg' )
-        
-        with open( path, 'wb' ) as f: f.write( EXAMPLE_FILE )
-        
-        connection.request( 'GET', '/file?hash=' + self._file_hash.encode( 'hex' ) )
-        
-        response = connection.getresponse()
-        
-        data = response.read()
-        
-        self.assertEqual( data, EXAMPLE_FILE )
-        
-        try: os.remove( path )
-        except: pass
-        
-        #
-        
-        path = os.path.join( client_files_default, 't' + prefix, hash_encoded + '.thumbnail' )
-        
-        with open( path, 'wb' ) as f: f.write( EXAMPLE_THUMBNAIL )
-        
-        connection.request( 'GET', '/thumbnail?hash=' + self._file_hash.encode( 'hex' ) )
-        
-        response = connection.getresponse()
-        
-        data = response.read()
-        
-        self.assertEqual( data, EXAMPLE_THUMBNAIL )
-        
-        try: os.remove( path )
-        except: pass
-        
-    
-    def _test_file_repo( self, service, host, port ):
+    def _test_file_repo( self, service ):
         
         info = service.GetInfo()
         
@@ -359,27 +320,13 @@ class TestServer( unittest.TestCase ):
             
         
     
-    def _test_repo( self, service, host, port ):
+    def _test_repo( self, service ):
         
         service_key = service.GetServiceKey()
         
-        # news
-        
-        news = 'this is the news'
-        
-        service.Request( HC.POST, 'news', { 'news' : news } )
-        
-        written = HydrusGlobals.test_controller.GetWrite( 'news' )
-        
-        [ ( args, kwargs ) ] = written
-        
-        ( written_service_key, written_news ) = args
-        
-        self.assertEqual( news, written_news )
-        
         # num_petitions
         
-        num_petitions = 23
+        num_petitions = [ ( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_STATUS_PETITIONED, 23 ), ( HC.CONTENT_TYPE_TAG_PARENTS, HC.CONTENT_STATUS_PENDING, 0 ) ]
         
         HydrusGlobals.test_controller.SetRead( 'num_petitions', num_petitions )
         
@@ -390,57 +337,84 @@ class TestServer( unittest.TestCase ):
         # petition
         
         action = HC.CONTENT_UPDATE_PETITION
-        account_identifier = HydrusData.AccountIdentifier( account_key = HydrusData.GenerateKey() )
+        petitioner_account = HydrusNetwork.Account.GenerateUnknownAccount()
         reason = 'it sucks'
-        contents = [ HydrusData.Content( HC.CONTENT_TYPE_FILES, [ HydrusData.GenerateKey() for i in range( 10 ) ] ) ]
+        contents = [ HydrusNetwork.Content( HC.CONTENT_TYPE_FILES, [ HydrusData.GenerateKey() for i in range( 10 ) ] ) ]
         
-        petition = HydrusData.ServerToClientPetition( action = action, petitioner_account_identifier = account_identifier, reason = reason, contents = contents )
+        petition = HydrusNetwork.Petition( action, petitioner_account, reason, contents )
         
         HydrusGlobals.test_controller.SetRead( 'petition', petition )
         
         response = service.Request( HC.GET, 'petition' )
         
-        self.assertEqual( type( response ), HydrusData.ServerToClientPetition )
+        self.assertEqual( response[ 'petition' ].GetSerialisableTuple(), petition.GetSerialisableTuple() )
         
-        # update
+        # definitions
         
-        begin = 100
-        subindex_count = 5
+        definitions_update = HydrusNetwork.DefinitionsUpdate()
         
-        update = HydrusData.ServerToClientServiceUpdatePackage()
-        update.SetBeginEnd( begin, begin + HC.UPDATE_DURATION - 1 )
-        update.SetSubindexCount( subindex_count )
+        if i in range( 100, 200 ):
+            
+            definitions_update.AddRow( ( HC.DEFINITIONS_TYPE_TAGS, i, 'series:test ' + str( i ) ) )
+            definitions_update.AddRow( ( HC.DEFINITIONS_TYPE_HASHES, i + 500, HydrusData.GenerateKey() ) )
+            
         
-        path = ServerFiles.GetExpectedServiceUpdatePackagePath( service_key, begin )
+        definitions_update_network_string = definitions_update.DumpToNetworkString()
         
-        with open( path, 'wb' ) as f: f.write( update.DumpToNetworkString() )
+        definitions_update_hash = hashlib.sha256( definitions_update_network_string ).digest()
         
-        response = service.Request( HC.GET, 'service_update_package', { 'begin' : begin } )
+        path = ServerFiles.GetExpectedFilePath( definitions_update_hash )
         
-        self.assertEqual( response.GetBegin(), update.GetBegin() )
+        with open( path, 'wb' ) as f: f.write( definitions_update_network_string )
+        
+        response = service.Request( HC.GET, 'update', { 'update_hash' : definitions_update_hash } )
+        
+        try: os.remove( path )
+        except: pass
+        
+        self.assertEqual( response, definitions_update_network_string )
+        
+        # content
+        
+        rows = [ ( random.randint( 100, 1000 ), [ random.randint( 100, 1000 ) for i in range( 50 ) ] ) for j in range( 20 ) ]
+        
+        content_update = HydrusNetwork.ContentUpdate()
+        
+        for row in rows:
+            
+            content_update.AddRow( ( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_UPDATE_ADD, row ) )
+            
+        
+        content_update_network_string = content_update.DumpToNetworkString()
+        
+        content_update_hash = hashlib.sha256( content_update_network_string ).digest()
+        
+        path = ServerFiles.GetExpectedFilePath( content_update_hash )
+        
+        with open( path, 'wb' ) as f: f.write( content_update_network_string )
+        
+        response = service.Request( HC.GET, 'update', { 'update_hash' : content_update_hash } )
         
         try: os.remove( path )
         except: pass
         
-        subindex = 2
-        num_hashes = 12
-        tag = 'series:blah'
-        hash_ids_to_hashes = { i : HydrusData.GenerateKey() for i in range( 12 ) }
-        rows = [ ( tag, [ i for i in range( num_hashes ) ] ) ]
+        self.assertEqual( response, content_update_network_string )
         
-        update = HydrusData.ServerToClientContentUpdatePackage()
-        update.AddContentData( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_UPDATE_ADD, rows, hash_ids_to_hashes )
+        # metadata
         
-        path = ServerFiles.GetExpectedContentUpdatePackagePath( service_key, begin, subindex )
+        metadata = HydrusNetwork.Metadata()
         
-        with open( path, 'wb' ) as f: f.write( update.DumpToNetworkString() )
+        metadata.AppendUpdate( [ definitions_update_hash, content_update_hash ], HydrusData.GetNow() - 101000, HydrusData.GetNow() - 1000, HydrusData.GetNow() + 100000 )
         
-        response = service.Request( HC.GET, 'content_update_package', { 'begin' : begin, 'subindex' : subindex } )
+        service._metadata = metadata
         
-        self.assertEqual( response.GetNumContentUpdates(), update.GetNumContentUpdates() )
+        response = service.Request( HC.GET, 'metadata_slice', { 'since' : 0 } )
         
-        try: os.remove( path )
-        except: pass
+        self.assertEqual( response[ 'metadata_slice' ].GetSerialisableTuple(), metadata.GetSerialisableTuple() )
+        
+        # post content
+        
+        raise NotImplementedError()
         
         update = HydrusData.ClientToServerContentUpdatePackage( {}, hash_ids_to_hashes )
         
@@ -455,7 +429,7 @@ class TestServer( unittest.TestCase ):
         self.assertEqual( update.GetHashes(), written_update.GetHashes() )
         
     
-    def _test_restricted( self, service, host, port ):
+    def _test_restricted( self, service ):
         
         # access_key
         
@@ -463,11 +437,7 @@ class TestServer( unittest.TestCase ):
         
         HydrusGlobals.test_controller.SetRead( 'access_key', self._access_key )
         
-        request_headers = {}
-        
-        request_headers[ 'Hydrus-Key' ] = registration_key.encode( 'hex' )
-        
-        response = service.Request( HC.GET, 'access_key', request_headers = request_headers )
+        response = service.Request( HC.GET, 'access_key', { 'registration_key' : registration_key } )
         
         self.assertEqual( response[ 'access_key' ], self._access_key )
         
@@ -539,45 +509,24 @@ class TestServer( unittest.TestCase ):
         
         HydrusGlobals.test_controller.SetRead( 'registration_keys', [ registration_key ] )
         
-        response = service.Request( HC.GET, 'registration_keys', { 'num' : 1, 'title' : 'blah' } )
+        response = service.Request( HC.GET, 'registration_keys', { 'num' : 1, 'account_type_key' : os.urandom( 32 ).encode( 'hex' ), 'expires' : HydrusData.GetNow() + 1200 } )
         
         self.assertEqual( response[ 'registration_keys' ], [ registration_key ] )
-        
-        response = service.Request( HC.GET, 'registration_keys', { 'num' : 1, 'title' : 'blah', 'lifetime' : 100 } )
-        
-        self.assertEqual( response[ 'registration_keys' ], [ registration_key ] )
-        
-        # stats
-        
-        stats = { 'message' : 'hello' }
-        
-        HydrusGlobals.test_controller.SetRead( 'stats', stats )
-        
-        response = service.Request( HC.GET, 'stats' )
-        
-        self.assertEqual( response[ 'stats' ], stats )
         
     
-    def _test_server_admin( self, service, host, port ):
-        
-        info = service.GetInfo()
-        
-        info[ 'host' ] = host
-        info[ 'port' ] = port
+    def _test_server_admin( self, service ):
         
         # init
         
         access_key = HydrusData.GenerateKey()
         
-        HydrusGlobals.test_controller.SetRead( 'init', access_key )
+        HydrusGlobals.test_controller.SetRead( 'access_key', access_key )
         
-        response = service.Request( HC.GET, 'init' )
+        response = service.Request( HC.GET, 'access_key', 'init' )
         
         self.assertEqual( response[ 'access_key' ], access_key )
         
         #
-        
-        info[ 'access_key' ] = self._access_key
         
         # backup
         
@@ -606,18 +555,9 @@ class TestServer( unittest.TestCase ):
         self.assertEqual( edit_log, written_edit_log )
         
     
-    def _test_tag_repo( self, service, host, port ):
+    def _test_tag_repo( self, service ):
         
         pass
-        
-    
-    def test_local_service( self ):
-        
-        host = '127.0.0.1'
-        port = HC.DEFAULT_LOCAL_FILE_PORT
-        
-        self._test_basics( host, port, https = False )
-        self._test_local_file( host, port )
         
     
     def test_repository_file( self ):
@@ -625,15 +565,10 @@ class TestServer( unittest.TestCase ):
         host = '127.0.0.1'
         port = HC.DEFAULT_SERVICE_PORT
         
-        info = self._file_service.GetInfo()
-        
-        info[ 'host' ] = host
-        info[ 'port' ] = port
-        
         self._test_basics( host, port )
-        self._test_restricted( self._file_service, host, port )
-        self._test_repo( self._file_service, host, port )
-        self._test_file_repo( self._file_service, host, port )
+        self._test_restricted( self._clientside_file_service )
+        self._test_repo( self._clientside_file_service )
+        self._test_file_repo( self._clientside_file_service )
         
     
     def test_repository_tag( self ):
@@ -641,15 +576,10 @@ class TestServer( unittest.TestCase ):
         host = '127.0.0.1'
         port = HC.DEFAULT_SERVICE_PORT + 1
         
-        info = self._tag_service.GetInfo()
-        
-        info[ 'host' ] = host
-        info[ 'port' ] = port
-        
         self._test_basics( host, port )
-        self._test_restricted( self._tag_service, host, port )
-        self._test_repo( self._tag_service, host, port )
-        self._test_tag_repo( self._tag_service, host, port )
+        self._test_restricted( self._clientside_tag_service )
+        self._test_repo( self._clientside_tag_service )
+        self._test_tag_repo( self._clientside_tag_service )
         
     
     def test_server_admin( self ):
@@ -657,14 +587,9 @@ class TestServer( unittest.TestCase ):
         host = '127.0.0.1'
         port = HC.DEFAULT_SERVER_ADMIN_PORT
         
-        info = self._admin_service.GetInfo()
-        
-        info[ 'host' ] = host
-        info[ 'port' ] = port
-        
         self._test_basics( host, port )
-        self._test_restricted( self._admin_service, host, port )
-        self._test_server_admin( self._admin_service, host, port )
+        self._test_restricted( self._clientside_admin_service )
+        self._test_server_admin( self._clientside_admin_service )
         
     
     def test_local_booru( self ):
@@ -679,20 +604,20 @@ class TestServer( unittest.TestCase ):
 class TestAMP( unittest.TestCase ):
     
     @classmethod
-    def setUpClass( self ):
+    def setUpClass( cls ):
         
-        self._alice = HydrusData.GenerateKey()
-        self._bob = HydrusData.GenerateKey()
+        cls._alice = HydrusData.GenerateKey()
+        cls._bob = HydrusData.GenerateKey()
         
-        self._server_port = HC.DEFAULT_SERVICE_PORT + 10
+        cls._server_port = HC.DEFAULT_SERVICE_PORT + 10
         
-        self._service_key = HydrusData.GenerateKey()
+        cls._service_key = HydrusData.GenerateKey()
         
         def TWISTEDSetup():
             
-            self._factory = HydrusServer.MessagingServiceFactory( self._service_key )
+            cls._factory = HydrusServer.MessagingServiceFactory( cls._service_key )
             
-            reactor.listenTCP( self._server_port, self._factory )
+            reactor.listenTCP( cls._server_port, cls._factory )
             
         
         reactor.callFromThread( TWISTEDSetup )

@@ -10,6 +10,7 @@ from include import ClientConstants as CC
 from include import HydrusGlobals
 from include import ClientDefaults
 from include import ClientNetworking
+from include import ClientServices
 from include import HydrusPubSub
 from include import HydrusSessions
 from include import HydrusTags
@@ -17,12 +18,14 @@ from include import HydrusThreading
 from include import TestClientConstants
 from include import TestClientDaemons
 from include import TestClientDownloading
+from include import TestClientListBoxes
 from include import TestConstants
 from include import TestDialogs
 from include import TestDB
 from include import TestFunctions
 from include import TestClientImageHandling
 from include import TestHydrusNATPunch
+from include import TestHydrusSerialisable
 from include import TestHydrusServer
 from include import TestHydrusSessions
 from include import TestHydrusTags
@@ -88,11 +91,11 @@ class Controller( object ):
         
         services = []
         
-        services.append( ClientData.GenerateService( CC.LOCAL_BOORU_SERVICE_KEY, HC.LOCAL_BOORU, CC.LOCAL_BOORU_SERVICE_KEY, { 'max_monthly_data' : None, 'used_monthly_data' : 0 } ) )
-        services.append( ClientData.GenerateService( CC.COMBINED_LOCAL_FILE_SERVICE_KEY, HC.COMBINED_LOCAL_FILE, CC.COMBINED_LOCAL_FILE_SERVICE_KEY, {} ) )
-        services.append( ClientData.GenerateService( CC.LOCAL_FILE_SERVICE_KEY, HC.LOCAL_FILE_DOMAIN, CC.LOCAL_FILE_SERVICE_KEY, {} ) )
-        services.append( ClientData.GenerateService( CC.TRASH_SERVICE_KEY, HC.LOCAL_FILE_TRASH_DOMAIN, CC.LOCAL_FILE_SERVICE_KEY, {} ) )
-        services.append( ClientData.GenerateService( CC.LOCAL_TAG_SERVICE_KEY, HC.LOCAL_TAG, CC.LOCAL_TAG_SERVICE_KEY, {} ) )
+        services.append( ClientServices.GenerateService( CC.LOCAL_BOORU_SERVICE_KEY, HC.LOCAL_BOORU, CC.LOCAL_BOORU_SERVICE_KEY ) )
+        services.append( ClientServices.GenerateService( CC.COMBINED_LOCAL_FILE_SERVICE_KEY, HC.COMBINED_LOCAL_FILE, CC.COMBINED_LOCAL_FILE_SERVICE_KEY ) )
+        services.append( ClientServices.GenerateService( CC.LOCAL_FILE_SERVICE_KEY, HC.LOCAL_FILE_DOMAIN, CC.LOCAL_FILE_SERVICE_KEY ) )
+        services.append( ClientServices.GenerateService( CC.TRASH_SERVICE_KEY, HC.LOCAL_FILE_TRASH_DOMAIN, CC.LOCAL_FILE_SERVICE_KEY ) )
+        services.append( ClientServices.GenerateService( CC.LOCAL_TAG_SERVICE_KEY, HC.LOCAL_TAG, CC.LOCAL_TAG_SERVICE_KEY ) )
         
         self._reads[ 'services' ] = services
         
@@ -228,11 +231,6 @@ class Controller( object ):
         return self._server_session_manager
         
     
-    def GetUpdatesDir( self ):
-        
-        return self._updates_dir
-        
-    
     def GetWrite( self, name ):
         
         write = self._writes[ name ]
@@ -252,7 +250,15 @@ class Controller( object ):
         return HydrusGlobals.model_shutdown
         
     
-    def Read( self, name, *args, **kwargs ): return self._reads[ name ]
+    def Read( self, name, *args, **kwargs ):
+        
+        return self._reads[ name ]
+        
+    
+    def RequestMade( self, num_bytes ):
+        
+        pass
+        
     
     def ResetIdleTimer( self ): pass
     
@@ -265,17 +271,21 @@ class Controller( object ):
         if only_run is None: run_all = True
         else: run_all = False
         
-        if run_all or only_run == 'cc': suites.append( unittest.TestLoader().loadTestsFromModule( TestClientConstants ) )
         if run_all or only_run == 'daemons': suites.append( unittest.TestLoader().loadTestsFromModule( TestClientDaemons ) )
-        if run_all or only_run == 'dialogs': suites.append( unittest.TestLoader().loadTestsFromModule( TestDialogs ) )
+        if run_all or only_run == 'data':
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestClientConstants ) )
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestFunctions ) )
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusSerialisable ) )
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusSessions ) )
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusTags ) )
         if run_all or only_run == 'db': suites.append( unittest.TestLoader().loadTestsFromModule( TestDB ) )
         if run_all or only_run == 'downloading': suites.append( unittest.TestLoader().loadTestsFromModule( TestClientDownloading ) )
-        if run_all or only_run == 'functions': suites.append( unittest.TestLoader().loadTestsFromModule( TestFunctions ) )
+        if run_all or only_run == 'gui':
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestDialogs ) )
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestClientListBoxes ) )
         if run_all or only_run == 'image': suites.append( unittest.TestLoader().loadTestsFromModule( TestClientImageHandling ) )
         if run_all or only_run == 'nat': suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusNATPunch ) )
         if run_all or only_run == 'server': suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusServer ) )
-        if run_all or only_run == 'sessions': suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusSessions ) )
-        if run_all or only_run == 'tags': suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusTags ) )
         
         suite = unittest.TestSuite( suites )
         
@@ -344,11 +354,14 @@ if __name__ == '__main__':
             
             win = wx.Frame( None )
             
-            wx.CallAfter( controller.Run )
-            #threading.Thread( target = controller.Run ).start()
+            def do_it():
+                
+                controller.Run()
+                
+                win.Destroy()
+                
             
-            wx.CallAfter( win.Destroy )
-            
+            wx.CallAfter( do_it )
             app.MainLoop()
             
         except:

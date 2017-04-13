@@ -138,7 +138,7 @@ class PanelPredicateSystemFileService( PanelPredicateSystem ):
         
         self._sign = ClientGUICommon.BetterRadioBox( self, choices = [ ( 'is', True ), ( 'is not', False ) ], style = wx.RA_SPECIFY_ROWS )
         
-        self._current_pending = ClientGUICommon.BetterRadioBox( self, choices = [ ( 'currently in', HC.CURRENT ), ( 'pending to', HC.PENDING ) ], style = wx.RA_SPECIFY_ROWS )
+        self._current_pending = ClientGUICommon.BetterRadioBox( self, choices = [ ( 'currently in', HC.CONTENT_STATUS_CURRENT ), ( 'pending to', HC.CONTENT_STATUS_PENDING ) ], style = wx.RA_SPECIFY_ROWS )
         
         services = HydrusGlobals.client_controller.GetServicesManager().GetServices( HC.FILE_SERVICES )
         
@@ -194,7 +194,10 @@ class PanelPredicateSystemHash( PanelPredicateSystem ):
     
     def GetInfo( self ):
         
-        hex_filter = lambda c: c in string.hexdigits
+        def hex_filter( c ):
+            
+            return c in string.hexdigits
+            
         
         hash = filter( hex_filter, self._hash.GetValue().lower() )
         
@@ -298,7 +301,7 @@ class PanelPredicateSystemMime( PanelPredicateSystem ):
             mimes = ( mimes, )
             
         
-        self._mimes.SetInfo( mimes )
+        self._mimes.SetValue( mimes )
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
@@ -310,7 +313,7 @@ class PanelPredicateSystemMime( PanelPredicateSystem ):
     
     def GetInfo( self ):
         
-        mimes = self._mimes.GetInfo()
+        mimes = self._mimes.GetValue()
         
         return mimes
         
@@ -545,11 +548,11 @@ class PanelPredicateSystemRating( PanelPredicateSystem ):
                 
                 if rating_state == ClientRatings.LIKE:
                     
-                    value = '1'
+                    value = 1
                     
                 elif rating_state == ClientRatings.DISLIKE:
                     
-                    value = '0'
+                    value = 0
                     
                 
                 service_key = ctrl.GetServiceKey()
@@ -685,7 +688,10 @@ class PanelPredicateSystemSimilarTo( PanelPredicateSystem ):
     
     def GetInfo( self ):
         
-        hex_filter = lambda c: c in string.hexdigits
+        def hex_filter( c ):
+            
+            return c in string.hexdigits
+            
         
         hash = filter( hex_filter, self._hash.GetValue().lower() )
         

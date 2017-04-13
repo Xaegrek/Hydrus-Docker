@@ -1,32 +1,23 @@
 import ClientConstants as CC
 import ClientDefaults
 import ClientDownloading
-import ClientFiles
-import ClientNetworking
 import ClientThreading
 import collections
 import HydrusConstants as HC
+import HydrusData
 import HydrusExceptions
-import HydrusFileHandling
+import HydrusGlobals
 import HydrusPaths
 import HydrusSerialisable
 import HydrusTags
 import threading
 import traceback
 import os
-import random
-import requests
-import shutil
 import sqlite3
-import stat
 import sys
 import time
-import urllib
 import wx
 import yaml
-import HydrusData
-import HydrusGlobals
-import HydrusThreading
 
 def AddPaddingToDimensions( dimensions, padding ):
     
@@ -205,35 +196,6 @@ def DeletePath( path ):
         HydrusPaths.DeletePath( path )
         
     
-def GenerateService( service_key, service_type, name, info ):
-    
-    if service_type in HC.REPOSITORIES:
-        
-        cl = ServiceRepository
-        
-    elif service_type in HC.RESTRICTED_SERVICES:
-        
-        cl = ServiceRestricted
-        
-    elif service_type == HC.IPFS:
-        
-        cl = ServiceIPFS
-        
-    elif service_type in HC.REMOTE_SERVICES:
-        
-        cl = ServiceRemote
-        
-    elif service_type == HC.LOCAL_BOORU:
-        
-        cl = ServiceLocalBooru
-        
-    else:
-        
-        cl = Service
-        
-    
-    return cl( service_key, service_type, name, info )
-    
 def GetMediasTagCount( pool, tag_service_key = CC.COMBINED_TAG_SERVICE_KEY, collapse_siblings = False ):
     
     siblings_manager = HydrusGlobals.client_controller.GetManager( 'tag_siblings' )
@@ -267,10 +229,10 @@ def GetMediasTagCount( pool, tag_service_key = CC.COMBINED_TAG_SERVICE_KEY, coll
             statuses_to_tags = siblings_manager.CollapseStatusesToTags( tag_service_key, statuses_to_tags )
             
         
-        current_tags_to_count.update( statuses_to_tags[ HC.CURRENT ] )
-        deleted_tags_to_count.update( statuses_to_tags[ HC.DELETED ] )
-        pending_tags_to_count.update( statuses_to_tags[ HC.PENDING ] )
-        petitioned_tags_to_count.update( statuses_to_tags[ HC.PETITIONED ] )
+        current_tags_to_count.update( statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ] )
+        deleted_tags_to_count.update( statuses_to_tags[ HC.CONTENT_STATUS_DELETED ] )
+        pending_tags_to_count.update( statuses_to_tags[ HC.CONTENT_STATUS_PENDING ] )
+        petitioned_tags_to_count.update( statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ] )
         
     
     return ( current_tags_to_count, deleted_tags_to_count, pending_tags_to_count, petitioned_tags_to_count )
@@ -326,7 +288,7 @@ def MergeCounts( min_a, max_a, min_b, max_b ):
     
     return ( min_answer, max_answer )
     
-def MergePredicates( predicates ):
+def MergePredicates( predicates, add_namespaceless = False ):
     
     master_predicate_dict = {}
     
@@ -344,7 +306,56 @@ def MergePredicates( predicates ):
             
         
     
+    if add_namespaceless:
+        
+        # we want to include the count for namespaced tags in the namespaceless version when:
+        # there exists more than one instance of the subtag with different namespaces, including '', that has nonzero count
+        
+        unnamespaced_predicate_dict = {}
+        subtag_nonzero_instance_counter = collections.Counter()
+        
+        for predicate in master_predicate_dict.values():
+            
+            if predicate.HasNonZeroCount():
+                
+                unnamespaced_predicate = predicate.GetUnnamespacedCopy()
+                
+                subtag_nonzero_instance_counter[ unnamespaced_predicate ] += 1
+                
+                if unnamespaced_predicate in unnamespaced_predicate_dict:
+                    
+                    unnamespaced_predicate_dict[ unnamespaced_predicate ].AddCounts( unnamespaced_predicate )
+                    
+                else:
+                    
+                    unnamespaced_predicate_dict[ unnamespaced_predicate ] = unnamespaced_predicate
+                    
+                
+            
+        
+        for ( unnamespaced_predicate, count ) in subtag_nonzero_instance_counter.items():
+            
+            # if there were indeed several instances of this subtag, overwrte the master dict's instance with our new count total
+            
+            if count > 1:
+                
+                master_predicate_dict[ unnamespaced_predicate ] = unnamespaced_predicate_dict[ unnamespaced_predicate ]
+                
+            
+        
+    
     return master_predicate_dict.values()
+    
+def ReportShutdownException():
+    
+    text = 'A serious error occured while trying to exit the program. Its traceback may be shown next. It should have also been written to client.log. You may need to quit the program from task manager.'
+    
+    HydrusData.DebugPrint( text )
+    
+    HydrusData.DebugPrint( traceback.format_exc() )
+    
+    wx.CallAfter( wx.MessageBox, traceback.format_exc() )
+    wx.CallAfter( wx.MessageBox, text )
     
 def ShowExceptionClient( e ):
     
@@ -439,22 +450,17 @@ def SortTagsList( tags, sort_type ):
         
         def key( tag ):
             
-            if ':' in tag:
+            # '{' is above 'z' in ascii, so this works for most situations
+            
+            ( namespace, subtag ) = HydrusTags.SplitTag( tag )
+            
+            if namespace == '':
                 
-                ( namespace, subtag ) = tag.split( ':', 1 )
-                
-                if namespace == '':
-                    
-                    return ( '{', subtag )
-                    
-                else:
-                    
-                    return ( namespace, subtag )
-                    
+                return ( '{', subtag )
                 
             else:
                 
-                return ( '{', tag ) # '{' is above 'z' in ascii, so this works for most situations
+                return ( namespace, subtag )
                 
             
         
@@ -479,6 +485,112 @@ def WaitPolitely( page_key = None ):
         HydrusGlobals.client_controller.pub( 'waiting_politely', page_key, False )
         
     
+class ApplicationCommand( HydrusSerialisable.SerialisableBase ):
+    
+    SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_APPLICATION_COMMAND
+    SERIALISABLE_VERSION = 1
+    
+    def __init__( self, command_type = None, data = None ):
+        
+        if command_type is None:
+            
+            command_type = CC.APPLICATION_COMMAND_TYPE_SIMPLE
+            
+        
+        if data is None:
+            
+            data = 'archive'
+            
+        
+        HydrusSerialisable.SerialisableBase.__init__( self )
+        
+        self._command_type = command_type
+        self._data = data
+        
+    
+    def __cmp__( self, other ):
+        
+        return cmp( self.ToString(), other.ToString() )
+        
+    
+    def _GetSerialisableInfo( self ):
+        
+        if self._command_type == CC.APPLICATION_COMMAND_TYPE_SIMPLE:
+            
+            serialisable_data = self._data
+            
+        elif self._command_type == CC.APPLICATION_COMMAND_TYPE_CONTENT:
+            
+            ( service_key, content_type, action, value ) = self._data
+            
+            serialisable_data = ( service_key.encode( 'hex' ), content_type, action, value )
+            
+        
+        return ( self._command_type, serialisable_data )
+        
+    
+    def _InitialiseFromSerialisableInfo( self, serialisable_info ):
+        
+        ( self._command_type, serialisable_data ) = serialisable_info
+        
+        if self._command_type == CC.APPLICATION_COMMAND_TYPE_SIMPLE:
+            
+            self._data = serialisable_data
+            
+        elif self._command_type == CC.APPLICATION_COMMAND_TYPE_CONTENT:
+            
+            ( serialisable_service_key, content_type, action, value ) = serialisable_data
+            
+            self._data = ( serialisable_service_key.decode( 'hex' ), content_type, action, value )
+            
+        
+    
+    def GetCommandType( self ):
+        
+        return self._command_type
+        
+    
+    def GetData( self ):
+        
+        return self._data
+        
+    
+    def ToString( self ):
+        
+        if self._command_type == CC.APPLICATION_COMMAND_TYPE_SIMPLE:
+            
+            return self._data
+            
+        elif self._command_type == CC.APPLICATION_COMMAND_TYPE_CONTENT:
+            
+            ( service_key, content_type, action, value ) = self._data
+            
+            components = []
+            
+            components.append( HC.content_update_string_lookup[ action ] )
+            components.append( HC.content_type_string_lookup[ content_type ] )
+            components.append( '"' + HydrusData.ToUnicode( value ) + '"' )
+            components.append( 'for' )
+            
+            services_manager = HydrusGlobals.client_controller.GetServicesManager()
+            
+            if services_manager.ServiceExists( service_key ):
+                
+                service = services_manager.GetService( service_key )
+                
+                components.append( service.GetName() )
+                
+            else:
+                
+                components.append( 'unknown service!' )
+                
+            
+            return ' '.join( components )
+            
+        
+    
+HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_APPLICATION_COMMAND ] = ApplicationCommand
+
 class Booru( HydrusData.HydrusYAMLBase ):
     
     yaml_tag = u'!Booru'
@@ -553,6 +665,8 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         self._dictionary[ 'booleans' ][ 'add_parents_on_manage_tags' ] = True
         self._dictionary[ 'booleans' ][ 'replace_siblings_on_manage_tags' ] = True
         
+        self._dictionary[ 'booleans' ][ 'get_tags_if_url_known_and_file_redundant' ] = False
+        
         self._dictionary[ 'booleans' ][ 'show_related_tags' ] = False
         self._dictionary[ 'booleans' ][ 'show_file_lookup_script_tags' ] = False
         self._dictionary[ 'booleans' ][ 'hide_message_manager_on_gui_iconise' ] = HC.PLATFORM_OSX
@@ -562,9 +676,11 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         self._dictionary[ 'booleans' ][ 'use_system_ffmpeg' ] = False
         
-        self._dictionary[ 'booleans' ][ 'maintain_similar_files_phashes_during_idle' ] = False
-        self._dictionary[ 'booleans' ][ 'maintain_similar_files_tree_during_idle' ] = False
         self._dictionary[ 'booleans' ][ 'maintain_similar_files_duplicate_pairs_during_idle' ] = False
+        
+        self._dictionary[ 'booleans' ][ 'show_namespaces' ] = True
+        
+        self._dictionary[ 'booleans' ][ 'verify_regular_https' ] = True
         
         #
         
@@ -595,7 +711,7 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         self._dictionary[ 'noneable_integers' ][ 'disk_cache_maintenance_mb' ] = 256
         self._dictionary[ 'noneable_integers' ][ 'disk_cache_init_period' ] = 4
         
-        self._dictionary[ 'noneable_integers' ][ 'num_recent_tags' ] = None
+        self._dictionary[ 'noneable_integers' ][ 'num_recent_tags' ] = 20
         
         self._dictionary[ 'noneable_integers' ][ 'maintenance_vacuum_period_days' ] = 30
         
@@ -609,6 +725,8 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         self._dictionary[ 'strings' ] = {}
         
         self._dictionary[ 'strings' ][ 'main_gui_title' ] = 'hydrus client'
+        self._dictionary[ 'strings' ][ 'namespace_connector' ] = ':'
+        self._dictionary[ 'strings' ][ 'export_phrase' ] = '{hash}'
         
         #
         
@@ -643,15 +761,14 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         # media_show_action, preview_show_action, ( media_scale_up, media_scale_down, preview_scale_up, preview_scale_down, exact_zooms_only, scale_up_quality, scale_down_quality ) )
         
-        jpg_zoom_info = ( CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, False, CC.ZOOM_LANCZOS4, CC.ZOOM_AREA )
-        png_zoom_info = ( CC.MEDIA_VIEWER_SCALE_MAX_REGULAR, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, True, CC.ZOOM_NEAREST, CC.ZOOM_AREA )
+        image_zoom_info = ( CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, False, CC.ZOOM_LANCZOS4, CC.ZOOM_AREA )
         gif_zoom_info = ( CC.MEDIA_VIEWER_SCALE_MAX_REGULAR, CC.MEDIA_VIEWER_SCALE_MAX_REGULAR, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, True, CC.ZOOM_LANCZOS4, CC.ZOOM_AREA )
         flash_zoom_info = ( CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, False, CC.ZOOM_LINEAR, CC.ZOOM_LINEAR )
         video_zoom_info = ( CC.MEDIA_VIEWER_SCALE_100, CC.MEDIA_VIEWER_SCALE_MAX_REGULAR, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, CC.MEDIA_VIEWER_SCALE_TO_CANVAS, True, CC.ZOOM_LANCZOS4, CC.ZOOM_AREA )
         null_zoom_info = ( CC.MEDIA_VIEWER_SCALE_100, CC.MEDIA_VIEWER_SCALE_100, CC.MEDIA_VIEWER_SCALE_100, CC.MEDIA_VIEWER_SCALE_100, False, CC.ZOOM_LINEAR, CC.ZOOM_LINEAR )
         
-        self._dictionary[ 'media_view' ][ HC.IMAGE_JPEG ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, jpg_zoom_info )
-        self._dictionary[ 'media_view' ][ HC.IMAGE_PNG ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, png_zoom_info )
+        self._dictionary[ 'media_view' ][ HC.IMAGE_JPEG ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, image_zoom_info )
+        self._dictionary[ 'media_view' ][ HC.IMAGE_PNG ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, image_zoom_info )
         self._dictionary[ 'media_view' ][ HC.IMAGE_GIF ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, gif_zoom_info )
         
         if HC.PLATFORM_WINDOWS:
@@ -664,6 +781,9 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
         self._dictionary[ 'media_view' ][ HC.APPLICATION_PDF ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, null_zoom_info )
+        self._dictionary[ 'media_view' ][ HC.APPLICATION_HYDRUS_UPDATE_CONTENT ] = ( CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW, CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW, null_zoom_info )
+        self._dictionary[ 'media_view' ][ HC.APPLICATION_HYDRUS_UPDATE_DEFINITIONS ] = ( CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW, CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW, null_zoom_info )
+        
         self._dictionary[ 'media_view' ][ HC.VIDEO_AVI ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, video_zoom_info )
         self._dictionary[ 'media_view' ][ HC.VIDEO_FLV ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, video_zoom_info )
         self._dictionary[ 'media_view' ][ HC.VIDEO_MOV ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, CC.MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, video_zoom_info )
@@ -1237,7 +1357,7 @@ class Credentials( HydrusData.HydrusYAMLBase ):
     def HasAccessKey( self ): return self._access_key is not None and self._access_key is not ''
     
     def SetAccessKey( self, access_key ): self._access_key = access_key
-
+    
 class Imageboard( HydrusData.HydrusYAMLBase ):
     
     yaml_tag = u'!Imageboard'
@@ -1460,1363 +1580,232 @@ class ImportTagOptions( HydrusSerialisable.SerialisableBase ):
         return service_keys_to_content_updates
         
     
-    def ShouldFetchTags( self ):
+    def InterestedInTags( self ):
         
-        i_am_interested_in_namespaces = len( self._service_keys_to_namespaces ) > 0
+        i_am_interested = len( self._service_keys_to_namespaces ) > 0
         
-        return i_am_interested_in_namespaces
+        return i_am_interested
         
     
 HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_TAG_OPTIONS ] = ImportTagOptions
 
-class Service( object ):
+class Shortcut( HydrusSerialisable.SerialisableBase ):
     
-    def __init__( self, service_key, service_type, name, info ):
-        
-        self._service_key = service_key
-        self._service_type = service_type
-        self._name = name
-        self._info = info
-        
-        self._lock = threading.Lock()
-        
-        HydrusGlobals.client_controller.sub( self, 'ProcessServiceUpdates', 'service_updates_data' )
-        
+    SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUT
+    SERIALISABLE_VERSION = 1
     
-    def __hash__( self ): return self._service_key.__hash__()
-    
-    def _ProcessServiceUpdate( self, service_update ):
+    def __init__( self, shortcut_type = None, shortcut_key = None, modifiers = None ):
         
-        pass
-        
-    
-    def GetInfo( self, key = None ):
-        
-        if key is None:
+        if shortcut_type is None:
             
-            return self._info
-            
-        else:
-            
-            return self._info[ key ]
+            shortcut_type = CC.SHORTCUT_TYPE_KEYBOARD
             
         
-    
-    def GetServiceKey( self ): return self._service_key
-    
-    def GetName( self ): return self._name
-    
-    def GetServiceType( self ): return self._service_type
-    
-    def ProcessServiceUpdates( self, service_keys_to_service_updates ):
-        
-        for ( service_key, service_updates ) in service_keys_to_service_updates.items():
+        if shortcut_key is None:
             
-            for service_update in service_updates:
+            shortcut_key = wx.WXK_F7
+            
+        
+        if modifiers is None:
+            
+            modifiers = []
+            
+        
+        modifiers.sort()
+        
+        HydrusSerialisable.SerialisableBase.__init__( self )
+        
+        self._shortcut_type = shortcut_type
+        self._shortcut_key = shortcut_key
+        self._modifiers = modifiers
+        
+    
+    def __cmp__( self, other ):
+        
+        return cmp( self.ToString(), other.ToString() )
+        
+    
+    def __eq__( self, other ):
+        
+        return self.__hash__() == other.__hash__()
+        
+    
+    def __hash__( self ):
+        
+        return ( self._shortcut_type, self._shortcut_key, tuple( self._modifiers ) ).__hash__()
+        
+    
+    def _GetSerialisableInfo( self ):
+        
+        return ( self._shortcut_type, self._shortcut_key, self._modifiers )
+        
+    
+    def _InitialiseFromSerialisableInfo( self, serialisable_info ):
+        
+        ( self._shortcut_type, self._shortcut_key, self._modifiers ) = serialisable_info
+        
+    
+    def GetShortcutType( self ):
+        
+        return self._shortcut_type
+        
+    
+    def ToString( self ):
+        
+        components = []
+        
+        if CC.SHORTCUT_MODIFIER_CTRL in self._modifiers:
+            
+            components.append( 'ctrl' )
+            
+        
+        if CC.SHORTCUT_MODIFIER_ALT in self._modifiers:
+            
+            components.append( 'alt' )
+            
+        
+        if CC.SHORTCUT_MODIFIER_SHIFT in self._modifiers:
+            
+            components.append( 'shift' )
+            
+        
+        if self._shortcut_type == CC.SHORTCUT_TYPE_KEYBOARD:
+            
+            if self._shortcut_key in range( 65, 91 ):
                 
-                if service_key == self._service_key:
-                    
-                    self._ProcessServiceUpdate( service_update )
-                    
+                components.append( chr( self._shortcut_key + 32 ) ) # + 32 for converting ascii A -> a
                 
-            
-        
-    
-    def ToTuple( self ): return ( self._service_key, self._service_type, self._name, self._info )
-    
-class ServiceLocalBooru( Service ):
-    
-    def _ProcessServiceUpdate( self, service_update ):
-        
-        Service._ProcessServiceUpdate( self, service_update )
-        
-        ( action, row ) = service_update.ToTuple()
-        
-        if action == HC.SERVICE_UPDATE_REQUEST_MADE:
-            
-            num_bytes = row
-            
-            self._info[ 'used_monthly_data' ] += num_bytes
-            self._info[ 'used_monthly_requests' ] += 1
-            
-        
-    
-class ServiceRemote( Service ):
-    
-    def GetCredentials( self ):
-        
-        host = self._info[ 'host' ]
-        port = self._info[ 'port' ]
-        
-        credentials = Credentials( host, port )
-        
-        return credentials
-        
-    
-    def _GetErrorWaitPeriod( self ):
-        
-        return 3600 * 4
-        
-    
-    def _ProcessServiceUpdate( self, service_update ):
-        
-        Service._ProcessServiceUpdate( self, service_update )
-        
-        ( action, row ) = service_update.ToTuple()
-        
-        if action == HC.SERVICE_UPDATE_ERROR:
-            
-            self._info[ 'last_error' ] = HydrusData.GetNow()
-            
-        elif action == HC.SERVICE_UPDATE_RESET:
-            
-            self._info[ 'last_error' ] = 0
-            
-        
-    
-    def GetRecentErrorPending( self ):
-        
-        return HydrusData.ConvertTimestampToPrettyPending( self._info[ 'last_error' ] + self._GetErrorWaitPeriod() )
-        
-    
-    def HasRecentError( self ):
-        
-        return not HydrusData.TimeHasPassed( self._info[ 'last_error' ] + self._GetErrorWaitPeriod() )
-        
-    
-    def SetCredentials( self, credentials ):
-        
-        ( host, port ) = credentials.GetAddress()
-        
-        self._info[ 'host' ] = host
-        self._info[ 'port' ] = port
-        
-    
-class ServiceRestricted( ServiceRemote ):
-    
-    def _GetErrorWaitPeriod( self ):
-        
-        if 'account' in self._info and self._info[ 'account' ].HasPermission( HC.GENERAL_ADMIN ):
-            
-            return 900
-            
-        else:
-            
-            return ServiceRemote._GetErrorWaitPeriod( self )
-            
-        
-    
-    def _ProcessServiceUpdate( self, service_update ):
-        
-        ServiceRemote._ProcessServiceUpdate( self, service_update )
-        
-        ( action, row ) = service_update.ToTuple()
-        
-        if action == HC.SERVICE_UPDATE_ACCOUNT:
-            
-            account = row
-            
-            self._info[ 'account' ] = account
-            self._info[ 'last_error' ] = 0
-            
-        elif action == HC.SERVICE_UPDATE_REQUEST_MADE:
-            
-            num_bytes = row
-            
-            self._info[ 'account' ].RequestMade( num_bytes )
-            
-        
-    
-    def _RecordHydrusBandwidth( self, method, command, data_used ):
-        
-        if ( self._service_type, method, command ) in HC.BANDWIDTH_CONSUMING_REQUESTS:
-            
-            HydrusGlobals.client_controller.pub( 'service_updates_delayed', { self._service_key : [ HydrusData.ServiceUpdate( HC.SERVICE_UPDATE_REQUEST_MADE, data_used ) ] } )
-            
-        
-    
-    def CanDownload( self ):
-        
-        return self._info[ 'account' ].HasPermission( HC.GET_DATA ) and not self.HasRecentError()
-        
-    
-    def CanUpload( self ): return self._info[ 'account' ].HasPermission( HC.POST_DATA ) and not self.HasRecentError()
-    
-    def GetCredentials( self ):
-        
-        host = self._info[ 'host' ]
-        port = self._info[ 'port' ]
-        
-        if 'access_key' in self._info:
-            
-            access_key = self._info[ 'access_key' ]
-            
-        else:
-            
-            access_key = None
-            
-        
-        credentials = Credentials( host, port, access_key )
-        
-        return credentials
-        
-    
-    def IsInitialised( self ):
-        
-        if self._service_type == HC.SERVER_ADMIN:
-            
-            return 'access_key' in self._info
-            
-        else:
-            
-            return True
-            
-        
-    
-    def Request( self, method, command, request_args = None, request_headers = None, report_hooks = None, temp_path = None, return_cookies = False ):
-        
-        if request_args is None: request_args = {}
-        if request_headers is None: request_headers = {}
-        if report_hooks is None: report_hooks = []
-        
-        try:
-            
-            credentials = self.GetCredentials()
-            
-            if command in ( 'access_key', 'init', '' ):
+            elif self._shortcut_key in range( 97, 123 ):
                 
-                pass
-                
-            elif command in ( 'session_key', 'access_key_verification' ):
-                
-                ClientNetworking.AddHydrusCredentialsToHeaders( credentials, request_headers )
+                components.append( chr( self._shortcut_key ) )
                 
             else:
                 
-                ClientNetworking.AddHydrusSessionKeyToHeaders( self._service_key, request_headers )
+                components.append( CC.wxk_code_string_lookup[ self._shortcut_key ] )
                 
             
-            path = '/' + command
+        elif self._shortcut_type == CC.SHORTCUT_TYPE_MOUSE:
             
-            if method == HC.GET:
-                
-                query = ClientNetworking.ConvertHydrusGETArgsToQuery( request_args )
-                
-                body = ''
-                
-            elif method == HC.POST:
-                
-                query = ''
-                
-                if command == 'file':
-                    
-                    content_type = HC.APPLICATION_OCTET_STREAM
-                    
-                    body = request_args[ 'file' ]
-                    
-                    del request_args[ 'file' ]
-                    
-                else:
-                    
-                    if isinstance( request_args, HydrusSerialisable.SerialisableDictionary ):
-                        
-                        content_type = HC.APPLICATION_JSON
-                        
-                        body = request_args.DumpToNetworkString()
-                        
-                    else:
-                        
-                        content_type = HC.APPLICATION_YAML
-                        
-                        body = yaml.safe_dump( request_args )
-                        
-                    
-                
-                request_headers[ 'Content-Type' ] = HC.mime_string_lookup[ content_type ]
-                
+            components.append( CC.shortcut_mouse_string_lookup[ self._shortcut_key ] )
             
-            if query != '':
-                
-                path_and_query = path + '?' + query
-                
-            else:
-                
-                path_and_query = path
-                
-            
-            ( host, port ) = credentials.GetAddress()
-            
-            url = 'https://' + host + ':' + str( port ) + path_and_query
-            
-            ( response, size_of_response, response_headers, cookies ) = HydrusGlobals.client_controller.DoHTTP( method, url, request_headers, body, report_hooks = report_hooks, temp_path = temp_path, hydrus_network = True )
-            
-            ClientNetworking.CheckHydrusVersion( self._service_key, self._service_type, response_headers )
-            
-            if method == HC.GET:
-                
-                data_used = size_of_response
-                
-            elif method == HC.POST:
-                
-                data_used = len( body )
-                
-            
-            self._RecordHydrusBandwidth( method, command, data_used )
-            
-            if return_cookies:
-                
-                return ( response, cookies )
-                
-            else:
-                
-                return response
-                
-            
-        except Exception as e:
-            
-            if not isinstance( e, HydrusExceptions.ServerBusyException ):
-                
-                if isinstance( e, HydrusExceptions.SessionException ):
-                    
-                    session_manager = HydrusGlobals.client_controller.GetClientSessionManager()
-                    
-                    session_manager.DeleteSessionKey( self._service_key )
-                    
-                
-                HydrusGlobals.client_controller.Write( 'service_updates', { self._service_key : [ HydrusData.ServiceUpdate( HC.SERVICE_UPDATE_ERROR, HydrusData.ToUnicode( e ) ) ] } )
-                
-                if isinstance( e, HydrusExceptions.PermissionException ):
-                    
-                    if 'account' in self._info:
-                        
-                        account_key = self._info[ 'account' ].GetAccountKey()
-                        
-                        unknown_account = HydrusData.GetUnknownAccount( account_key )
-                        
-                    else: unknown_account = HydrusData.GetUnknownAccount()
-                    
-                    HydrusGlobals.client_controller.Write( 'service_updates', { self._service_key : [ HydrusData.ServiceUpdate( HC.SERVICE_UPDATE_ACCOUNT, unknown_account ) ] } )
-                    
-                
-            
-            raise
-            
+        
+        return '+'.join( components )
         
     
-    def SetCredentials( self, credentials ):
-        
-        ServiceRemote.SetCredentials( self, credentials )
-        
-        if credentials.HasAccessKey():
-            
-            self._info[ 'access_key' ] = credentials.GetAccessKey()
-            
-        
-    
-class ServiceRepository( ServiceRestricted ):
-    
-    def _ProcessServiceUpdate( self, service_update ):
-        
-        ServiceRestricted._ProcessServiceUpdate( self, service_update )
-        
-        ( action, row ) = service_update.ToTuple()
-        
-        if action == HC.SERVICE_UPDATE_RESET:
-            
-            if 'next_processing_timestamp' in self._info:
-                
-                self._info[ 'next_processing_timestamp' ] = 0
-                
-            
-        elif action == HC.SERVICE_UPDATE_NEXT_DOWNLOAD_TIMESTAMP:
-            
-            next_download_timestamp = row
-            
-            if next_download_timestamp > self._info[ 'next_download_timestamp' ]:
-                
-                if self._info[ 'first_timestamp' ] is None: self._info[ 'first_timestamp' ] = next_download_timestamp
-                
-                self._info[ 'next_download_timestamp' ] = next_download_timestamp
-                
-            
-        elif action == HC.SERVICE_UPDATE_NEXT_PROCESSING_TIMESTAMP:
-            
-            next_processing_timestamp = row
-            
-            if next_processing_timestamp > self._info[ 'next_processing_timestamp' ]:
-                
-                self._info[ 'next_processing_timestamp' ] = next_processing_timestamp
-                
-            
-        elif action == HC.SERVICE_UPDATE_PAUSE:
-            
-            self._info[ 'paused' ] = True
-            
-        
-    
-    def _ReportSyncProcessingError( self, path, error_text ):
-        
-        text = 'While synchronising ' + self._name + ', the expected update file ' + path + ', ' + error_text + '.'
-        text += os.linesep * 2
-        text += 'The service has been indefinitely paused.'
-        text += os.linesep * 2
-        text += 'This is a serious error. Unless you know what went wrong, you should contact the developer.'
-        
-        HydrusData.ShowText( text )
-        
-        service_updates = [ HydrusData.ServiceUpdate( HC.SERVICE_UPDATE_PAUSE ) ]
-        
-        service_keys_to_service_updates = { self._service_key : service_updates }
-        
-        self.ProcessServiceUpdates( service_keys_to_service_updates )
-        
-        HydrusGlobals.client_controller.Write( 'service_updates', service_keys_to_service_updates )
-        
-    
-    def CanDownloadUpdate( self ):
-        
-        work_to_do = self.IsUpdateDueForDownload()
-        
-        return work_to_do and self.CanDownload() and not self.IsPaused()
-        
-    
-    def CanProcessUpdate( self ):
-        
-        work_to_do = self.IsUpdateDueForProcessing()
-        
-        it_is_time = HydrusData.TimeHasPassed( self._info[ 'next_processing_timestamp' ] + HC.UPDATE_DURATION + HC.options[ 'processing_phase' ] )
-        
-        return work_to_do and it_is_time and not self.IsPaused()
-        
-    
-    def GetTimestamps( self ): return ( self._info[ 'first_timestamp' ], self._info[ 'next_download_timestamp' ], self._info[ 'next_processing_timestamp' ] )
-    
-    def GetUpdateStatus( self ):
-        
-        account = self._info[ 'account' ]
-        
-        now = HydrusData.GetNow()
-        first_timestamp = self._info[ 'first_timestamp' ]
-        next_download_timestamp = self._info[ 'next_download_timestamp' ]
-        next_processing_timestamp = self._info[ 'next_processing_timestamp' ]
-        
-        if first_timestamp is None:
-            
-            num_updates = 0
-            num_updates_downloaded = 0
-            num_updates_processed = 0
-            
-        else:
-            
-            num_updates = ( now - first_timestamp ) / HC.UPDATE_DURATION
-            num_updates_downloaded = ( next_download_timestamp - first_timestamp ) / HC.UPDATE_DURATION
-            num_updates_processed = max( 0, ( next_processing_timestamp - first_timestamp ) / HC.UPDATE_DURATION )
-            
-        
-        downloaded_text = 'downloaded ' + HydrusData.ConvertValueRangeToPrettyString( num_updates_downloaded, num_updates )
-        processed_text = 'processed ' + HydrusData.ConvertValueRangeToPrettyString( num_updates_processed, num_updates )
-        
-        if self.IsPaused() or not self._info[ 'account' ].HasPermission( HC.GET_DATA ): status = 'updates on hold'
-        else:
-            
-            if self.CanDownloadUpdate(): status = 'downloaded up to ' + HydrusData.ConvertTimestampToPrettySync( self._info[ 'next_download_timestamp' ] )
-            elif self.CanProcessUpdate(): status = 'processed up to ' + HydrusData.ConvertTimestampToPrettySync( self._info[ 'next_processing_timestamp' ] )
-            elif self.HasRecentError(): status = 'due to a previous error, update is delayed - next check ' + self.GetRecentErrorPending()
-            else:
-                
-                if HydrusData.TimeHasPassed( self._info[ 'next_download_timestamp' ] + HC.UPDATE_DURATION ):
-                    
-                    status = 'next update will be downloaded soon'
-                    
-                else:
-                    
-                    status = 'fully synchronised - next update ' + HydrusData.ConvertTimestampToPrettyPending( self._info[ 'next_download_timestamp' ] + HC.UPDATE_DURATION + 1800 )
-                    
-                
-            
-        
-        return downloaded_text + ' - ' + processed_text + ' - ' + status
-        
-    
-    def IsPaused( self ):
-        
-        return self._info[ 'paused' ]
-        
-    
-    def IsUpdateDueForDownload( self ):
-        
-        return HydrusData.TimeHasPassed( self._info[ 'next_download_timestamp' ] + HC.UPDATE_DURATION + 1800 )
-        
-    
-    def IsUpdateDueForProcessing( self ):
-        
-        return self._info[ 'next_download_timestamp' ] > self._info[ 'next_processing_timestamp' ]
-        
-    
-    def Sync( self, only_when_idle = False, stop_time = None ):
-        
-        if self.IsPaused():
-            
-            return
-            
-        
-        if not self.CanDownloadUpdate() and not self.CanProcessUpdate():
-            
-            return
-            
-        
-        job_key = ClientThreading.JobKey( pausable = False, cancellable = True, only_when_idle = only_when_idle, stop_time = stop_time )
-        
-        ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-        
-        if should_quit:
-            
-            return
-            
-        
-        num_updates_downloaded = 0
-        num_updates_processed = 0
-        total_content_weight_processed = 0
-        
-        try:
-            
-            options = HydrusGlobals.client_controller.GetOptions()
-            
-            HydrusGlobals.client_controller.pub( 'splash_set_title_text', self._name )
-            job_key.SetVariable( 'popup_title', 'repository synchronisation - ' + self._name )
-            
-            HydrusGlobals.client_controller.pub( 'message', job_key )
-            
-            try:
-                
-                while self.CanDownloadUpdate():
-                    
-                    if options[ 'pause_repo_sync' ]:
-                        
-                        break
-                        
-                    
-                    ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-                    
-                    if should_quit:
-                        
-                        break
-                        
-                    
-                    if self._info[ 'first_timestamp' ] is None:
-                        
-                        gauge_range = None
-                        gauge_value = 0
-                        
-                        update_index_string = 'initial update: '
-                        
-                    else:
-                        
-                        gauge_range = ( HydrusData.GetNow() - self._info[ 'first_timestamp' ] ) / HC.UPDATE_DURATION
-                        gauge_value = ( ( self._info[ 'next_download_timestamp' ] - self._info[ 'first_timestamp' ] ) / HC.UPDATE_DURATION ) + 1
-                        
-                        update_index_string = 'update ' + HydrusData.ConvertValueRangeToPrettyString( gauge_value, gauge_range ) + ': '
-                        
-                    
-                    subupdate_index_string = 'service update: '
-                    
-                    HydrusGlobals.client_controller.pub( 'splash_set_title_text', self._name + ' - ' + update_index_string + subupdate_index_string )
-                    HydrusGlobals.client_controller.pub( 'splash_set_status_text', 'downloading' )
-                    job_key.SetVariable( 'popup_text_1', update_index_string + subupdate_index_string + 'downloading and parsing' )
-                    job_key.SetVariable( 'popup_gauge_1', ( gauge_value, gauge_range ) )
-                    
-                    service_update_package = self.Request( HC.GET, 'service_update_package', { 'begin' : self._info[ 'next_download_timestamp' ] } )
-                    
-                    begin = service_update_package.GetBegin()
-                    
-                    subindex_count = service_update_package.GetSubindexCount()
-                    
-                    for subindex in range( subindex_count ):
-                        
-                        path = ClientFiles.GetExpectedContentUpdatePackagePath( self._service_key, begin, subindex )
-                        
-                        if os.path.exists( path ):
-                            
-                            size = os.path.getsize( path )
-                            
-                            if size == 0:
-                                
-                                os.remove( path )
-                                
-                            
-                        
-                        if not os.path.exists( path ):
-                            
-                            subupdate_index_string = 'content update ' + HydrusData.ConvertValueRangeToPrettyString( subindex + 1, subindex_count ) + ': '
-                            
-                            HydrusGlobals.client_controller.pub( 'splash_set_title_text', self._name + ' - ' + update_index_string + subupdate_index_string )
-                            job_key.SetVariable( 'popup_text_1', update_index_string + subupdate_index_string + 'downloading and parsing' )
-                            
-                            content_update_package = self.Request( HC.GET, 'content_update_package', { 'begin' : begin, 'subindex' : subindex } )
-                            
-                            obj_string = content_update_package.DumpToNetworkString()
-                            
-                            job_key.SetVariable( 'popup_text_1', update_index_string + subupdate_index_string + 'saving to disk' )
-                            
-                            with open( path, 'wb' ) as f: f.write( obj_string )
-                            
-                        
-                    
-                    job_key.SetVariable( 'popup_text_1', update_index_string + 'committing' )
-                    
-                    path = ClientFiles.GetExpectedServiceUpdatePackagePath( self._service_key, begin )
-                    
-                    obj_string = service_update_package.DumpToNetworkString()
-                    
-                    with open( path, 'wb' ) as f: f.write( obj_string )
-                    
-                    service_updates = [ HydrusData.ServiceUpdate( HC.SERVICE_UPDATE_NEXT_DOWNLOAD_TIMESTAMP, service_update_package.GetNextBegin() ) ]
-                    
-                    service_keys_to_service_updates = { self._service_key : service_updates }
-                    
-                    self.ProcessServiceUpdates( service_keys_to_service_updates )
-                    
-                    HydrusGlobals.client_controller.Write( 'service_updates', service_keys_to_service_updates )
-                    
-                    HydrusGlobals.client_controller.WaitUntilPubSubsEmpty()
-                    
-                    num_updates_downloaded += 1
-                    
-                
-            except HydrusExceptions.ServerBusyException:
-                
-                job_key.SetVariable( 'popup_text_1', 'Server was too busy to respond for now, will continue with processing.' )
-                
-                time.sleep( 3 )
-                
-            except Exception as e:
-                
-                if 'Could not connect' in str( e ):
-                    
-                    job_key.SetVariable( 'popup_text_1', 'Could not connect to service, will continue with processing.' )
-                    
-                    time.sleep( 5 )
-                    
-                else:
-                    
-                    raise
-                    
-                
-            
-            if self._service_type == HC.TAG_REPOSITORY and self.CanProcessUpdate():
-                
-                HydrusGlobals.client_controller.pub( 'splash_set_status_text', 'preparing disk cache' )
-                job_key.SetVariable( 'popup_text_1', 'preparing disk cache' )
-                
-                loaded_into_disk_cache = False
-                
-                while not loaded_into_disk_cache:
-                    
-                    if options[ 'pause_repo_sync' ]:
-                        
-                        break
-                        
-                    
-                    ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-                    
-                    if should_quit:
-                        
-                        break
-                        
-                    
-                    stop_time = HydrusData.GetNow() + 30
-                    
-                    loaded_into_disk_cache = HydrusGlobals.client_controller.Read( 'load_into_disk_cache', stop_time = stop_time )
-                    
-                
-            
-            while self.CanProcessUpdate():
-                
-                if options[ 'pause_repo_sync' ]:
-                    
-                    break
-                    
-                
-                ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-                
-                if should_quit:
-                    
-                    break
-                    
-                
-                gauge_range = ( ( HydrusData.GetNow() - self._info[ 'first_timestamp' ] ) / HC.UPDATE_DURATION )
-                
-                gauge_value = ( ( self._info[ 'next_processing_timestamp' ] - self._info[ 'first_timestamp' ] ) / HC.UPDATE_DURATION ) + 1
-                
-                update_index_string = 'update ' + HydrusData.ConvertValueRangeToPrettyString( gauge_value, gauge_range ) + ': '
-                
-                subupdate_index_string = 'service update: '
-                
-                HydrusGlobals.client_controller.pub( 'splash_set_title_text', self._name + ' - ' + update_index_string + subupdate_index_string )
-                HydrusGlobals.client_controller.pub( 'splash_set_status_text', 'processing' )
-                job_key.SetVariable( 'popup_text_1', update_index_string + subupdate_index_string + 'loading from disk' )
-                job_key.SetVariable( 'popup_gauge_1', ( gauge_value, gauge_range ) )
-                
-                path = ClientFiles.GetExpectedServiceUpdatePackagePath( self._service_key, self._info[ 'next_processing_timestamp' ] )
-                
-                if not os.path.exists( path ):
-                    
-                    self._ReportSyncProcessingError( path, 'was missing' )
-                    
-                    return
-                    
-                
-                with open( path, 'rb' ) as f: obj_string = f.read()
-                
-                try:
-                    
-                    service_update_package = HydrusSerialisable.CreateFromNetworkString( obj_string )
-                    
-                    if not isinstance( service_update_package, HydrusData.ServerToClientServiceUpdatePackage ):
-                        
-                        raise Exception()
-                        
-                    
-                except:
-                    
-                    self._ReportSyncProcessingError( path, 'did not parse' )
-                    
-                    return
-                    
-                
-                subindex_count = service_update_package.GetSubindexCount()
-                
-                processing_went_ok = True
-                
-                for subindex in range( subindex_count ):
-                    
-                    should_break = False
-                    
-                    if options[ 'pause_repo_sync' ]:
-                        
-                        should_break = True
-                        
-                    
-                    ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-                    
-                    if should_quit or should_break:
-                        
-                        processing_went_ok = False
-                        
-                        break
-                        
-                    
-                    subupdate_index_string = 'content update ' + HydrusData.ConvertValueRangeToPrettyString( subindex + 1, subindex_count ) + ': '
-                    
-                    path = ClientFiles.GetExpectedContentUpdatePackagePath( self._service_key, self._info[ 'next_processing_timestamp' ], subindex )
-                    
-                    if not os.path.exists( path ):
-                        
-                        self._ReportSyncProcessingError( path, 'was missing' )
-                        
-                        return
-                        
-                    
-                    job_key.SetVariable( 'popup_text_1', update_index_string + subupdate_index_string + 'loading from disk' )
-                    
-                    with open( path, 'rb' ) as f: obj_string = f.read()
-                    
-                    job_key.SetVariable( 'popup_text_1', update_index_string + subupdate_index_string + 'parsing' )
-                    
-                    try:
-                        
-                        content_update_package = HydrusSerialisable.CreateFromNetworkString( obj_string )
-                        
-                        if not isinstance( content_update_package, HydrusData.ServerToClientContentUpdatePackage ):
-                            
-                            raise Exception()
-                            
-                        
-                    except:
-                        
-                        self._ReportSyncProcessingError( path, 'did not parse' )
-                        
-                        return
-                        
-                    
-                    HydrusGlobals.client_controller.pub( 'splash_set_title_text', self._name + ' - ' + update_index_string + subupdate_index_string )
-                    job_key.SetVariable( 'popup_text_1', update_index_string + subupdate_index_string + 'processing' )
-                    
-                    ( did_it_all, c_u_p_weight_processed ) = HydrusGlobals.client_controller.WriteSynchronous( 'content_update_package', self._service_key, content_update_package, job_key )
-                    
-                    total_content_weight_processed += c_u_p_weight_processed
-                    
-                    if not did_it_all:
-                        
-                        processing_went_ok = False
-                        
-                        break
-                        
-                    
-                    HydrusGlobals.client_controller.WaitUntilPubSubsEmpty()
-                    
-                    time.sleep( 1 )
-                    
-                
-                if options[ 'pause_repo_sync' ]:
-                    
-                    break
-                    
-                
-                ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-                
-                if should_quit:
-                    
-                    break
-                    
-                
-                if processing_went_ok:
-                    
-                    job_key.SetVariable( 'popup_text_2', 'committing service updates' )
-                    
-                    service_updates = [ service_update for service_update in service_update_package.IterateServiceUpdates() ]
-                    
-                    service_updates.append( HydrusData.ServiceUpdate( HC.SERVICE_UPDATE_NEXT_PROCESSING_TIMESTAMP, service_update_package.GetNextBegin() ) )
-                    
-                    service_keys_to_service_updates = { self._service_key : service_updates }
-                    
-                    self.ProcessServiceUpdates( service_keys_to_service_updates )
-                    
-                    HydrusGlobals.client_controller.Write( 'service_updates', service_keys_to_service_updates )
-                    
-                    HydrusGlobals.client_controller.WaitUntilPubSubsEmpty()
-                    
-                
-                job_key.SetVariable( 'popup_gauge_2', ( 0, 1 ) )
-                job_key.SetVariable( 'popup_text_2', '' )
-                
-                num_updates_processed += 1
-                
-                time.sleep( 0.1 )
-                
-            
-            job_key.DeleteVariable( 'popup_gauge_1' )
-            job_key.DeleteVariable( 'popup_text_2' )
-            job_key.DeleteVariable( 'popup_gauge_2' )
-            
-            self.SyncThumbnails( job_key )
-            
-            HydrusGlobals.client_controller.pub( 'splash_set_status_text', '' )
-            
-            job_key.SetVariable( 'popup_title', 'repository synchronisation - ' + self._name + ' - finished' )
-            
-            updates_text = HydrusData.ConvertIntToPrettyString( num_updates_downloaded ) + ' updates downloaded, ' + HydrusData.ConvertIntToPrettyString( num_updates_processed ) + ' updates processed'
-            
-            if self._service_type == HC.TAG_REPOSITORY: content_text = HydrusData.ConvertIntToPrettyString( total_content_weight_processed ) + ' mappings added'
-            elif self._service_type == HC.FILE_REPOSITORY: content_text = HydrusData.ConvertIntToPrettyString( total_content_weight_processed ) + ' files added'
-            
-            job_key.SetVariable( 'popup_text_1', updates_text + ', and ' + content_text )
-            
-            HydrusData.Print( job_key.ToString() )
-            
-            job_key.Finish()
-            
-            time.sleep( 3 )
-            
-            job_key.Delete()
-            
-        except Exception as e:
-            
-            job_key.Cancel()
-            
-            HydrusData.Print( traceback.format_exc() )
-            
-            HydrusData.ShowText( 'Failed to update ' + self._name + ':' )
-            
-            HydrusData.ShowException( e )
-            
-            time.sleep( 3 )
-            
-        finally:
-            
-            HydrusGlobals.client_controller.pub( 'notify_new_pending' )
-            HydrusGlobals.client_controller.pub( 'notify_new_siblings_data' )
-            HydrusGlobals.client_controller.pub( 'notify_new_siblings_gui' )
-            HydrusGlobals.client_controller.pub( 'notify_new_parents' )
-            
-        
-    
-    def SyncThumbnails( self, job_key ):
-        
-        synced = not ( self.IsUpdateDueForDownload() or self.IsUpdateDueForProcessing() )
-        
-        if self._service_type == HC.FILE_REPOSITORY and synced and self.CanDownload():
-            
-            options = HydrusGlobals.client_controller.GetOptions()
-            
-            HydrusGlobals.client_controller.pub( 'splash_set_status_text', 'reviewing service thumbnails' )
-            
-            job_key.SetVariable( 'popup_text_1', 'reviewing service thumbnails' )
-            
-            remote_thumbnail_hashes_i_should_have = HydrusGlobals.client_controller.Read( 'remote_thumbnail_hashes_i_should_have', self._service_key )
-            
-            client_files_manager = HydrusGlobals.client_controller.GetClientFilesManager()
-            
-            thumbnail_hashes_i_need = set()
-            
-            for hash in remote_thumbnail_hashes_i_should_have:
-                
-                if not client_files_manager.HaveFullSizeThumbnail( hash ):
-                    
-                    thumbnail_hashes_i_need.add( hash )
-                    
-                
-            
-            if len( thumbnail_hashes_i_need ) > 0:
-                
-                thumbnails = []
-                
-                for ( i, hash ) in enumerate( thumbnail_hashes_i_need ):
-                    
-                    if options[ 'pause_repo_sync' ]:
-                        
-                        break
-                        
-                    
-                    ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-                    
-                    if should_quit:
-                        
-                        break
-                        
-                    
-                    job_key.SetVariable( 'popup_text_1', 'downloading thumbnail ' + HydrusData.ConvertValueRangeToPrettyString( i, len( thumbnail_hashes_i_need ) ) )
-                    job_key.SetVariable( 'popup_gauge_1', ( i, len( thumbnail_hashes_i_need ) ) )
-                    
-                    request_args = { 'hash' : hash.encode( 'hex' ) }
-                    
-                    thumbnail = self.Request( HC.GET, 'thumbnail', request_args = request_args )
-                    
-                    client_files_manager.AddFullSizeThumbnail( hash, thumbnail )
-                    
-                
-                job_key.DeleteVariable( 'popup_gauge_1' )
-                
-            
-        
-    
-class ServiceIPFS( ServiceRemote ):
-    
-    def _ConvertMultihashToURLTree( self, name, size, multihash ):
-        
-        api_base_url = self._GetAPIBaseURL()
-        
-        links_url = api_base_url + 'object/links/' + multihash
-        
-        response = ClientNetworking.RequestsGet( links_url )
-        
-        links_json = response.json()
-        
-        is_directory = False
-        
-        if 'Links' in links_json:
-            
-            for link in links_json[ 'Links' ]:
-                
-                if link[ 'Name' ] != '':
-                    
-                    is_directory = True
-                    
-                
-            
-        
-        if is_directory:
-            
-            children = []
-            
-            for link in links_json[ 'Links' ]:
-                
-                subname = link[ 'Name' ]
-                subsize = link[ 'Size' ]
-                submultihash = link[ 'Hash' ]
-                
-                children.append( self._ConvertMultihashToURLTree( subname, subsize, submultihash ) )
-                
-            
-            if size is None:
-                
-                size = sum( ( subsize for ( type_gumpf, subname, subsize, submultihash ) in children ) )
-                
-            
-            return ( 'directory', name, size, children )
-            
-        else:
-            
-            url = api_base_url + 'cat/' + multihash
-            
-            return ( 'file', name, size, url )
-            
-        
-    
-    def _GetAPIBaseURL( self ):
-        
-        credentials = self.GetCredentials()
-        
-        ( host, port ) = credentials.GetAddress()
-        
-        api_base_url = 'http://' + host + ':' + str( port ) + '/api/v0/'
-        
-        return api_base_url
-        
-    
-    def GetDaemonVersion( self ):
-        
-        api_base_url = self._GetAPIBaseURL()
-        
-        url = api_base_url + 'version'
-        
-        response = ClientNetworking.RequestsGet( url )
-        
-        j = response.json()
-        
-        return j[ 'Version' ]
-        
-    
-    def ImportFile( self, multihash ):
-        
-        def on_wx_select_tree( job_key, url_tree ):
-            
-                import ClientGUIDialogs
-                
-                with ClientGUIDialogs.DialogSelectFromURLTree( None, url_tree ) as dlg:
-                    
-                    if dlg.ShowModal() == wx.ID_OK:
-                        
-                        urls = dlg.GetURLs()
-                        
-                        if len( urls ) > 0:
-                            
-                            HydrusGlobals.client_controller.CallToThread( ClientDownloading.THREADDownloadURLs, job_key, urls, multihash )
-                            
-                        
-                    
-                
-            
-        
-        def off_wx():
-            
-            job_key = ClientThreading.JobKey( pausable = True, cancellable = True )
-            
-            job_key.SetVariable( 'popup_text_1', 'Looking up multihash information' )
-            
-            HydrusGlobals.client_controller.pub( 'message', job_key )
-            
-            url_tree = self._ConvertMultihashToURLTree( multihash, None, multihash )
-            
-            if url_tree[0] == 'file':
-                
-                url = url_tree[3]
-                
-                HydrusGlobals.client_controller.CallToThread( ClientDownloading.THREADDownloadURL, job_key, url, multihash )
-                
-            else:
-                
-                job_key.SetVariable( 'popup_text_1', 'Waiting for user selection' )
-                
-                wx.CallAfter( on_wx_select_tree, job_key, url_tree )
-                
-            
-        
-        HydrusGlobals.client_controller.CallToThread( off_wx )
-        
-    
-    def PinDirectory( self, hashes, note ):
-        
-        job_key = ClientThreading.JobKey( pausable = True, cancellable = True )
-        
-        job_key.SetVariable( 'popup_title', 'creating ipfs directory on ' + self._name )
-        
-        HydrusGlobals.client_controller.pub( 'message', job_key )
-        
-        try:
-            
-            file_info = []
-            
-            hashes = list( hashes )
-            
-            hashes.sort()
-            
-            for ( i, hash ) in enumerate( hashes ):
-                
-                ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-                
-                if should_quit:
-                    
-                    return
-                    
-                
-                job_key.SetVariable( 'popup_text_1', 'pinning files: ' + HydrusData.ConvertValueRangeToPrettyString( i + 1, len( hashes ) ) )
-                job_key.SetVariable( 'popup_gauge_1', ( i + 1, len( hashes ) ) )
-                
-                ( media_result, ) = HydrusGlobals.client_controller.Read( 'media_results', ( hash, ) )
-                
-                mime = media_result.GetMime()
-                
-                result = HydrusGlobals.client_controller.Read( 'service_filenames', self._service_key, { hash } )
-                
-                if len( result ) == 0:
-                    
-                    multihash = self.PinFile( hash, mime )
-                    
-                else:
-                    
-                    ( multihash, ) = result
-                    
-                
-                file_info.append( ( hash, mime, multihash ) )
-                
-            
-            api_base_url = self._GetAPIBaseURL()
-            
-            url = api_base_url + 'object/new?arg=unixfs-dir'
-            
-            response = ClientNetworking.RequestsGet( url )
-            
-            for ( i, ( hash, mime, multihash ) ) in enumerate( file_info ):
-                
-                ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-                
-                if should_quit:
-                    
-                    return
-                    
-                
-                job_key.SetVariable( 'popup_text_1', 'creating directory: ' + HydrusData.ConvertValueRangeToPrettyString( i + 1, len( file_info ) ) )
-                job_key.SetVariable( 'popup_gauge_1', ( i + 1, len( file_info ) ) )
-                
-                object_multihash = response.json()[ 'Hash' ]
-                
-                filename = hash.encode( 'hex' ) + HC.mime_ext_lookup[ mime ]
-                
-                url = api_base_url + 'object/patch/add-link?arg=' + object_multihash + '&arg=' + filename + '&arg=' + multihash
-                
-                response = ClientNetworking.RequestsGet( url )
-                
-            
-            directory_multihash = response.json()[ 'Hash' ]
-            
-            url = api_base_url + 'pin/add?arg=' + directory_multihash
-            
-            response = ClientNetworking.RequestsGet( url )
-            
-            content_update_row = ( hashes, directory_multihash, note )
-            
-            content_updates = [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_DIRECTORIES, HC.CONTENT_UPDATE_ADD, content_update_row ) ]
-            
-            HydrusGlobals.client_controller.WriteSynchronous( 'content_updates', { self._service_key : content_updates } )
-            
-            job_key.SetVariable( 'popup_text_1', 'done!' )
-            job_key.DeleteVariable( 'popup_gauge_1' )
-            
-            multihash_prefix = self._info[ 'multihash_prefix' ]
-            
-            text = multihash_prefix + directory_multihash
-            
-            job_key.SetVariable( 'popup_clipboard', ( 'copy multihash to clipboard', text ) )
-            
-            job_key.Finish()
-            
-            return directory_multihash
-            
-        except Exception as e:
-            
-            HydrusData.ShowException( e )
-            
-            job_key.SetVariable( 'popup_text_1', 'error' )
-            job_key.DeleteVariable( 'popup_gauge_1' )
-            
-            job_key.Cancel()
-            
-        
-    
-    def PinFile( self, hash, mime ):
-        
-        mime_string = HC.mime_string_lookup[ mime ]
-        
-        api_base_url = self._GetAPIBaseURL()
-        
-        url = api_base_url + 'add'
-        
-        client_files_manager = HydrusGlobals.client_controller.GetClientFilesManager()
-        
-        path = client_files_manager.GetFilePath( hash, mime )
-        
-        files = { 'path' : ( hash.encode( 'hex' ), open( path, 'rb' ), mime_string ) }
-        
-        response = ClientNetworking.RequestsPost( url, files = files )
-        
-        j = response.json()
-        
-        multihash = j[ 'Hash' ]
-        
-        content_update_row = ( hash, multihash )
-        
-        content_updates = [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_ADD, content_update_row ) ]
-        
-        HydrusGlobals.client_controller.WriteSynchronous( 'content_updates', { self._service_key : content_updates } )
-        
-        return multihash
-        
-    
-    def UnpinDirectory( self, multihash ):
-        
-        api_base_url = self._GetAPIBaseURL()
-        
-        url = api_base_url + 'pin/rm/' + multihash
-        
-        ClientNetworking.RequestsGet( url )
-        
-        content_updates = [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_DIRECTORIES, HC.CONTENT_UPDATE_DELETE, multihash ) ]
-        
-        HydrusGlobals.client_controller.WriteSynchronous( 'content_updates', { self._service_key : content_updates } )
-        
-    
-    def UnpinFile( self, hash, multihash ):
-        
-        api_base_url = self._GetAPIBaseURL()
-        
-        url = api_base_url + 'pin/rm/' + multihash
-        
-        try:
-            
-            ClientNetworking.RequestsGet( url )
-            
-        except HydrusExceptions.NetworkException as e:
-            
-            if 'not pinned' not in str( e ):
-                
-                raise
-                
-            
-        
-        content_updates = [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_DELETE, { hash } ) ]
-        
-        HydrusGlobals.client_controller.WriteSynchronous( 'content_updates', { self._service_key : content_updates } )
-        
-    
+HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUT ] = Shortcut
+
 class Shortcuts( HydrusSerialisable.SerialisableBaseNamed ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS
-    SERIALISABLE_VERSION = 1
+    SERIALISABLE_VERSION = 2
     
     def __init__( self, name ):
         
         HydrusSerialisable.SerialisableBaseNamed.__init__( self, name )
         
-        self._mouse_actions = {}
-        self._keyboard_actions = {}
+        self._shortcuts_to_commands = {}
         
     
-    def _ConvertActionToSerialisableAction( self, action ):
+    def __iter__( self ):
         
-        ( service_key, data ) = action
-        
-        if service_key is None:
+        for ( shortcut, command ) in self._shortcuts_to_commands.items():
             
-            return [ service_key, data ]
-            
-        else:
-            
-            serialisable_service_key = service_key.encode( 'hex' )
-            
-            return [ serialisable_service_key, data ]
-            
-        
-    
-    def _ConvertSerialisableActionToAction( self, serialisable_action ):
-        
-        ( serialisable_service_key, data ) = serialisable_action
-        
-        if serialisable_service_key is None:
-            
-            return ( serialisable_service_key, data ) # important to return tuple, as serialisable_action is likely a list
-            
-        else:
-            
-            service_key = serialisable_service_key.decode( 'hex' )
-            
-            return ( service_key, data )
+            yield ( shortcut, command )
             
         
     
     def _GetSerialisableInfo( self ):
         
-        serialisable_mouse_actions = []
-        
-        for ( ( modifier, mouse_button ), action ) in self._mouse_actions.items():
-            
-            serialisable_action = self._ConvertActionToSerialisableAction( action )
-            
-            serialisable_mouse_actions.append( ( modifier, mouse_button, serialisable_action ) )
-            
-        
-        serialisable_keyboard_actions = []
-        
-        for ( ( modifier, key ), action ) in self._keyboard_actions.items():
-            
-            serialisable_action = self._ConvertActionToSerialisableAction( action )
-            
-            serialisable_keyboard_actions.append( ( modifier, key, serialisable_action ) )
-            
-        
-        return ( serialisable_mouse_actions, serialisable_keyboard_actions )
+        return [ ( shortcut.GetSerialisableTuple(), command.GetSerialisableTuple() ) for ( shortcut, command ) in self._shortcuts_to_commands.items() ]
         
     
     def _InitialiseFromSerialisableInfo( self, serialisable_info ):
         
-        ( serialisable_mouse_actions, serialisable_keyboard_actions ) = serialisable_info
-        
-        self._mouse_actions = {}
-        
-        for ( modifier, mouse_button, serialisable_action ) in serialisable_mouse_actions:
+        for ( serialisable_shortcut, serialisable_command ) in serialisable_info:
             
-            action = self._ConvertSerialisableActionToAction( serialisable_action )
+            shortcut = HydrusSerialisable.CreateFromSerialisableTuple( serialisable_shortcut )
+            command = HydrusSerialisable.CreateFromSerialisableTuple( serialisable_command )
             
-            self._mouse_actions[ ( modifier, mouse_button ) ] = action
-            
-        
-        self._keyboard_actions = {}
-        
-        for ( modifier, key, serialisable_action ) in serialisable_keyboard_actions:
-            
-            action = self._ConvertSerialisableActionToAction( serialisable_action )
-            
-            self._keyboard_actions[ ( modifier, key ) ] = action
+            self._shortcuts_to_commands[ shortcut ] = command
             
         
     
-    def ClearActions( self ):
+    def _UpdateSerialisableInfo( self, version, old_serialisable_info ):
         
-        self._mouse_actions = {}
-        self._keyboard_actions = {}
+        if version == 1:
+            
+            ( serialisable_mouse_actions, serialisable_keyboard_actions ) = old_serialisable_info
+            
+            shortcuts_to_commands = {}
+            
+            # this never stored mouse actions, so skip
+            
+            services_manager = HydrusGlobals.client_controller.GetServicesManager()
+            
+            for ( modifier, key, ( serialisable_service_key, data ) ) in serialisable_keyboard_actions:
+                
+                if modifier not in CC.shortcut_wx_to_hydrus_lookup:
+                    
+                    modifiers = []
+                    
+                else:
+                    
+                    modifiers = [ CC.shortcut_wx_to_hydrus_lookup[ modifier ] ]
+                    
+                
+                shortcut = Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, key, modifiers )
+                
+                if serialisable_service_key is None:
+                    
+                    command = ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, data )
+                    
+                else:
+                    
+                    service_key = serialisable_service_key.decode( 'hex' )
+                    
+                    if not services_manager.ServiceExists( service_key ):
+                        
+                        continue
+                        
+                    
+                    action = HC.CONTENT_UPDATE_FLIP
+                    
+                    value = data
+                    
+                    service = services_manager.GetService( service_key )
+                    
+                    service_type = service.GetServiceType()
+                    
+                    if service_type in HC.TAG_SERVICES:
+                        
+                        content_type = HC.CONTENT_TYPE_MAPPINGS
+                        
+                    elif service_type in HC.RATINGS_SERVICES:
+                        
+                        content_type = HC.CONTENT_TYPE_RATINGS
+                        
+                    else:
+                        
+                        continue
+                        
+                    
+                    command = ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_CONTENT, ( service_key, content_type, action, value ) )
+                    
+                
+                shortcuts_to_commands[ shortcut ] = command
+                
+            
+            new_serialisable_info = ( ( shortcut.GetSerialisableTuple(), command.GetSerialisableTuple() ) for ( shortcut, command ) in shortcuts_to_commands.items() )
+            
+            return ( 2, new_serialisable_info )
+            
         
     
-    def DeleteKeyboardAction( self, modifier, key ):
+    def GetCommand( self, shortcut ):
         
-        if ( modifier, key ) in self._keyboard_actions:
+        if shortcut in self._shortcuts_to_commands:
             
-            del self._keyboard_actions[ ( modifier, key ) ]
-            
-        
-    
-    def DeleteMouseAction( self, modifier, mouse_button ):
-        
-        if ( modifier, mouse_button ) in self._mouse_actions:
-            
-            del self._mouse_actions[ ( modifier, mouse_button ) ]
-            
-        
-    
-    def GetKeyboardAction( self, modifier, key ):
-        
-        if ( modifier, key ) in self._keyboard_actions:
-            
-            return self._keyboard_actions[ ( modifier, key ) ]
+            return self._shortcuts_to_commands[ shortcut ]
             
         else:
             
@@ -2824,41 +1813,44 @@ class Shortcuts( HydrusSerialisable.SerialisableBaseNamed ):
             
         
     
-    def GetMouseAction( self, modifier, mouse_button ):
+    def SetCommand( self, shortcut, command ):
         
-        if ( modifier, mouse_button ) in self._mouse_actions:
-            
-            return self._mouse_actions[ ( modifier, mouse_button ) ]
-            
-        else:
-            
-            return None
-            
-        
-    
-    def IterateKeyboardShortcuts( self ):
-        
-        for ( ( modifier, key ), action ) in self._keyboard_actions.items(): yield ( ( modifier, key ), action )
-        
-    
-    def IterateMouseShortcuts( self ):
-        
-        for ( ( modifier, mouse_button ), action ) in self._mouse_actions.items(): yield ( ( modifier, mouse_button ), action )
-        
-    
-    def SetKeyboardAction( self, modifier, key, action ):
-        
-        self._keyboard_actions[ ( modifier, key ) ] = action
-        
-    
-    def SetMouseAction( self, modifier, mouse_button, action ):
-        
-        self._mouse_actions[ ( modifier, mouse_button ) ] = action
+        self._shortcuts_to_commands[ shortcut ] = command
         
     
 HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS ] = Shortcuts
 
-def GetShortcutFromEvent( event ):
+def ConvertKeyEventToShortcut( event ):
+    
+    key = event.KeyCode
+    
+    if key in range( 65, 91 ) or key in CC.wxk_code_string_lookup.keys():
+        
+        modifiers = []
+        
+        if event.AltDown():
+            
+            modifiers.append( CC.SHORTCUT_MODIFIER_ALT )
+            
+        
+        if event.CmdDown():
+            
+            modifiers.append( CC.SHORTCUT_MODIFIER_CTRL )
+            
+        
+        if event.ShiftDown():
+            
+            modifiers.append( CC.SHORTCUT_MODIFIER_SHIFT )
+            
+        
+        shortcut = Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, key, modifiers )
+        
+        return shortcut
+        
+    
+    return None
+    
+def ConvertKeyEventToSimpleTuple( event ):
     
     modifier = wx.ACCEL_NORMAL
     
@@ -2869,4 +1861,55 @@ def GetShortcutFromEvent( event ):
     key = event.KeyCode
     
     return ( modifier, key )
+    
+def ConvertMouseEventToShortcut( event ):
+    
+    key = None
+    
+    if event.LeftDown():
+        
+        key = CC.SHORTCUT_MOUSE_LEFT
+        
+    elif event.MiddleDown():
+        
+        key = CC.SHORTCUT_MOUSE_MIDDLE
+        
+    elif event.RightDown():
+        
+        key = CC.SHORTCUT_MOUSE_RIGHT
+        
+    elif event.GetWheelRotation() > 0:
+        
+        key = CC.SHORTCUT_MOUSE_SCROLL_UP
+        
+    elif event.GetWheelRotation() < 0:
+        
+        key = CC.SHORTCUT_MOUSE_SCROLL_DOWN
+        
+    
+    if key is not None:
+        
+        modifiers = []
+        
+        if event.AltDown():
+            
+            modifiers.append( CC.SHORTCUT_MODIFIER_ALT )
+            
+        
+        if event.CmdDown():
+            
+            modifiers.append( CC.SHORTCUT_MODIFIER_CTRL )
+            
+        
+        if event.ShiftDown():
+            
+            modifiers.append( CC.SHORTCUT_MODIFIER_SHIFT )
+            
+        
+        shortcut = Shortcut( CC.SHORTCUT_TYPE_MOUSE, key, modifiers )
+        
+        return shortcut
+        
+    
+    return None
     

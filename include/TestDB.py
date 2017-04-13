@@ -10,11 +10,13 @@ import ClientGUIPages
 import ClientImporting
 import ClientRatings
 import ClientSearch
+import ClientServices
 import collections
 import HydrusConstants as HC
 import HydrusData
 import HydrusExceptions
 import HydrusGlobals
+import HydrusNetwork
 import HydrusSerialisable
 import itertools
 import os
@@ -27,70 +29,65 @@ import tempfile
 import time
 import threading
 import unittest
-import yaml
 import wx
 
 class TestClientDB( unittest.TestCase ):
     
-    def _clear_db( self ):
-        
-        db_path = os.path.join( self._db._db_dir, self._db._db_filenames[ 'main' ] )
-        
-        db = sqlite3.connect( db_path, isolation_level = None, detect_types = sqlite3.PARSE_DECLTYPES )
-        
-        c = db.cursor()
-        
-        c.execute( 'DELETE FROM current_files;' )
-        c.execute( 'DELETE FROM files_info;' )
-        
-        del c
-        del db
-        
-        mappings_db_path = os.path.join( self._db._db_dir, self._db._db_filenames[ 'external_mappings' ] )
-        
-        db = sqlite3.connect( mappings_db_path, isolation_level = None, detect_types = sqlite3.PARSE_DECLTYPES )
-        
-        c = db.cursor()
-        
-        table_names = [ name for ( name, ) in c.execute( 'SELECT name FROM sqlite_master WHERE type = ?;', ( 'table', ) ).fetchall() ]
-        
-        for name in table_names:
-            
-            c.execute( 'DELETE FROM ' + name + ';' )
-            
-        
-    
-    def _read( self, action, *args, **kwargs ): return self._db.Read( action, HC.HIGH_PRIORITY, *args, **kwargs )
-    def _write( self, action, *args, **kwargs ): return self._db.Write( action, HC.HIGH_PRIORITY, True, *args, **kwargs )
-    
     @classmethod
-    def setUpClass( self ):
+    def _clear_db( cls ):
         
-        self._db = ClientDB.DB( HydrusGlobals.test_controller, TestConstants.DB_DIR, 'client' )
+        cls._delete_db()
+        
+        # class variable
+        cls._db = ClientDB.DB( HydrusGlobals.test_controller, TestConstants.DB_DIR, 'client' )
         
     
     @classmethod
-    def tearDownClass( self ):
+    def _delete_db( cls ):
         
-        self._db.Shutdown()
+        cls._db.Shutdown()
         
-        while not self._db.LoopIsFinished():
+        while not cls._db.LoopIsFinished():
             
             time.sleep( 0.1 )
             
         
-        del self._db
+        db_filenames = cls._db._db_filenames.values()
         
+        for filename in db_filenames:
+            
+            path = os.path.join( TestConstants.DB_DIR, filename )
+            
+            os.remove( path )
+            
+        
+        del cls._db
+        
+    
+    @classmethod
+    def setUpClass( cls ):
+        
+        cls._db = ClientDB.DB( HydrusGlobals.test_controller, TestConstants.DB_DIR, 'client' )
+        
+    
+    @classmethod
+    def tearDownClass( cls ):
+        
+        cls._delete_db()
+        
+    
+    def _read( self, action, *args, **kwargs ): return TestClientDB._db.Read( action, HC.HIGH_PRIORITY, *args, **kwargs )
+    def _write( self, action, *args, **kwargs ): return TestClientDB._db.Write( action, HC.HIGH_PRIORITY, True, *args, **kwargs )
     
     def test_autocomplete( self ):
         
-        self._clear_db()
+        TestClientDB._clear_db()
         
-        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'c' )
+        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'c*' )
         
         self.assertEqual( result, [] )
         
-        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'series:' )
+        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'series:*' )
         
         self.assertEqual( result, [] )
         
@@ -118,45 +115,49 @@ class TestClientDB( unittest.TestCase ):
         
         # cars
         
-        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'c', add_namespaceless = True )
+        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'c*', add_namespaceless = True )
         
         preds = set()
         
         preds.add( ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, 'car', min_current_count = 1 ) )
         preds.add( ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, 'series:cars', min_current_count = 1 ) )
         
-        for p in result: self.assertEqual( p.GetCount( HC.CURRENT ), 1 )
+        for p in result: self.assertEqual( p.GetCount( HC.CONTENT_STATUS_CURRENT ), 1 )
         
         self.assertEqual( set( result ), preds )
         
         # cars
         
-        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'c', add_namespaceless = False )
+        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'c*', add_namespaceless = False )
         
         preds = set()
         
         preds.add( ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, 'series:cars', min_current_count = 1 ) )
         preds.add( ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, 'car', min_current_count = 1 ) )
         
-        for p in result: self.assertEqual( p.GetCount( HC.CURRENT ), 1 )
+        for p in result: self.assertEqual( p.GetCount( HC.CONTENT_STATUS_CURRENT ), 1 )
         
         self.assertEqual( set( result ), preds )
         
         #
         
-        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'ser' )
+        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'ser*' )
         
-        self.assertEqual( result, [] )
+        preds = set()
+        
+        preds.add( ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, 'series:cars', min_current_count = 1 ) )
+        
+        self.assertEqual( set( result ), preds )
         
         #
         
-        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'series:c' )
+        result = self._read( 'autocomplete_predicates', tag_service_key = CC.LOCAL_TAG_SERVICE_KEY, search_text = 'series:c*' )
         
         pred = ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, 'series:cars', min_current_count = 1 )
         
         ( read_pred, ) = result
         
-        self.assertEqual( read_pred.GetCount( HC.CURRENT ), 1 )
+        self.assertEqual( read_pred.GetCount( HC.CONTENT_STATUS_CURRENT ), 1 )
         
         self.assertEqual( pred, read_pred )
         
@@ -168,7 +169,7 @@ class TestClientDB( unittest.TestCase ):
         
         ( read_pred, ) = result
         
-        self.assertEqual( read_pred.GetCount( HC.CURRENT ), 1 )
+        self.assertEqual( read_pred.GetCount( HC.CONTENT_STATUS_CURRENT ), 1 )
         
         self.assertEqual( pred, read_pred )
         
@@ -240,7 +241,7 @@ class TestClientDB( unittest.TestCase ):
     
     def test_file_query_ids( self ):
         
-        self._clear_db()
+        TestClientDB._clear_db()
         
         def run_namespace_predicate_tests( tests ):
             
@@ -335,10 +336,10 @@ class TestClientDB( unittest.TestCase ):
         
         tests.append( ( HC.PREDICATE_TYPE_SYSTEM_EVERYTHING, None, 1 ) )
         
-        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( False, HC.CURRENT, CC.LOCAL_FILE_SERVICE_KEY ), 0 ) )
-        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( False, HC.PENDING, CC.LOCAL_FILE_SERVICE_KEY ), 1 ) )
-        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( True, HC.CURRENT, CC.LOCAL_FILE_SERVICE_KEY ), 1 ) )
-        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( True, HC.PENDING, CC.LOCAL_FILE_SERVICE_KEY ), 0 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( False, HC.CONTENT_STATUS_CURRENT, CC.LOCAL_FILE_SERVICE_KEY ), 0 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( False, HC.CONTENT_STATUS_PENDING, CC.LOCAL_FILE_SERVICE_KEY ), 1 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( True, HC.CONTENT_STATUS_CURRENT, CC.LOCAL_FILE_SERVICE_KEY ), 1 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( True, HC.CONTENT_STATUS_PENDING, CC.LOCAL_FILE_SERVICE_KEY ), 0 ) )
         
         tests.append( ( HC.PREDICATE_TYPE_SYSTEM_HASH, ( hash, 'sha256' ), 1 ) )
         tests.append( ( HC.PREDICATE_TYPE_SYSTEM_HASH, ( ( '0123456789abcdef' * 4 ).decode( 'hex' ), 'sha256' ), 0 ) )
@@ -503,6 +504,54 @@ class TestClientDB( unittest.TestCase ):
         
         #
         
+        like_rating_service_key = HydrusData.GenerateKey()
+        numerical_rating_service_key = HydrusData.GenerateKey()
+        
+        services = self._read( 'services' )
+        
+        services.append( ClientServices.GenerateService( like_rating_service_key, HC.LOCAL_RATING_LIKE, 'test like rating service' ) )
+        services.append( ClientServices.GenerateService( numerical_rating_service_key, HC.LOCAL_RATING_NUMERICAL, 'test numerical rating service' ) )
+        
+        self._write( 'update_services', services )
+        
+        service_keys_to_content_updates = {}
+        
+        content_updates = []
+        
+        content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( 1.0, ( hash, ) ) ) )
+        
+        service_keys_to_content_updates[ like_rating_service_key ] = content_updates
+        
+        self._write( 'content_updates', service_keys_to_content_updates )
+        
+        service_keys_to_content_updates = {}
+        
+        content_updates = []
+        
+        content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( 0.6, ( hash, ) ) ) )
+        
+        service_keys_to_content_updates[ numerical_rating_service_key ] = content_updates
+        
+        self._write( 'content_updates', service_keys_to_content_updates )
+        
+        tests = []
+        
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '=', 1.0, like_rating_service_key ), 1 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '=', 0.0, like_rating_service_key ), 0 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '=', 'rated', like_rating_service_key ), 1 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '=', 'not rated', like_rating_service_key ), 0 ) )
+        
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '=', 0.6, numerical_rating_service_key ), 1 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '=', 1.0, numerical_rating_service_key ), 0 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '>', 0.6, numerical_rating_service_key ), 0 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '>', 0.4, numerical_rating_service_key ), 1 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '=', 'rated', numerical_rating_service_key ), 1 ) )
+        tests.append( ( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '=', 'not rated', numerical_rating_service_key ), 0 ) )
+        
+        run_system_predicate_tests( tests )
+        
+        #
+        
         content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_DELETE, ( hash, ) )
         
         service_keys_to_content_updates = { CC.LOCAL_FILE_SERVICE_KEY : ( content_update, ) }
@@ -528,7 +577,7 @@ class TestClientDB( unittest.TestCase ):
     
     def test_file_system_predicates( self ):
         
-        self._clear_db()
+        TestClientDB._clear_db()
         
         hash = '\xadm5\x99\xa6\xc4\x89\xa5u\xeb\x19\xc0&\xfa\xce\x97\xa9\xcdey\xe7G(\xb0\xce\x94\xa6\x01\xd22\xf3\xc3'
         
@@ -604,7 +653,7 @@ class TestClientDB( unittest.TestCase ):
         
         session.AddPage( 'files', management_controller, [] )
         
-        fsc = ClientSearch.FileSearchContext( file_service_key = HydrusData.GenerateKey(), predicates = [ ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '>', 0.2, HydrusData.GenerateKey() ) ), ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( True, HC.CURRENT, HydrusData.GenerateKey() ) ) ] )
+        fsc = ClientSearch.FileSearchContext( file_service_key = HydrusData.GenerateKey(), predicates = [ ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_RATING, ( '>', 0.2, HydrusData.GenerateKey() ) ), ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( True, HC.CONTENT_STATUS_CURRENT, HydrusData.GenerateKey() ) ) ] )
         
         management_controller = ClientGUIManagement.CreateManagementControllerQuery( HydrusData.GenerateKey(), fsc, True )
         
@@ -626,7 +675,7 @@ class TestClientDB( unittest.TestCase ):
     
     def test_import( self ):
         
-        self._clear_db()
+        TestClientDB._clear_db()
         
         test_files = []
         
@@ -738,7 +787,7 @@ class TestClientDB( unittest.TestCase ):
     
     def test_md5_status( self ):
         
-        self._clear_db()
+        TestClientDB._clear_db()
         
         hash = '\xadm5\x99\xa6\xc4\x89\xa5u\xeb\x19\xc0&\xfa\xce\x97\xa9\xcdey\xe7G(\xb0\xce\x94\xa6\x01\xd22\xf3\xc3'
         
@@ -781,7 +830,7 @@ class TestClientDB( unittest.TestCase ):
     
     def test_media_results( self ):
         
-        self._clear_db()
+        TestClientDB._clear_db()
         
         path = os.path.join( HC.STATIC_DIR, 'hydrus.png' )
         
@@ -856,32 +905,6 @@ class TestClientDB( unittest.TestCase ):
         self.assertEqual( result, ( False, [ ':', 'series:' ] ) )
         
     
-    def test_news( self ):
-        
-        result = self._read( 'news', CC.LOCAL_TAG_SERVICE_KEY )
-        
-        self.assertEqual( result, [] )
-        
-        #
-        
-        news = []
-        
-        news.append( ( 'hello', HydrusData.GetNow() - 30000 ) )
-        news.append( ( 'hello again', HydrusData.GetNow() - 20000 ) )
-        
-        service_updates = dict()
-        
-        service_updates[ CC.LOCAL_TAG_SERVICE_KEY ] = [ HydrusData.ServiceUpdate( HC.SERVICE_UPDATE_NEWS, news ) ]
-        
-        self._write( 'service_updates', service_updates )
-        
-        #
-        
-        result = self._read( 'news', CC.LOCAL_TAG_SERVICE_KEY )
-        
-        self.assertItemsEqual( result, news )
-        
-    
     def test_nums_pending( self ):
         
         result = self._read( 'nums_pending' )
@@ -921,7 +944,11 @@ class TestClientDB( unittest.TestCase ):
         
         result = self._read( 'pending', service_key )
         
-        self.assertIsInstance( result, HydrusData.ClientToServerContentUpdatePackage )
+        self.assertIsInstance( result, HydrusNetwork.ClientToServerUpdate )
+        
+        self.assertTrue( result.HasContent() )
+        
+        self.assertEqual( set( result.GetHashes() ), set( hashes ) )
         
         #
         
@@ -991,7 +1018,7 @@ class TestClientDB( unittest.TestCase ):
         
         result_service_keys = { service.GetServiceKey() for service in result }
         
-        self.assertItemsEqual( { CC.TRASH_SERVICE_KEY, CC.LOCAL_FILE_SERVICE_KEY, CC.COMBINED_LOCAL_FILE_SERVICE_KEY, CC.LOCAL_TAG_SERVICE_KEY }, result_service_keys )
+        self.assertItemsEqual( { CC.TRASH_SERVICE_KEY, CC.LOCAL_FILE_SERVICE_KEY, CC.LOCAL_UPDATE_SERVICE_KEY, CC.COMBINED_LOCAL_FILE_SERVICE_KEY, CC.LOCAL_TAG_SERVICE_KEY }, result_service_keys )
         
         #
         
@@ -1144,59 +1171,65 @@ class TestClientDB( unittest.TestCase ):
     
     def test_shortcuts( self ):
         
+        num_default = len( ClientDefaults.GetDefaultShortcuts() )
+        
         result = self._read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS )
         
-        self.assertEqual( result, [] )
+        self.assertEqual( len( result ), num_default )
         
         #
         
-        shortcuts = ClientData.Shortcuts( 'test' )
-        
-        shortcuts.SetKeyboardAction( wx.ACCEL_NORMAL, wx.WXK_NUMPAD1, ( HydrusData.GenerateKey(), 'action_data' ) )
-        shortcuts.SetKeyboardAction( wx.ACCEL_SHIFT, wx.WXK_END, ( None, 'other_action_data' ) )
-        
-        self._write( 'serialisable', shortcuts )
-        
-        result = self._read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS )
-        
-        self.assertEqual( len( result ), 1 )
-        
-        result = self._read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS, 'test' )
-        
-        self.assertEqual( result.GetKeyboardAction( wx.ACCEL_NORMAL, wx.WXK_NUMPAD1 ), shortcuts.GetKeyboardAction( wx.ACCEL_NORMAL, wx.WXK_NUMPAD1 ) )
-        self.assertEqual( result.GetKeyboardAction( wx.ACCEL_SHIFT, wx.WXK_END ), shortcuts.GetKeyboardAction( wx.ACCEL_SHIFT, wx.WXK_END ) )
-        
-        #
-        
-        self._write( 'delete_serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS, 'test' )
-        
-        result = self._read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS )
-        
-        self.assertEqual( result, [] )
+        for ( i, shortcuts ) in enumerate( ClientDefaults.GetDefaultShortcuts() ):
+            
+            name = 'shortcuts ' + str( i )
+            
+            shortcuts.SetName( name )
+            
+            self._write( 'serialisable', shortcuts )
+            
+            result = self._read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS )
+            
+            self.assertEqual( len( result ), num_default + 1 )
+            
+            result = self._read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS, name )
+            
+            for ( shortcut, command ) in shortcuts:
+                
+                self.assertEqual( result.GetCommand( shortcut ).GetData(), command.GetData() )
+                
+            
+            #
+            
+            self._write( 'delete_serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS, name )
+            
+            result = self._read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS )
+            
+            self.assertEqual( len( result ), num_default )
+            
         
     
 class TestServerDB( unittest.TestCase ):
     
-    def _read( self, action, *args, **kwargs ): return self._db.Read( action, HC.HIGH_PRIORITY, *args, **kwargs )
-    def _write( self, action, *args, **kwargs ): return self._db.Write( action, HC.HIGH_PRIORITY, True, *args, **kwargs )
+    def _read( self, action, *args, **kwargs ): return TestServerDB._db.Read( action, HC.HIGH_PRIORITY, *args, **kwargs )
+    def _write( self, action, *args, **kwargs ): return TestServerDB._db.Write( action, HC.HIGH_PRIORITY, True, *args, **kwargs )
     
     @classmethod
-    def setUpClass( self ):
+    def setUpClass( cls ):
         
-        self._db = ServerDB.DB( HydrusGlobals.test_controller, TestConstants.DB_DIR, 'server' )
+        cls._db = ServerDB.DB( HydrusGlobals.test_controller, TestConstants.DB_DIR, 'server' )
         
     
     @classmethod
-    def tearDownClass( self ):
+    def tearDownClass( cls ):
         
-        self._db.Shutdown()
+        cls._db.Shutdown()
         
-        while not self._db.LoopIsFinished():
+        while not cls._db.LoopIsFinished():
             
             time.sleep( 0.1 )
             
         
-        del self._db
+        del cls._db
         
     
     def _test_account_creation( self ):
@@ -1260,8 +1293,8 @@ class TestServerDB( unittest.TestCase ):
         
         r_key = r_keys[0]
         
-        access_key = self._read( 'access_key', r_key )
-        access_key_2 = self._read( 'access_key', r_key )
+        access_key = self._read( 'access_key', self._tag_service_key, r_key )
+        access_key_2 = self._read( 'access_key', self._tag_service_key, r_key )
         
         self.assertNotEqual( access_key, access_key_2 )
         
@@ -1283,7 +1316,7 @@ class TestServerDB( unittest.TestCase ):
     
     def _test_init_server_admin( self ):
         
-        result = self._read( 'init' ) # an access key
+        result = self._read( 'access_key', HC.SERVER_ADMIN_KEY, 'init' )
         
         self.assertEqual( type( result ), str )
         self.assertEqual( len( result ), 32 )

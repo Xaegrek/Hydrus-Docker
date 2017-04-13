@@ -8,6 +8,340 @@
 		<div class="content">
 			<h3>changelog</h3>
 			<ul>
+				<li><h3>version 251</h3></li>
+				<ul>
+					<li>started shortcut overhaul by updating shortcut storage and underlying objects</li>
+					<li>shortcuts will now support multiple modifiers (ctrl, alt, shift) in some places</li>
+					<li>the regular shortcut entry control now supports mouse events through a radiobox (although only the duplicate filter will capture and deal with mouse events on the new system!)</li>
+					<li>on db creation or update, a new 'duplicate_filter' shortcut set will be generated that includes mouse shortcuts and new duplicate_filter commands</li>
+					<li>the duplicate filter now obeys this shortcut set</li>
+					<li>duplicate filter shortcut edit cog menu now works, and the active shortcut set will update if edited</li>
+					<li>wrote simple duplicate pair status update db code</li>
+					<li>added dupe filtering optimisation--given A > B, anything else better than A will be set to be better than B, and anything worse than B will be set to be worse than A</li>
+					<li>added dupe filtering optimisation--after any duplicate status change affecting A and B, any 'same file' siblings of A and B will receive the same relationship</li>
+					<li>the 'process now' button on review services is now gated by a yes/no dialog that better explains what's about to happen</li>
+					<li>the repository buttons on review services will disable when they can't do anything</li>
+					<li>repository update processing will now cancel mid-job much faster</li>
+					<li>reintroduced the 'service-wide update' button to tag services in review services</li>
+					<li>reintroduced the 'clear trash' button to the trash file service in review services</li>
+					<li>reintroduced num_files rating service reporting in review services</li>
+					<li>fixed mouse scroll wheel events from the ratings hover window not being correctly processed by the main media canvas</li>
+					<li>added some 'touch' event detection to try to better deal with media dragging through a touchscreen</li>
+					<li>import folders will now 'action' their import paths as they go, rather than only at the end of their import run</li>
+					<li>the new taglists are now better at remembering their selection through a content change</li>
+					<li>opening a file or path from a non-windows client should now create a non-child process for open/xdg-open calls that block (so closing the client should not then close the child process movie player application or whatever)</li>
+					<li>added unit tests for the new shortcut object</li>
+					<li>added unit tests for the new application command object</li>
+					<li>fixed unit tests for the updated shortcuts object</li>
+					<li>misc cleanup</li>
+				</ul>
+				<li><h3>version 250</h3></li>
+				<ul>
+					<li>improved 'file storage locations' help page descriptive text, including adding statements for actual current storage percentages</li>
+					<li>improved boot missing file storage error handling</li>
+					<li>wrote a 'repair file storage' dialog panel to manually fix missing folders during the boot phase</li>
+					<li>added some bells and whistles to the repair file storage dialog. it now shouldn't be possible to boot the client with an invalid file store--let me know how this works for you</li>
+					<li>added 'apply all siblings to all services' to options->tags</li>
+					<li>whenever combined-service siblings are consulted, local siblings will now always have precedence (so, you can now definitely overwrite any ptr siblings you don't like at the local level). this stuff remains a mess, however. more work is needed</li>
+					<li>fixed searching for 'like' ratings</li>
+					<li>rating predicates will now render their value as 'like'/'dislike' or '3/5' rather than the underlying float</li>
+					<li>fixed a variety of predicate string rendering errors when 'show namespace' is false</li>
+					<li>fixed delete key not firing on autocomplete text entry controls</li>
+					<li>the autocomplete entry's text box will now take home/end/up/down events when there is only one result in the dropdown, when navigation of that list is not important (previously, this was only true when there were no results)</li>
+					<li>fixed an issue where invalid typed 'system:' tags were not being correctly cleaned</li>
+					<li>improved tag cleaning code</li>
+					<li>fixed fetching autocomplete results for small and specific searches (e.g. putting in 'a' will return results just for 'a'</li>
+					<li>fixed small and specific searches to return namespaced instances as well (e.g. putting in '8' can now return 'chapter:8'</li>
+					<li>fixed an issue with showing collected media in the preview window</li>
+					<li>fixed the file import status button not laying out correctly on edit subscription dialog</li>
+					<li>cleaned up some focus checking code</li>
+					<li>harmonised all initial key event processing</li>
+					<li>cleaned some key event processing</li>
+					<li>adjusted some server daemon timings to prefer post-boot update generation catchup over db maintenance</li>
+					<li>corrected a bunch of slightly mistaken unit test code</li>
+					<li>added some 'like' and 'numerical' ratings search unit tests</li>
+					<li>the advanced content update dialog now uses the new sizing system (so the go! button should no longer wander out of frame!)</li>
+					<li>reduced what I believe is excess fuzzy padding on the new sizing system</li>
+					<li>optimised a common client db request, speeding up a number of tag operations</li>
+					<li>gui now asks for confirmation when you make to delete a gui session</li>
+					<li>improved some out of date unit tests</li>
+				</ul>
+				<li><h3>version 249</h3></li>
+				<ul>
+					<li>reintroduced shape and colour options to edit ratings service panels</li>
+					<li>reintroduced num_stars and allow_zero options to edit numerical ratings service panels</li>
+					<li>the export phrase--defaulting to '{hash}'--will now persist through export dialogs. it is saved whenever you click update or export</li>
+					<li>removed the unintended 'counts' that were appearing after related tags</li>
+					<li>fixed 'remove' action in custom filters</li>
+					<li>hitting the delete key on manage tags taglist now will always remove</li>
+					<li>added a BUGFIX option to not verify regular https traffic on the old networking engine for those non-Windows users who are getting SSL verify errors</li>
+					<li>refactored the top hover frame more, making it more flexible</li>
+					<li>created a new top hover frame for the duplicates filter</li>
+					<li>duplicates filter now also supports tag and ratings hover frames</li>
+					<li>duplicates filter now reports A or B as file index</li>
+					<li>added some placeholder buttons to the duplicates filter for actions and 'cog' customisation</li>
+					<li>reduced duplicate search shutdown logspam</li>
+					<li>improved duplicate search job cleanup</li>
+					<li>improved mime detection of thumbnail regeneration</li>
+					<li>improved some shutdown error handling</li>
+					<li>improved numerical rating search accuracy</li>
+					<li>improved some hdd import error handling</li>
+					<li>improved some unicode error handling</li>
+					<li>improved reliability of some database transaction processing</li>
+					<li>fixed animationbar having problems with single-frame videos</li>
+					<li>fixed namespace colour taglist not updating colour correctly</li>
+					<li>stopped the namespace colour taglist from deleting default namespace colours</li>
+					<li>made the new class of button more compact--not sure if I like it</li>
+					<li>refactored some db initialisation to avoid future transaction problems during special updates</li>
+					<li>tidied up some last incomplete taglist code from last week</li>
+					<li>did a little prep for some future shortucts overhaul</li>
+					<li>did some more menu code updating</li>
+					<li>added a simple subscription save/load unit test</li>
+					<li>moved outdated server unit tests forward</li>
+					<li>fleshed out some server certificate generation</li>
+					<li>some other misc v245 catchup work</li>
+					<li>cleaned up some pydeadobjecterrors caused by downloaders reporting progress to destroyed windows</li>
+				</ul>
+				<li><h3>version 248</h3></li>
+				<ul>
+					<li>fixed two more issues with recent update code!</li>
+					<li>re-applied a more rigorously tested 'invalid subtag' replacement for any user that has experienced incomplete update code in the past few weeks</li>
+					<li>added some tag rendering options to options->tags that affect most user-facing, non-editing windows:</li>
+					<li>added custom namespace-subtag connector (i.e. instead of ':')</li>
+					<li>added 'show namespaces' checkbox (i.e. to keep the colour but lose the namespace, like how most boorus display tags)</li>
+					<li>created a basic framework for the duplicate filter--it doesn't do anything yet, but you can launch it from the duplicates page to check it out</li>
+					<li>updated 'reset processing cache' action and added it to review services repository pages</li>
+					<li>review services now always starts on 'my files'</li>
+					<li>review services will try to stay looking at the currently selected service through a refresh_services event</li>
+					<li>fixed some thread-gui refresh interaction in review services</li>
+					<li>all listctrl-attached delete/remove buttons will now ask if you are sure before they go</li>
+					<li>reenabled db->maintenance->clear orphans, which it turns out I had already fixed by accident</li>
+					<li>serverside services will lock themselves more efficiently while generating updates, ensuring 'server busy' responses can always return promptly</li>
+					<li>fixed tag manage parents a/c entry to remove tags when they already exist in the box (previously, the a/c would only ever add, so a double-click was required to remove)</li>
+					<li>tuned adminside petition processing so it approves/denies in reasonable-sized chunks</li>
+					<li>refactored all the taglist gui code to focus on the underlying tag rather than the string representation</li>
+					<li>plenty of misc taglist cleanup besides</li>
+					<li>started a unit test suite for listboxes and wrote a thorough test for namespace colour listbox</li>
+					<li>misc canvas refactoring</li>
+				</ul>
+				<li><h3>version 247</h3></li>
+				<ul>
+					<li>fixed a problem with deleting more than 256 files at once</li>
+					<li>furthermore, deleting from thumbnail view or after a filter will split delete jobs into chunks of 64 files at a time to reduce gui hang from deleting many tag-heavy files</li>
+					<li>rewrote canvas media container code to recycle containers, embed windows, animation bars, static image windows, and animation windows. scrolling through all kinds of media is less flickery (less 'grey box' window initialise flicker) and scrolling through static images should be completely flickerless! William Gibson slideshow speed works again!</li>
+					<li>this flickerless static image transition will be particularly useful in the forthcoming duplicate image filter!</li>
+					<li>got adminside petition processing working again</li>
+					<li>petition counts and fetching is now split by content_type and status</li>
+					<li>the approve/deny colour hint is more obvious on the petition panel</li>
+					<li>petitions now process off the main gui thread and throw up a popup message</li>
+					<li>added 'check all' and 'check none' buttons to petition panel</li>
+					<li>several serverside petition processing fixes</li>
+					<li>generalised and improved dynamic menu check item initialisation and inversion support</li>
+					<li>moved the 'get tags even if file already in db' option into a cog button on regular downloader pages</li>
+					<li>added a default menu option for 'get tags even if file already in db' to the same cog button</li>
+					<li>added this cog button to the edit subscription panel as well</li>
+					<li>fixed exporting tags to Hydrus Tag Archives</li>
+					<li>fixed exporting 'all known tags' to HTAs</li>
+					<li>cleaned some HTA and related code</li>
+					<li>fixed namespace based tag censorship</li>
+					<li>fixed autocomplete not filtering out current/pending counts if they are set to 'excluded'</li>
+					<li>fixed generation of non-expiring new accounts</li>
+					<li>fixed some v245->v246 tag improvement code that was replacing invalid tags with the incorrect namespace</li>
+					<li>patched a problem with '-:' dirty tag in the v245->v246 update code--I'm not sure what it was doing, but it catches the unusual problem and puts it in the 'invalid tags' category, so let me know if you get trouble with this in future</li>
+					<li>wrote unit tests for bytesdictionary and shortcuts serialisable objects</li>
+					<li>harmonised and improved how separators are appended to menus</li>
+					<li>cleaned up some client db index creation</li>
+					<li>cleaned up some client tuple stripping</li>
+					<li>misc pylint warnings cleanup</li>
+					<li>misc fixes</li>
+				</ul>
+				<li><h3>version 246</h3></li>
+				<ul>
+					<li>fixed a critical bug in serverside content deserialisating that meant servers were not processing most client-submitted data properly</li>
+					<li>fixed a critical bug in 'all known tags' autocomplete regeneration--please run database->regen->a/c cache when it is convenient and let me know if your numbers are still off</li>
+					<li>fixed the pre-v238 update problem for good by abandoning update attempts and advising users to try v238 first</li>
+					<li>clientside invalid tags will now be collapsed like with the server last week. if a tag is invalid (typically something with an extra space, like "series: blah"), the update code will attempt to replace existing mappings with the collapsed valid version. some unusual cases may remain--they will be replaced with 'invalid namespace "series "' and similar. Please remove and replace these when convenient and contact me if there are way too many for you to deal with</li>
+					<li>duplicates pages now have a file domain for the filtering section, and they remember this domain through session loads</li>
+					<li>this file domain is accurate--counting potential duplicates and fetching pairs for 'show some pairs' only from those domains. the issue of remote files appearing should be gone!</li>
+					<li>there is now only one 'idle' entry in the duplicates page cog menu--it combines the three previous into one</li>
+					<li>fixed numerous irregularities across the wildcard code. all search input now has an implicit '*' on the end unless you put a '*' anywhere else, in which case it acts exactly as you enter it, with a non-* beginning matching beginning of string, whitespace, or colon, and non-* end matching end of string or whitespace</li>
+					<li>autocomplete now searches namespace, so entering 'char' will load up all the 'character:' tags along with 'series:di gi charat'. this can lag to hell and back, so it may either need some work or be optional in the future. feedback would be appreciated</li>
+					<li>typing 'namespace:' will include all the series tags below the special optimised 'namespace:*anything*' tag</li>
+					<li>autocomplete searches recognise an explicit '*' no matter where it is in the entry text. typing 'a*' will load up all the a tags and present a 'a*' wildcard option</li>
+					<li>quickly entering a wildcard entry will now submit the correct wildcard predicate ('rather than a literal 'hel*' or whatever tag)</li>
+					<li>review services panel now reports total mappings info on tag services</li>
+					<li>review services panel now reports total files info on file services</li>
+					<li>manage services's listctrl is now type | name | deletable and initially sorts by type. the strings used for hydrus service types are also improved</li>
+					<li>manage serverside services (called by server admins to manage their services) have fixed setnondupe port and name on edit service events</li>
+					<li>new popup messages will now also appear if there were previously no popup messages to display if the current focus is on a child on_top frame, such as review services (you'll now see the processing popup appear when you click 'process now' on review services)</li>
+					<li>the popup message manager now initialises its display window with a single message that is quickly dismissed. this helps set up some variables in a safe environment so they don't have to be generated later when the gui might be minimised or otherwise unusual</li>
+					<li>hid hydrus update files from 'all local files' searches</li>
+					<li>added 'media_view' entries for hydrus update files, just in case they are still visible in some unusual contexts (and they may be again in a future update anyway)</li>
+					<li>fixed 'recent tags' being returned from the database out of order</li>
+					<li>by default, 'recent tags' is now on for new users</li>
+					<li>'get tags even if file already in db' now defaults to False</li>
+					<li>file import status now allows a 'delete' action below the 'skip' action</li>
+					<li>file import status right-click event processing is more sane</li>
+					<li>fixed the new raw width/height sort choices, which were accidentally swapped</li>
+					<li>cleaned the media sort code generally</li>
+					<li>cleared out some redundant rows that are in some users' client_files_locations</li>
+					<li>namespaced predicates are no longer count-merged with their namespaceless versions in 'write' autocomplete dropdowns</li>
+					<li>'unknown' accounts should now properly resync after clientside service change</li>
+					<li>improved how registration keys are checked serverside when fetching access keys</li>
+					<li>fixed a v244 update problem when unexected additional tag parent/sibling petitions rows exist</li>
+					<li>improved my free space test code and applied it to the old v243->v244 free space test (it'll now test free space on your temporary path and report problems appropriately)</li>
+					<li>to improve log privacy and cleanliness, and to make it easier to report profiles, db/pubsub profiles now write to a separate log file named appropriately and labelled with the process's start time</li>
+					<li>profiles are more concise and formatted a little neater</li>
+					<li>across the program, three-period ... ellipses are now replaced with their single character unicode … counterpart (except to the console, where any instance of the unicode ellipsis will now be converted back to ...)</li>
+					<li>cleaned up some log printing code</li>
+					<li>cleaned up some experimental static serialisation code, still thinking if I like it or not</li>
+					<li>started on some proper unit tests for hydrus serialisable objects</li>
+					<li>fixed and otherwise updated a heap of unit test code to account for the v245 changes</li>
+					<li>cleaned up a bunch of old database table join code</li>
+					<li>started some databse-query-tuple-stripping code cleaning</li>
+					<li>deleted more old unused code</li>
+					<li>misc timing improvements</li>
+					<li>misc code cleanup experimentation</li>
+					<li>misc cleanup</li>
+				</ul>
+				<li><h3>version 245</h3></li>
+				<ul>
+					<li>fixed a v244 update problem for clients updating from <v238</li>
+					<li>some misc stuff:</li>
+					<li>if you start editing many subscriptions, cancelling a single dialog will break the chain of loading new dialogs</li>
+					<li>reduced some redundancy in regular client file import</li>
+					<li>improved how the dialog for selection from a list of strings works</li>
+					<li>if the client ever merges one directory to another (such as in external file locations migration) and any files fail to merge, the source will no longer be deleted</li>
+					<li>created new flexible bandwidth tracking and ruling objects</li>
+					<li>updated how repository updates work, splitting the old explicit and self-contained content update package system to a new implicit definitions/content split system and an improved one-step-sync metadata propagation</li>
+					<li>updating now takes approximately 23% as much bandwidth as before</li>
+					<li>update files are now stored in client_files and server_files like any other file (client_updates and server_updates folders will be deleted on update)</li>
+					<li>the server will print update generation info to its log</li>
+					<li>unfortunately, updates cannot be converted, so a complete resync of update files is required. the smaller update size and better bandwidth controls should mitigate the problem somewhat</li>
+					<li>the server has been compacted across all content types--its mappings db file should shrink about 12%</li>
+					<li>due to new service-specific ids, server.master.db should increase in size, typically about 50%</li>
+					<li>harmonised how GET and POST/response args are built and parsed across the network</li>
+					<li>server administration initialisation is now simpler, done with 'init' registration key</li>
+					<li>leading and trailing spaces are now removed from both the namespace and subtag components of namespaced tags, meaning 'title: blah' will be collapsed to 'title:blah'. tag repositories will clean their existing tags on update</li>
+					<li>invalid serverside tags will be replaced with valid placeholders on server update</li>
+					<li>refactored, harmonised and simplified some server request code</li>
+					<li>Eris makes a triumphant return to the root welcome page ('/' request of any service) with improved self-description text as well</li>
+					<li>updated how bandwidth is tracked and overseen</li>
+					<li>all requests now consume bandwidth</li>
+					<li>fewer requests are actually constrained by bandwidth--at the moment, it is only update files and file/thumbnail downloads, as these represent the overwhelming majority of bandwidth consumption and are not at all critical to service operation--this may change in the future, but it suits our purposes for now</li>
+					<li>bandwidth tracking code is more sane across the board</li>
+					<li>the server's administration service now tracks server-wide bandwidth as it happens</li>
+					<li>service and server-wide bandwidth rules are consulted as soon as the request begins</li>
+					<li>improved some server response rendering</li>
+					<li>permissions are more flexible and content-specific</li>
+					<li>improved how file repositories check and process file requests</li>
+					<li>created a gui control for managing bandwidth rules</li>
+					<li>updated the serverside service object</li>
+					<li>the serverside service object now contains bandwidth rules and tracking</li>
+					<li>updated how the server deals with services on a db level</li>
+					<li>refactored and cleaned a ton of server db code</li>
+					<li>updated how services are edited over the network</li>
+					<li>updated how the server associates its services with its http pipeline</li>
+					<li>converted clientside server service management gui to the new panel system</li>
+					<li>updated gui code for clientside server service management</li>
+					<li>converted clientside server service management db code to the new system</li>
+					<li>improved how bandwidth errors are reported</li>
+					<li>updated the account type object</li>
+					<li>the account type object now contains bandwidth rules and a more flexible permissions system</li>
+					<li>updated how the server deals with account types on a db level</li>
+					<li>converted clientside server account type management gui to the new panel system</li>
+					<li>updated gui code for clientside server account type management</li>
+					<li>serverside account types are now fetched from a cache, reducing memory sprawl</li>
+					<li>updated the account object</li>
+					<li>the account object now contains a bandwidth tracker</li>
+					<li>updated how the server deals with accounts on a db level</li>
+					<li>updated the clientside server object</li>
+					<li>the clientside server object now contains bandwidth rules and a tracker and has improved error management, recovery, and reporting</li>
+					<li>updated how the client deals with services on a db level</li>
+					<li>improved how serverside bandwidth errors are caught</li>
+					<li>all clientside services start with a 50MB/day bandwidth limit</li>
+					<li>existing repositories will get a 250MB/month, 50MB/day default bandwidth limit, just to help us get over the hump--see the release post for info on how to get all the updates anyway</li>
+					<li>updated manage services dialog extensively</li>
+					<li>service account registration now occurs through a simple button on the normal clientside service edit panel</li>
+					<li>all services can now be renamed</li>
+					<li>updated the content processing pipeline</li>
+					<li>prepared code for future merging of file and tag repositories</li>
+					<li>added future support for pend-petitions for files and mappings and simple creation permissions for tag siblings and parents</li>
+					<li>the clientside content processing pipeline now operates inside a single database transaction, reducing a great deal of previously redundant hard drive activity</li>
+					<li>the serverside content processing pipeline now creates per-service timestamped content definitions</li>
+					<li>the clientside content processing pipeline now maintains and appropriately consults a cache for server definitions</li>
+					<li>pre-process disk cache is more intelligent</li>
+					<li>updated review services to match the new service objects</li>
+					<li>service review panels now show more information about error state and so on</li>
+					<li>service review panels should now update as soon as services change</li>
+					<li>you can now force sync repositories from review services</li>
+					<li>you can now pause/resume repositories from review services</li>
+					<li>you can now export repository update files from review services</li>
+					<li>you can now import repository update files from the services menu</li>
+					<li>repository thumbnail download now uses a cache for faster thumbnail ownership testing</li>
+					<li>culled a lot of old code and experiments</li>
+					<li>deleted all the old messaging depot code and db table cruft</li>
+					<li>removed optimised petition processing</li>
+					<li>serverside deleteorphans is temporarily disabled</li>
+					<li>hydrus client-repository relationship no longer supports news</li>
+					<li>removed the 'stats' admin service call--it will come back as a account review page</li>
+					<li>clientside clear orphans is temporarily disabled</li>
+					<li>clientside local file/thumbnail server is disabled for now</li>
+					<li>custom service 'messages' for the root page are no longer available</li>
+					<li>some things are not working yet--they will be back in soon</li>
+					<li>content presentation on review services</li>
+					<li>service reset, other advanced content service controls</li>
+					<li>ipfs controls on review services</li>
+					<li>local booru controls on review services</li>
+					<li>most service-specific panels on manage services</li>
+					<li>petition resolution</li>
+					<li>serverside account modification, including banning</li>
+				</ul>
+				<li><h3>version 244</h3></li>
+				<ul>
+					<li>updated client database to compact ( namespace_id, tag_id ) pair into a single id for storage</li>
+					<li>added some bells and whistles to the update code</li>
+					<li>added a free space check and messagebox warning before the update</li>
+					<li>updated db, service, and a/c cache creation code to reflect new schema</li>
+					<li>updated absolutely everything else in the db to reflect the new schema</li>
+					<li>for users with plenty of tags, the db should now be about 33% smaller!</li>
+					<li>unified how unnamespaced tag searching counts are totalled</li>
+					<li>unnamespaced tag searching counts are now totalled when the tags are fetched from the in-view ui media</li>
+					<li>unified how tags are split into ( namespace, subtag ) across the program</li>
+					<li>fixed deviantart gallery thumbnail parser</li>
+					<li>fixed linux session load page key event handling bug</li>
+					<li>os x can now support notebooks with zero pages open</li>
+					<li>fixed an issue where os x was losing the first page of some session loads</li>
+					<li>fixed some similar files shutdown work false positive calculation</li>
+					<li>reduced server bandwidth check period from 24 hours to 1 hour</li>
+					<li>improved calltothread scheduling under heavy load</li>
+					<li>improved scheduling of how files are physically deleted</li>
+					<li>numerous laggy temp_table replacement/cleanup</li>
+					<li>more temp_table replacement</li>
+					<li>misc efficiency improvements and general db code cleanup</li>
+					<li>misc path code cleanup</li>
+				</ul>
+				<li><h3>version 243</h3></li>
+				<ul>
+					<li>updated more menu code to the new system</li>
+					<li>finished updating all main gui menubar and thumbnail menu code</li>
+					<li>all brackets, braces, parentheses, and single and double quotes are now ignored when matching search text to tag. inputting 'mercy' matches 'character:angela "mercy" ziegler' and entering '[[[intensifies]]]' matches '[intensifies]'</li>
+					<li>'*' searches will now return no autocomplete results, rather than trying to load absolutely everything</li>
+					<li>made wildcard searching significantly more permissable--it now implicitly applies a '*' to the beginning as well as the end of your search input</li>
+					<li>the main gui's notebook pages will now be disabled while a session loads</li>
+					<li>might have fixed a first-boot layout issue--otherwise added a layout entry to the debug menu for further testing of this problem</li>
+					<li>improved progress layout on file import dialog</li>
+					<li>created a more efficient way for threads to update gui elements</li>
+					<li>the file import dialog uses this new update system and parses lots of small files much faster as a result</li>
+					<li>the edit import folder dialog will now complain if you try to put in an import path that includes the install or db directory</li>
+					<li>ffmpeg mime parsing now catches and reports audio formats without any hassle</li>
+					<li>thread downloader no longer fetches file extension in filename tag 'filename:blah' instead of 'filename:blah.jpg'</li>
+					<li>changed png default zoom rules to copy jpg--the unusual zoom as default was more confusing than helpful</li>
+					<li>updated sqlite for windows--should be a decent bit faster</li>
+					<li>deleted a lot of old code that'll never be needed again</li>
+					<li>misc refactoring</li>
+					<li>misc cleanup</li>
+				</ul>
 				<li><h3>version 242</h3></li>
 				<ul>
 					<li>optimised 'exact match' similar file queries to run a lot faster</li>

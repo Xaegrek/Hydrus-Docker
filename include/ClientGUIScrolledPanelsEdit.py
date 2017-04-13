@@ -4,14 +4,134 @@ import ClientDownloading
 import ClientImporting
 import ClientGUICollapsible
 import ClientGUICommon
+import ClientGUIControls
 import ClientGUIDialogs
 import ClientGUIScrolledPanels
 import ClientGUITopLevelWindows
 import HydrusConstants as HC
 import HydrusData
 import HydrusGlobals
+import HydrusNetwork
+import HydrusSerialisable
 import wx
 
+class EditAccountTypePanel( ClientGUIScrolledPanels.EditPanel ):
+    
+    def __init__( self, parent, service_type, account_type ):
+        
+        ClientGUIScrolledPanels.EditPanel.__init__( self, parent )
+        
+        ( self._account_type_key, title, permissions, bandwidth_rules ) = account_type.ToTuple()
+        
+        self._title = wx.TextCtrl( self )
+        
+        permission_choices = self._GeneratePermissionChoices( service_type )
+        
+        self._permission_controls = []
+        
+        self._permissions_panel = ClientGUICommon.StaticBox( self, 'permissions' )
+        
+        gridbox_rows = []
+        
+        for ( content_type, action_rows ) in permission_choices:
+            
+            choice_control = ClientGUICommon.BetterChoice( self._permissions_panel )
+            
+            for ( label, action ) in action_rows:
+                
+                choice_control.Append( label, ( content_type, action ) )
+                
+            
+            if content_type in permissions:
+                
+                selection_row = ( content_type, permissions[ content_type ] )
+                
+            else:
+                
+                selection_row = ( content_type, None )
+                
+            
+            try:
+                
+                choice_control.SelectClientData( selection_row )
+                
+            except:
+                
+                choice_control.SelectClientData( ( content_type, None ) )
+                
+            
+            self._permission_controls.append( choice_control )
+            
+            gridbox_label = HC.content_type_string_lookup[ content_type ]
+            
+            gridbox_rows.append( ( gridbox_label, choice_control ) )
+            
+        
+        gridbox = ClientGUICommon.WrapInGrid( self._permissions_panel, gridbox_rows )
+        
+        self._bandwidth_rules_control = ClientGUIControls.BandwidthRulesCtrl( self, bandwidth_rules )
+        
+        #
+        
+        self._title.SetValue( title )
+        
+        #
+        
+        t_hbox = ClientGUICommon.WrapInText( self._title, self, 'title: ' )
+        
+        self._permissions_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        
+        vbox = wx.BoxSizer( wx.VERTICAL )
+        
+        vbox.AddF( t_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        vbox.AddF( self._permissions_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.AddF( self._bandwidth_rules_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        
+        self.SetSizer( vbox )
+        
+    
+    def _GeneratePermissionChoices( self, service_type ):
+        
+        possible_permissions = HydrusNetwork.GetPossiblePermissions( service_type )
+        
+        permission_choices = []
+        
+        for ( content_type, possible_actions ) in possible_permissions:
+            
+            choices = []
+            
+            for action in possible_actions:
+                
+                choices.append( ( HC.permission_pair_string_lookup[ ( content_type, action ) ], action ) )
+                
+            
+            permission_choices.append( ( content_type, choices ) )
+            
+        
+        return permission_choices
+        
+    
+    def GetValue( self ):
+        
+        title = self._title.GetValue()
+        
+        permissions = {}
+        
+        for permission_control in self._permission_controls:
+            
+            ( content_type, action ) = permission_control.GetChoice()
+            
+            if action is not None:
+                
+                permissions[ content_type ] = action
+                
+            
+        
+        bandwidth_rules = self._bandwidth_rules_control.GetValue()
+        
+        return HydrusNetwork.AccountType.GenerateAccountTypeFromParameters( self._account_type_key, title, permissions, bandwidth_rules )
+        
+    
 class EditFrameLocationPanel( ClientGUIScrolledPanels.EditPanel ):
     
     def __init__( self, parent, info ):
@@ -126,7 +246,7 @@ class EditMediaViewOptionsPanel( ClientGUIScrolledPanels.EditPanel ):
             
             self._media_show_action.Append( CC.media_viewer_action_string_lookup[ action ], action )
             
-            if action != CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW:
+            if action != CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW_ON_ACTIVATION_OPEN_EXTERNALLY:
                 
                 self._preview_show_action.Append( CC.media_viewer_action_string_lookup[ action ], action )
                 
@@ -300,7 +420,7 @@ class EditSeedCachePanel( ClientGUIScrolledPanels.EditPanel ):
         self._seed_cache = seed_cache
         
         self._text = wx.StaticText( self, label = 'initialising' )
-        self._seed_cache_control = ClientGUICommon.SeedCacheControl( self, self._seed_cache )
+        self._seed_cache_control = ClientGUIControls.SeedCacheControl( self, self._seed_cache )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
@@ -331,6 +451,233 @@ class EditSeedCachePanel( ClientGUIScrolledPanels.EditPanel ):
     def NotifySeedUpdated( self, seed ):
         
         self._UpdateText()
+        
+    
+class EditServersideService( ClientGUIScrolledPanels.EditPanel ):
+    
+    def __init__( self, parent, serverside_service ):
+        
+        ClientGUIScrolledPanels.EditPanel.__init__( self, parent )
+        
+        duplicate_serverside_service = serverside_service.Duplicate()
+        
+        ( self._service_key, self._service_type, name, port, self._dictionary ) = duplicate_serverside_service.ToTuple()
+        
+        self._service_panel = self._ServicePanel( self, name, port, self._dictionary )
+        
+        self._panels = []
+        
+        if self._service_type in HC.RESTRICTED_SERVICES:
+            
+            self._panels.append( self._ServiceRestrictedPanel( self, self._dictionary ) )
+            
+            if self._service_type == HC.FILE_REPOSITORY:
+                
+                self._panels.append( self._ServiceFileRepositoryPanel( self, self._dictionary ) )
+                
+            
+            if self._service_type == HC.SERVER_ADMIN:
+                
+                self._panels.append( self._ServiceServerAdminPanel( self, self._dictionary ) )
+                
+            
+        
+        #
+        
+        vbox = wx.BoxSizer( wx.VERTICAL )
+        
+        vbox.AddF( self._service_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        
+        for panel in self._panels:
+            
+            vbox.AddF( panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            
+        
+        self.SetSizer( vbox )
+        
+    
+    def GetValue( self ):
+        
+        ( name, port, dictionary_part ) = self._service_panel.GetValue()
+        
+        dictionary = self._dictionary.Duplicate()
+        
+        dictionary.update( dictionary_part )
+        
+        for panel in self._panels:
+            
+            dictionary_part = panel.GetValue()
+            
+            dictionary.update( dictionary_part )
+            
+        
+        return HydrusNetwork.GenerateService( self._service_key, self._service_type, name, port, dictionary )
+        
+    
+    class _ServicePanel( ClientGUICommon.StaticBox ):
+        
+        def __init__( self, parent, name, port, dictionary ):
+            
+            ClientGUICommon.StaticBox.__init__( self, parent, 'basic information' )
+            
+            self._name = wx.TextCtrl( self )
+            self._port = wx.SpinCtrl( self, min = 1, max = 65535 )
+            self._upnp_port = ClientGUICommon.NoneableSpinCtrl( self, 'external upnp port', none_phrase = 'do not forward port', min = 1, max = 65535 )
+            
+            self._bandwidth_tracker_st = wx.StaticText( self )
+            
+            #
+            
+            self._name.SetValue( name )
+            self._port.SetValue( port )
+            
+            upnp_port = dictionary[ 'upnp_port' ]
+            
+            self._upnp_port.SetValue( upnp_port )
+            
+            bandwidth_tracker = dictionary[ 'bandwidth_tracker' ]
+            
+            bandwidth_text = bandwidth_tracker.GetCurrentMonthSummary()
+            
+            self._bandwidth_tracker_st.SetLabelText( bandwidth_text )
+            
+            #
+            
+            rows = []
+            
+            rows.append( ( 'name: ', self._name ) )
+            rows.append( ( 'port: ', self._port ) )
+            rows.append( ( 'upnp port: ', self._upnp_port ) )
+            
+            gridbox = ClientGUICommon.WrapInGrid( self, rows )
+            
+            self.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            self.AddF( self._bandwidth_tracker_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            
+        
+        def GetValue( self ):
+            
+            dictionary_part = {}
+            
+            name = self._name.GetValue()
+            port = self._port.GetValue()
+            
+            upnp_port = self._upnp_port.GetValue()
+            
+            dictionary_part[ 'upnp_port' ] = upnp_port
+            
+            return ( name, port, dictionary_part )
+            
+        
+    
+    class _ServiceRestrictedPanel( wx.Panel ):
+        
+        def __init__( self, parent, dictionary ):
+            
+            wx.Panel.__init__( self, parent )
+            
+            bandwidth_rules = dictionary[ 'bandwidth_rules' ]
+            
+            self._bandwidth_rules = ClientGUIControls.BandwidthRulesCtrl( self, bandwidth_rules )
+            
+            #
+            
+            vbox = wx.BoxSizer( wx.VERTICAL )
+            
+            vbox.AddF( self._bandwidth_rules, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            
+            self.SetSizer( vbox )
+            
+        
+        def GetValue( self ):
+            
+            dictionary_part = {}
+            
+            dictionary_part[ 'bandwidth_rules' ] = self._bandwidth_rules.GetValue()
+            
+            return dictionary_part
+            
+        
+    
+    class _ServiceFileRepositoryPanel( ClientGUICommon.StaticBox ):
+        
+        def __init__( self, parent, dictionary ):
+            
+            ClientGUICommon.StaticBox.__init__( self, parent, 'file repository' )
+            
+            self._log_uploader_ips = wx.CheckBox( self )
+            self._max_storage = ClientGUICommon.NoneableSpinCtrl( self, unit = 'MB', multiplier = 1024 * 1024 )
+            
+            #
+            
+            log_uploader_ips = dictionary[ 'log_uploader_ips' ]
+            max_storage = dictionary[ 'max_storage' ]
+            
+            self._log_uploader_ips.SetValue( log_uploader_ips )
+            self._max_storage.SetValue( max_storage )
+            
+            #
+            
+            rows = []
+            
+            rows.append( ( 'log file uploader IP addresses?: ', self._log_uploader_ips ) )
+            rows.append( ( 'max file storage: ', self._max_storage ) )
+            
+            gridbox = ClientGUICommon.WrapInGrid( self, rows )
+            
+            self.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            
+        
+        def GetValue( self ):
+            
+            dictionary_part = {}
+            
+            log_uploader_ips = self._log_uploader_ips.GetValue()
+            max_storage = self._max_storage.GetValue()
+            
+            dictionary_part[ 'log_uploader_ips' ] = log_uploader_ips
+            dictionary_part[ 'max_storage' ] = max_storage
+            
+            return dictionary_part
+            
+        
+    
+    class _ServiceServerAdminPanel( ClientGUICommon.StaticBox ):
+        
+        def __init__( self, parent, dictionary ):
+            
+            ClientGUICommon.StaticBox.__init__( self, parent, 'server-wide bandwidth' )
+            
+            self._bandwidth_tracker_st = wx.StaticText( self )
+            
+            bandwidth_rules = dictionary[ 'server_bandwidth_rules' ]
+            
+            self._bandwidth_rules = ClientGUIControls.BandwidthRulesCtrl( self, bandwidth_rules )
+            
+            #
+            
+            bandwidth_tracker = dictionary[ 'server_bandwidth_tracker' ]
+            
+            bandwidth_text = bandwidth_tracker.GetCurrentMonthSummary()
+            
+            self._bandwidth_tracker_st.SetLabelText( bandwidth_text )
+            
+            #
+            
+            self.AddF( self._bandwidth_tracker_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.AddF( self._bandwidth_rules, CC.FLAGS_EXPAND_PERPENDICULAR )
+            
+        
+        def GetValue( self ):
+            
+            dictionary_part = {}
+            
+            bandwidth_rules = self._bandwidth_rules.GetValue()
+            
+            dictionary_part[ 'server_bandwidth_rules' ] = bandwidth_rules
+            
+            return dictionary_part
+            
         
     
 class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
@@ -390,7 +737,22 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
         
         self._options_panel = ClientGUICommon.StaticBox( self, 'options' )
         
-        self._get_tags_if_redundant = wx.CheckBox( self._options_panel )
+        menu_items = []
+        
+        invert_call = self._InvertGetTagsIfURLKnownAndFileRedundant
+        value_call = self._GetTagsIfURLKnownAndFileRedundant
+        
+        check_manager = ClientGUICommon.CheckboxManagerCalls( invert_call, value_call )
+        
+        menu_items.append( ( 'check', 'get tags even if url is known and file is already in db (this downloader)', 'If this is selected, the client will fetch the tags from a file\'s page even if it has the file and already previously downloaded it from that location.', check_manager ) )
+        
+        menu_items.append( ( 'separator', 0, 0, 0 ) )
+        
+        check_manager = ClientGUICommon.CheckboxManagerOptions( 'get_tags_if_url_known_and_file_redundant' )
+        
+        menu_items.append( ( 'check', 'get tags even if url is known and file is already in db (default)', 'Set the default for this value.', check_manager ) )
+        
+        cog_button = ClientGUICommon.MenuBitmapButton( self._options_panel, CC.GlobalBMPs.cog, menu_items )
         
         self._initial_file_limit = ClientGUICommon.NoneableSpinCtrl( self._options_panel, '', none_phrase = 'get everything', min = 1, max = 1000000 )
         self._initial_file_limit.SetToolTipString( 'If set, the first sync will add no more than this many files. Otherwise, it will get everything the gallery has.' )
@@ -404,8 +766,7 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
         
         self._paused = wx.CheckBox( self._control_panel )
         
-        self._seed_cache_button = wx.BitmapButton( self._control_panel, bitmap = CC.GlobalBMPs.seed_cache )
-        self._seed_cache_button.Bind( wx.EVT_BUTTON, self.EventSeedCache )
+        self._seed_cache_button = ClientGUICommon.BetterBitmapButton( self._control_panel, CC.GlobalBMPs.seed_cache, self._SeedCache )
         self._seed_cache_button.SetToolTipString( 'open detailed url cache status' )
         
         self._retry_failed = ClientGUICommon.BetterButton( self._control_panel, 'retry failed', self.RetryFailed )
@@ -422,7 +783,7 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
         
         #
         
-        ( name, gallery_identifier, gallery_stream_identifiers, query, period, get_tags_if_redundant, initial_file_limit, periodic_file_limit, paused, import_file_options, import_tag_options, self._last_checked, self._last_error, self._check_now, self._seed_cache ) = subscription.ToTuple()
+        ( name, gallery_identifier, gallery_stream_identifiers, query, period, self._get_tags_if_url_known_and_file_redundant, initial_file_limit, periodic_file_limit, paused, import_file_options, import_tag_options, self._last_checked, self._last_error, self._check_now, self._seed_cache ) = subscription.ToTuple()
         
         self._name.SetValue( name )
         
@@ -450,7 +811,6 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
         
         self._period.SetValue( period )
         
-        self._get_tags_if_redundant.SetValue( get_tags_if_redundant )
         self._initial_file_limit.SetValue( initial_file_limit )
         self._periodic_file_limit.SetValue( periodic_file_limit )
         
@@ -497,12 +857,12 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
         
         rows = []
         
-        rows.append( ( 'get tags even if new file is already in db: ', self._get_tags_if_redundant ) )
         rows.append( ( 'on first check, get at most this many files: ', self._initial_file_limit ) )
         rows.append( ( 'on normal checks, get at most this many newer files: ', self._periodic_file_limit ) )
         
         gridbox = ClientGUICommon.WrapInGrid( self._options_panel, rows )
         
+        self._options_panel.AddF( cog_button, CC.FLAGS_LONE_BUTTON )
         self._options_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         #
@@ -572,6 +932,16 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
             
         
         return gallery_identifier
+        
+    
+    def _GetTagsIfURLKnownAndFileRedundant( self ):
+        
+        return self._get_tags_if_url_known_and_file_redundant
+        
+    
+    def _InvertGetTagsIfURLKnownAndFileRedundant( self ):
+        
+        self._get_tags_if_url_known_and_file_redundant = not self._get_tags_if_url_known_and_file_redundant
         
     
     def _UpdateCommandButtons( self ):
@@ -684,25 +1054,7 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
         wx.CallAfter( self.ProcessEvent, event )
         
     
-    def CheckNow( self ):
-        
-        self._check_now = True
-        
-        self._UpdateCommandButtons()
-        self._UpdateLastNextCheck()
-        
-    
-    def EventBooruSelected( self, event ):
-        
-        self._ConfigureImportTagOptions()
-        
-    
-    def EventPeriodChanged( self, event ):
-        
-        self._UpdateLastNextCheck()
-        
-    
-    def EventSeedCache( self, event ):
+    def _SeedCache( self ):
         
         dupe_seed_cache = self._seed_cache.Duplicate()
         
@@ -721,6 +1073,23 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
                 
             
         
+    
+    def CheckNow( self ):
+        
+        self._check_now = True
+        
+        self._UpdateCommandButtons()
+        self._UpdateLastNextCheck()
+        
+    
+    def EventBooruSelected( self, event ):
+        
+        self._ConfigureImportTagOptions()
+        
+    
+    def EventPeriodChanged( self, event ):
+        
+        self._UpdateLastNextCheck()
         
     
     def EventSiteChanged( self, event ):
@@ -743,7 +1112,6 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
         
         period = self._period.GetValue()
         
-        get_tags_if_redundant = self._get_tags_if_redundant.GetValue()
         initial_file_limit = self._initial_file_limit.GetValue()
         periodic_file_limit = self._periodic_file_limit.GetValue()
         
@@ -753,7 +1121,7 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
         
         import_tag_options = self._import_tag_options.GetOptions()
         
-        subscription.SetTuple( gallery_identifier, gallery_stream_identifiers, query, period, get_tags_if_redundant, initial_file_limit, periodic_file_limit, paused, import_file_options, import_tag_options, self._last_checked, self._last_error, self._check_now, self._seed_cache )
+        subscription.SetTuple( gallery_identifier, gallery_stream_identifiers, query, period, self._get_tags_if_url_known_and_file_redundant, initial_file_limit, periodic_file_limit, paused, import_file_options, import_tag_options, self._last_checked, self._last_error, self._check_now, self._seed_cache )
         
         return subscription
         

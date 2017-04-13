@@ -1,6 +1,9 @@
 import ClientCaches
 import ClientConstants as CC
+import ClientData
 import ClientGUICommon
+import ClientGUIListBoxes
+import ClientGUIMenus
 import ClientSearch
 import collections
 import HydrusConstants as HC
@@ -100,7 +103,7 @@ class AutoCompleteDropdown( wx.Panel ):
         
         self.SetSizer( vbox )
         
-        self._cache_text = ''
+        self._cache_text = None
         self._cached_results = []
         
         self._initial_matches_fetched = False
@@ -205,9 +208,7 @@ class AutoCompleteDropdown( wx.Panel ):
             visible = self._text_ctrl.IsShownOnScreen()
             
         
-        focus_window = wx.Window.FindFocus()
-        
-        focus_remains_on_self_or_children = focus_window == self._dropdown_window or focus_window in self._dropdown_window.GetChildren() or focus_window == self._text_ctrl
+        focus_remains_on_self_or_children = ClientGUICommon.WindowHasFocus( self._dropdown_window ) or ClientGUICommon.WindowHasFocus( self._text_ctrl ) or ClientGUICommon.ChildHasFocus( self._dropdown_window )
         
         return tlp_active and visible and focus_remains_on_self_or_children
         
@@ -284,7 +285,9 @@ class AutoCompleteDropdown( wx.Panel ):
         
         HydrusGlobals.client_controller.ResetIdleTimer()
         
-        if event.KeyCode in ( wx.WXK_INSERT, wx.WXK_NUMPAD_INSERT ):
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+        
+        if key in ( wx.WXK_INSERT, wx.WXK_NUMPAD_INSERT ):
             
             if self._intercept_key_events:
                 
@@ -316,7 +319,7 @@ class AutoCompleteDropdown( wx.Panel ):
             
             self._text_ctrl.Refresh()
             
-        elif event.KeyCode == wx.WXK_SPACE and event.RawControlDown(): # this is control, not command on os x, for which command+space does some os stuff
+        elif key == wx.WXK_SPACE and event.RawControlDown(): # this is control, not command on os x, for which command+space does some os stuff
             
             self._UpdateList()
             
@@ -324,34 +327,34 @@ class AutoCompleteDropdown( wx.Panel ):
             
         elif self._intercept_key_events:
             
-            if event.KeyCode in ( ord( 'A' ), ord( 'a' ) ) and event.CmdDown():
+            if key in ( ord( 'A' ), ord( 'a' ) ) and modifier == wx.ACCEL_CTRL:
                 
                 event.Skip()
                 
-            elif event.KeyCode in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ) and self._ShouldTakeResponsibilityForEnter():
+            elif key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ) and self._ShouldTakeResponsibilityForEnter():
                 
                 self._TakeResponsibilityForEnter()
                 
-            elif event.KeyCode == wx.WXK_ESCAPE:
+            elif key == wx.WXK_ESCAPE:
                 
                 self.GetTopLevelParent().SetFocus()
                 
-            elif event.KeyCode in ( wx.WXK_UP, wx.WXK_NUMPAD_UP, wx.WXK_DOWN, wx.WXK_NUMPAD_DOWN ) and self._text_ctrl.GetValue() == '' and len( self._dropdown_list ) == 0:
+            elif key in ( wx.WXK_UP, wx.WXK_NUMPAD_UP, wx.WXK_DOWN, wx.WXK_NUMPAD_DOWN ) and self._text_ctrl.GetValue() == '' and len( self._dropdown_list ) == 0:
                 
-                if event.KeyCode in ( wx.WXK_UP, wx.WXK_NUMPAD_UP ): id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'select_up' )
-                elif event.KeyCode in ( wx.WXK_DOWN, wx.WXK_NUMPAD_DOWN ): id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'select_down' )
+                if key in ( wx.WXK_UP, wx.WXK_NUMPAD_UP ): id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'select_up' )
+                elif key in ( wx.WXK_DOWN, wx.WXK_NUMPAD_DOWN ): id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'select_down' )
                 
                 new_event = wx.CommandEvent( commandType = wx.wxEVT_COMMAND_MENU_SELECTED, winid = id )
                 
                 self._text_ctrl.ProcessEvent( new_event )
                 
-            elif event.KeyCode in ( wx.WXK_PAGEDOWN, wx.WXK_NUMPAD_PAGEDOWN, wx.WXK_PAGEUP, wx.WXK_NUMPAD_PAGEUP ) and self._text_ctrl.GetValue() == '' and len( self._dropdown_list ) == 0:
+            elif key in ( wx.WXK_PAGEDOWN, wx.WXK_NUMPAD_PAGEDOWN, wx.WXK_PAGEUP, wx.WXK_NUMPAD_PAGEUP ) and self._text_ctrl.GetValue() == '' and len( self._dropdown_list ) == 0:
                 
-                if event.KeyCode in ( wx.WXK_PAGEUP, wx.WXK_NUMPAD_PAGEUP ):
+                if key in ( wx.WXK_PAGEUP, wx.WXK_NUMPAD_PAGEUP ):
                     
                     id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'canvas_show_previous' )
                     
-                elif event.KeyCode in ( wx.WXK_PAGEDOWN, wx.WXK_NUMPAD_PAGEDOWN ):
+                elif key in ( wx.WXK_PAGEDOWN, wx.WXK_NUMPAD_PAGEDOWN ):
                     
                     id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'canvas_show_next' )
                     
@@ -460,8 +463,7 @@ class AutoCompleteDropdown( wx.Panel ):
     
     def RefreshList( self ):
         
-        self._cache_text = ''
-        self._current_namespace = ''
+        self._cache_text = None
         
         self._UpdateList()
         
@@ -522,22 +524,17 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         
         AutoCompleteDropdown.__init__( self, parent )
         
-        self._current_namespace = ''
         self._current_matches = []
         
         file_service = HydrusGlobals.client_controller.GetServicesManager().GetService( self._file_service_key )
         
-        
         tag_service = HydrusGlobals.client_controller.GetServicesManager().GetService( self._tag_service_key )
-        
         
         self._file_repo_button = ClientGUICommon.BetterButton( self._dropdown_window, file_service.GetName(), self.FileButtonHit )
         self._file_repo_button.SetMinSize( ( 20, -1 ) )
         
         self._tag_repo_button = ClientGUICommon.BetterButton( self._dropdown_window, tag_service.GetName(), self.TagButtonHit )
         self._tag_repo_button.SetMinSize( ( 20, -1 ) )
-        
-        self.Bind( wx.EVT_MENU, self.EventMenu )
         
     
     def _ChangeFileService( self, file_service_key ):
@@ -575,8 +572,7 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         
         self._tag_repo_button.SetLabelText( name )
         
-        self._cache_text = ''
-        self._current_namespace = ''
+        self._cache_text = None
         
         wx.CallAfter( self.RefreshList )
         
@@ -601,31 +597,6 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
             
         
     
-    def EventMenu( self, event ):
-        
-        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
-        
-        if action is not None:
-            
-            ( command, data ) = action
-            
-            if command == 'change_file_service':
-                
-                self._ChangeFileService( data )
-                
-            elif command == 'change_tag_service':
-                
-                self._ChangeTagService( data )
-                
-            else:
-                
-                event.Skip()
-                
-                return # this is about select_up and select_down
-                
-            
-        
-    
     def FileButtonHit( self ):
         
         services_manager = HydrusGlobals.client_controller.GetServicesManager()
@@ -642,7 +613,7 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         
         for service in services:
             
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'change_file_service', service.GetServiceKey() ), service.GetName() )
+            ClientGUIMenus.AppendMenuItem( self, menu, service.GetName(), 'Change the current file domain to ' + service.GetName() + '.', self._ChangeFileService, service.GetServiceKey() )
             
         
         HydrusGlobals.client_controller.PopupMenu( self._file_repo_button, menu )
@@ -672,7 +643,7 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         
         for service in services:
             
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'change_tag_service', service.GetServiceKey() ), service.GetName() )
+            ClientGUIMenus.AppendMenuItem( self, menu, service.GetName(), 'Change the current tag domain to ' + service.GetName() + '.', self._ChangeTagService, service.GetServiceKey() )
             
         
         HydrusGlobals.client_controller.PopupMenu( self._tag_repo_button, menu )
@@ -739,7 +710,7 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
     
     def _BroadcastCurrentText( self ):
         
-        ( inclusive, search_text, entry_predicate ) = self._ParseSearchText()
+        ( inclusive, search_text, explicit_wildcard, cache_text, entry_predicate ) = self._ParseSearchText()
         
         try:
             
@@ -777,7 +748,7 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
     
     def _InitDropDownList( self ):
         
-        return ClientGUICommon.ListBoxTagsAutocompleteDropdownRead( self._dropdown_window, self._tag_service_key, self.BroadcastChoices, min_height = self._list_height )
+        return ClientGUIListBoxes.ListBoxTagsACRead( self._dropdown_window, self.BroadcastChoices, self._tag_service_key, min_height = self._list_height )
         
     
     def _ParseSearchText( self ):
@@ -788,31 +759,46 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
             
             inclusive = False
             
-            search_text = raw_entry[1:]
+            entry_text = raw_entry[1:]
             
         else:
             
             inclusive = True
             
-            search_text = raw_entry
+            entry_text = raw_entry
             
         
-        search_text = HydrusTags.CleanTag( search_text )
+        tag = HydrusTags.CleanTag( entry_text )
         
-        siblings_manager = HydrusGlobals.client_controller.GetManager( 'tag_siblings' )
+        explicit_wildcard = '*' in entry_text
         
-        sibling = siblings_manager.GetSibling( self._tag_service_key, search_text )
+        search_text = ClientSearch.ConvertEntryTextToSearchText( entry_text )
         
-        if sibling is None:
+        if explicit_wildcard:
             
-            entry_predicate = ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, search_text, inclusive )
+            cache_text = None
+            
+            entry_predicate = ClientSearch.Predicate( HC.PREDICATE_TYPE_WILDCARD, search_text, inclusive )
             
         else:
             
-            entry_predicate = ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, sibling, inclusive )
+            cache_text = search_text[:-1] # take off the trailing '*' for the cache text
+            
+            siblings_manager = HydrusGlobals.client_controller.GetManager( 'tag_siblings' )
+            
+            sibling = siblings_manager.GetSibling( self._tag_service_key, tag )
+            
+            if sibling is None:
+                
+                entry_predicate = ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, tag, inclusive )
+                
+            else:
+                
+                entry_predicate = ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, sibling, inclusive )
+                
             
         
-        return ( inclusive, search_text, entry_predicate )
+        return ( inclusive, search_text, explicit_wildcard, cache_text, entry_predicate )
         
     
     def _GenerateMatches( self ):
@@ -821,21 +807,26 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
         
         num_autocomplete_chars = HC.options[ 'num_autocomplete_chars' ]
         
-        ( inclusive, search_text, entry_predicate ) = self._ParseSearchText()
+        ( inclusive, search_text, explicit_wildcard, cache_text, entry_predicate ) = self._ParseSearchText()
         
-        if search_text in ( '', ':' ):
+        if search_text in ( '', ':', '*' ):
             
-            input_just_changed = self._cache_text != ''
+            input_just_changed = self._cache_text is not None
             
             db_not_going_to_hang_if_we_hit_it = not HydrusGlobals.client_controller.DBCurrentlyDoingJob()
             
             if input_just_changed or db_not_going_to_hang_if_we_hit_it or not self._initial_matches_fetched:
                 
-                self._cache_text = ''
-                self._current_namespace = ''
+                self._cache_text = None
                 
-                if self._file_service_key == CC.COMBINED_FILE_SERVICE_KEY: search_service_key = self._tag_service_key
-                else: search_service_key = self._file_service_key
+                if self._file_service_key == CC.COMBINED_FILE_SERVICE_KEY:
+                    
+                    search_service_key = self._tag_service_key
+                    
+                else:
+                    
+                    search_service_key = self._file_service_key
+                    
                 
                 self._cached_results = HydrusGlobals.client_controller.Read( 'file_system_predicates', search_service_key )
                 
@@ -844,43 +835,13 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
             
         else:
             
-            must_do_a_search = False
-            
-            if '*' in search_text:
-                
-                must_do_a_search = True
-                
-            
-            if ':' in search_text:
-                
-                ( namespace, half_complete_tag ) = search_text.split( ':', 1 )
-                
-                if namespace != self._current_namespace:
-                    
-                    self._current_namespace = namespace # do a new search, no matter what half_complete tag is
-                    
-                    if half_complete_tag != '': must_do_a_search = True
-                    
-                else:
-                    
-                    if self._cache_text == self._current_namespace + ':' and half_complete_tag != '':
-                        
-                        must_do_a_search = True
-                        
-                    
-                
-            else:
-                
-                self._current_namespace = ''
-                
-                half_complete_tag = search_text
-                
+            ( namespace, half_complete_subtag ) = HydrusTags.SplitTag( search_text )
             
             siblings_manager = HydrusGlobals.client_controller.GetManager( 'tag_siblings' )
             
-            if half_complete_tag == '':
+            if False and half_complete_subtag == '':
                 
-                self._cache_text = self._current_namespace + ':'
+                self._cache_text = None
                 
                 matches = [] # a query like 'namespace:'
                 
@@ -902,20 +863,28 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
                 
                 if fetch_from_db:
                     
+                    # if user searches 'blah', then we include 'blah (23)' for 'series:blah (10)', 'blah (13)'
+                    # if they search for 'series:blah', then we don't!
+                    add_namespaceless = ':' not in namespace
+                    
                     include_current = self._file_search_context.IncludeCurrentTags()
                     include_pending = self._file_search_context.IncludePendingTags()
                     
-                    if len( half_complete_tag ) < num_autocomplete_chars and '*' not in search_text:
+                    small_and_specific_search = cache_text is not None and len( cache_text ) < num_autocomplete_chars
+                    
+                    if small_and_specific_search:
                         
-                        predicates = HydrusGlobals.client_controller.Read( 'autocomplete_predicates', file_service_key = self._file_service_key, tag_service_key = self._tag_service_key, search_text = search_text, exact_match = True, inclusive = inclusive, include_current = include_current, include_pending = include_pending, add_namespaceless = True, collapse_siblings = True )
+                        predicates = HydrusGlobals.client_controller.Read( 'autocomplete_predicates', file_service_key = self._file_service_key, tag_service_key = self._tag_service_key, search_text = cache_text, exact_match = True, inclusive = inclusive, include_current = include_current, include_pending = include_pending, add_namespaceless = add_namespaceless, collapse_siblings = True )
                         
                     else:
                         
-                        if must_do_a_search or self._cache_text == '' or not search_text.startswith( self._cache_text ):
+                        cache_invalid_for_this_search = cache_text is None or self._cache_text is None or not cache_text.startswith( self._cache_text )
+                        
+                        if cache_invalid_for_this_search:
                             
-                            self._cache_text = search_text
+                            self._cache_text = cache_text
                             
-                            self._cached_results = HydrusGlobals.client_controller.Read( 'autocomplete_predicates', file_service_key = self._file_service_key, tag_service_key = self._tag_service_key, search_text = search_text, inclusive = inclusive, include_current = include_current, include_pending = include_pending, add_namespaceless = True, collapse_siblings = True )
+                            self._cached_results = HydrusGlobals.client_controller.Read( 'autocomplete_predicates', file_service_key = self._file_service_key, tag_service_key = self._tag_service_key, search_text = search_text, inclusive = inclusive, include_current = include_current, include_pending = include_pending, add_namespaceless = add_namespaceless, collapse_siblings = True )
                             
                         
                         predicates = self._cached_results
@@ -947,7 +916,7 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
                         
                         current_tags_flat_iterable = itertools.chain.from_iterable( lists_of_current_tags )
                         
-                        current_tags_flat = ClientSearch.FilterTagsBySearchEntry( self._tag_service_key, search_text, current_tags_flat_iterable )
+                        current_tags_flat = ClientSearch.FilterTagsBySearchText( self._tag_service_key, search_text, current_tags_flat_iterable )
                         
                         current_tags_to_count.update( current_tags_flat )
                         
@@ -960,7 +929,7 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
                         
                         pending_tags_flat_iterable = itertools.chain.from_iterable( lists_of_pending_tags )
                         
-                        pending_tags_flat = ClientSearch.FilterTagsBySearchEntry( self._tag_service_key, search_text, pending_tags_flat_iterable )
+                        pending_tags_flat = ClientSearch.FilterTagsBySearchText( self._tag_service_key, search_text, pending_tags_flat_iterable )
                         
                         pending_tags_to_count.update( pending_tags_flat )
                         
@@ -974,34 +943,31 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
                         predicates = siblings_manager.CollapsePredicates( self._tag_service_key, predicates )
                         
                     
+                    if namespace == '':
+                        
+                        predicates = ClientData.MergePredicates( predicates, add_namespaceless = True )
+                        
+                    
                     self._next_updatelist_is_probably_fast = True
                     
                 
-                matches = ClientSearch.FilterPredicatesBySearchEntry( self._tag_service_key, search_text, predicates )
+                matches = ClientSearch.FilterPredicatesBySearchText( self._tag_service_key, search_text, predicates )
                 
                 matches = ClientSearch.SortPredicates( matches )
                 
             
             if self._include_unusual_predicate_types:
                 
-                if self._current_namespace != '':
-                    
-                    if '*' not in self._current_namespace and half_complete_tag == '':
-                        
-                        matches.insert( 0, ClientSearch.Predicate( HC.PREDICATE_TYPE_NAMESPACE, self._current_namespace, inclusive ) )
-                        
-                    
-                    if half_complete_tag != '':
-                        
-                        if '*' in self._current_namespace or ( '*' in half_complete_tag and half_complete_tag != '*' ):
-                            
-                            matches.insert( 0, ClientSearch.Predicate( HC.PREDICATE_TYPE_WILDCARD, search_text, inclusive ) )
-                            
-                        
-                    
-                elif '*' in search_text:
+                if explicit_wildcard:
                     
                     matches.insert( 0, ClientSearch.Predicate( HC.PREDICATE_TYPE_WILDCARD, search_text, inclusive ) )
+                    
+                else:
+                    
+                    if namespace != '' and half_complete_subtag in ( '', '*' ):
+                        
+                        matches.insert( 0, ClientSearch.Predicate( HC.PREDICATE_TYPE_NAMESPACE, namespace, inclusive ) )
+                        
                     
                 
             
@@ -1122,13 +1088,24 @@ class AutoCompleteDropdownTagsWrite( AutoCompleteDropdownTags ):
         
         raw_entry = self._text_ctrl.GetValue()
         
-        search_text = HydrusTags.CleanTag( raw_entry )
+        tag = HydrusTags.CleanTag( raw_entry )
         
-        entry_predicate = ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, search_text )
+        search_text = ClientSearch.ConvertEntryTextToSearchText( raw_entry )
+        
+        if ClientSearch.IsComplexWildcard( search_text ):
+            
+            cache_text = None
+            
+        else:
+            
+            cache_text = search_text[:-1] # take off the trailing '*' for the cache text
+            
+        
+        entry_predicate = ClientSearch.Predicate( HC.PREDICATE_TYPE_TAG, tag )
         
         siblings_manager = HydrusGlobals.client_controller.GetManager( 'tag_siblings' )
         
-        sibling = siblings_manager.GetSibling( self._tag_service_key, search_text )
+        sibling = siblings_manager.GetSibling( self._tag_service_key, tag )
         
         if sibling is not None:
             
@@ -1139,12 +1116,12 @@ class AutoCompleteDropdownTagsWrite( AutoCompleteDropdownTags ):
             sibling_predicate = None
             
         
-        return ( search_text, entry_predicate, sibling_predicate )
+        return ( search_text, cache_text, entry_predicate, sibling_predicate )
         
     
     def _BroadcastCurrentText( self ):
         
-        ( search_text, entry_predicate, sibling_predicate ) = self._ParseSearchText()
+        ( search_text, cache_text, entry_predicate, sibling_predicate ) = self._ParseSearchText()
         
         try:
             
@@ -1164,12 +1141,11 @@ class AutoCompleteDropdownTagsWrite( AutoCompleteDropdownTags ):
         
         num_autocomplete_chars = HC.options[ 'num_autocomplete_chars' ]
         
-        ( search_text, entry_predicate, sibling_predicate ) = self._ParseSearchText()
+        ( search_text, cache_text, entry_predicate, sibling_predicate ) = self._ParseSearchText()
         
-        if search_text in ( '', ':' ):
+        if search_text in ( '', ':', '*' ):
             
-            self._cache_text = ''
-            self._current_namespace = ''
+            self._cache_text = None
             
             matches = []
             
@@ -1177,33 +1153,19 @@ class AutoCompleteDropdownTagsWrite( AutoCompleteDropdownTags ):
             
             must_do_a_search = False
             
-            if ':' in search_text:
+            small_and_specific_search = cache_text is not None and len( cache_text ) < num_autocomplete_chars
+            
+            if small_and_specific_search:
                 
-                ( namespace, other_half ) = search_text.split( ':', 1 )
-                
-                if other_half != '' and namespace != self._current_namespace:
-                    
-                    self._current_namespace = namespace # do a new search, no matter what half_complete tag is
-                    
-                    must_do_a_search = True
-                    
+                predicates = HydrusGlobals.client_controller.Read( 'autocomplete_predicates', file_service_key = self._file_service_key, tag_service_key = self._tag_service_key, search_text = cache_text, exact_match = True, add_namespaceless = False, collapse_siblings = False )
                 
             else:
                 
-                self._current_namespace = ''
+                cache_invalid_for_this_search = cache_text is None or self._cache_text is None or not cache_text.startswith( self._cache_text )
                 
-            
-            half_complete_tag = search_text
-            
-            if len( half_complete_tag ) < num_autocomplete_chars and '*' not in search_text:
-                
-                predicates = HydrusGlobals.client_controller.Read( 'autocomplete_predicates', file_service_key = self._file_service_key, tag_service_key = self._tag_service_key, search_text = search_text, exact_match = True, add_namespaceless = False, collapse_siblings = False )
-                
-            else:
-                
-                if must_do_a_search or self._cache_text == '' or not half_complete_tag.startswith( self._cache_text ):
+                if must_do_a_search or cache_invalid_for_this_search:
                     
-                    self._cache_text = half_complete_tag
+                    self._cache_text = cache_text
                     
                     self._cached_results = HydrusGlobals.client_controller.Read( 'autocomplete_predicates', file_service_key = self._file_service_key, tag_service_key = self._tag_service_key, search_text = search_text, add_namespaceless = False, collapse_siblings = False )
                     
@@ -1213,7 +1175,7 @@ class AutoCompleteDropdownTagsWrite( AutoCompleteDropdownTags ):
                 self._next_updatelist_is_probably_fast = True
                 
             
-            matches = ClientSearch.FilterPredicatesBySearchEntry( self._tag_service_key, half_complete_tag, predicates )
+            matches = ClientSearch.FilterPredicatesBySearchText( self._tag_service_key, search_text, predicates )
             
             matches = ClientSearch.SortPredicates( matches )
             
@@ -1237,7 +1199,7 @@ class AutoCompleteDropdownTagsWrite( AutoCompleteDropdownTags ):
     
     def _InitDropDownList( self ):
         
-        return ClientGUICommon.ListBoxTagsAutocompleteDropdownWrite( self._dropdown_window, self._tag_service_key, self.BroadcastChoices, min_height = self._list_height )
+        return ClientGUIListBoxes.ListBoxTagsACWrite( self._dropdown_window, self.BroadcastChoices, self._tag_service_key, min_height = self._list_height )
         
     
     def _PutAtTopOfMatches( self, matches, predicate ):

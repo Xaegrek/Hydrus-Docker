@@ -83,7 +83,7 @@ try:
             
             if action in ( 'start', 'restart' ):
                 
-                HydrusData.Print( 'Initialising controller...' )
+                HydrusData.Print( u'Initialising controller\u2026' )
                 
                 threading.Thread( target = reactor.run, kwargs = { 'installSignalHandlers' : 0 } ).start()
                 
@@ -94,7 +94,7 @@ try:
             
         except HydrusExceptions.PermissionException as e:
             
-            error = str( e )
+            error = HydrusData.ToUnicode( e )
             
             HydrusData.Print( error )
             

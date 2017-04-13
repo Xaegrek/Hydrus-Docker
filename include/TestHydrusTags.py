@@ -24,15 +24,15 @@ class TestMergeTagsManagers( unittest.TestCase ):
         
         service_keys_to_statuses_to_tags = collections.defaultdict( HydrusData.default_dict_set )
         
-        service_keys_to_statuses_to_tags[ first ][ HC.CURRENT ] = { 'current_1', 'series:blame!' }
+        service_keys_to_statuses_to_tags[ first ][ HC.CONTENT_STATUS_CURRENT ] = { 'current_1', 'series:blame!' }
         
-        service_keys_to_statuses_to_tags[ second ][ HC.CURRENT ] = { 'current_duplicate_1', 'character:cibo' }
-        service_keys_to_statuses_to_tags[ second ][ HC.DELETED ] = { 'current_1' }
-        service_keys_to_statuses_to_tags[ second ][ HC.PENDING ] = { 'pending_1', 'creator:tsutomu nihei' }
-        service_keys_to_statuses_to_tags[ second ][ HC.PETITIONED ] = { 'petitioned_1' }
+        service_keys_to_statuses_to_tags[ second ][ HC.CONTENT_STATUS_CURRENT ] = { 'current_duplicate_1', 'character:cibo' }
+        service_keys_to_statuses_to_tags[ second ][ HC.CONTENT_STATUS_DELETED ] = { 'current_1' }
+        service_keys_to_statuses_to_tags[ second ][ HC.CONTENT_STATUS_PENDING ] = { 'pending_1', 'creator:tsutomu nihei' }
+        service_keys_to_statuses_to_tags[ second ][ HC.CONTENT_STATUS_PETITIONED ] = { 'petitioned_1' }
         
-        service_keys_to_statuses_to_tags[ third ][ HC.CURRENT ] = { 'current_duplicate', 'current_duplicate_1' }
-        service_keys_to_statuses_to_tags[ third ][ HC.PENDING ] = { 'volume:3' }
+        service_keys_to_statuses_to_tags[ third ][ HC.CONTENT_STATUS_CURRENT ] = { 'current_duplicate', 'current_duplicate_1' }
+        service_keys_to_statuses_to_tags[ third ][ HC.CONTENT_STATUS_PENDING ] = { 'volume:3' }
         
         tags_manager_1 = ClientMedia.TagsManager( service_keys_to_statuses_to_tags )
         
@@ -40,13 +40,13 @@ class TestMergeTagsManagers( unittest.TestCase ):
         
         service_keys_to_statuses_to_tags = collections.defaultdict( HydrusData.default_dict_set )
         
-        service_keys_to_statuses_to_tags[ first ][ HC.CURRENT ] = { 'current_2', 'series:blame!', 'chapter:1' }
-        service_keys_to_statuses_to_tags[ first ][ HC.DELETED ] = { 'deleted_2' }
+        service_keys_to_statuses_to_tags[ first ][ HC.CONTENT_STATUS_CURRENT ] = { 'current_2', 'series:blame!', 'chapter:1' }
+        service_keys_to_statuses_to_tags[ first ][ HC.CONTENT_STATUS_DELETED ] = { 'deleted_2' }
         
-        service_keys_to_statuses_to_tags[ second ][ HC.CURRENT ] = { 'current_duplicate'  }
-        service_keys_to_statuses_to_tags[ second ][ HC.PENDING ] = { 'architecture', 'chapter:2' }
+        service_keys_to_statuses_to_tags[ second ][ HC.CONTENT_STATUS_CURRENT ] = { 'current_duplicate'  }
+        service_keys_to_statuses_to_tags[ second ][ HC.CONTENT_STATUS_PENDING ] = { 'architecture', 'chapter:2' }
         
-        service_keys_to_statuses_to_tags[ third ][ HC.CURRENT ] = { 'current_duplicate' }
+        service_keys_to_statuses_to_tags[ third ][ HC.CONTENT_STATUS_CURRENT ] = { 'current_duplicate' }
         
         tags_manager_2 = ClientMedia.TagsManager( service_keys_to_statuses_to_tags )
         
@@ -54,8 +54,8 @@ class TestMergeTagsManagers( unittest.TestCase ):
         
         service_keys_to_statuses_to_tags = collections.defaultdict( HydrusData.default_dict_set )
         
-        service_keys_to_statuses_to_tags[ second ][ HC.CURRENT ] = { 'page:4', 'page:5' }
-        service_keys_to_statuses_to_tags[ second ][ HC.PENDING ] = { 'title:double page spread' }
+        service_keys_to_statuses_to_tags[ second ][ HC.CONTENT_STATUS_CURRENT ] = { 'page:4', 'page:5' }
+        service_keys_to_statuses_to_tags[ second ][ HC.CONTENT_STATUS_PENDING ] = { 'title:double page spread' }
         
         tags_manager_3 = ClientMedia.TagsManager( service_keys_to_statuses_to_tags )
         
@@ -77,48 +77,48 @@ class TestMergeTagsManagers( unittest.TestCase ):
 class TestTagsManager( unittest.TestCase ):
     
     @classmethod
-    def setUpClass( self ):
+    def setUpClass( cls ):
         
-        self._first_key = HydrusData.GenerateKey()
-        self._second_key = HydrusData.GenerateKey()
-        self._third_key = HydrusData.GenerateKey()
+        cls._first_key = HydrusData.GenerateKey()
+        cls._second_key = HydrusData.GenerateKey()
+        cls._third_key = HydrusData.GenerateKey()
         
         service_keys_to_statuses_to_tags = collections.defaultdict( HydrusData.default_dict_set )
         
-        service_keys_to_statuses_to_tags[ self._first_key ][ HC.CURRENT ] = { 'current', u'\u2835', 'creator:tsutomu nihei', 'series:blame!', 'title:test title', 'volume:3', 'chapter:2', 'page:1' }
-        service_keys_to_statuses_to_tags[ self._first_key ][ HC.DELETED ] = { 'deleted' }
+        service_keys_to_statuses_to_tags[ cls._first_key ][ HC.CONTENT_STATUS_CURRENT ] = { 'current', u'\u2835', 'creator:tsutomu nihei', 'series:blame!', 'title:test title', 'volume:3', 'chapter:2', 'page:1' }
+        service_keys_to_statuses_to_tags[ cls._first_key ][ HC.CONTENT_STATUS_DELETED ] = { 'deleted' }
         
-        service_keys_to_statuses_to_tags[ self._second_key ][ HC.CURRENT ] = { 'deleted', u'\u2835' }
-        service_keys_to_statuses_to_tags[ self._second_key ][ HC.DELETED ] = { 'current' }
-        service_keys_to_statuses_to_tags[ self._second_key ][ HC.PENDING ] = { 'pending' }
-        service_keys_to_statuses_to_tags[ self._second_key ][ HC.PETITIONED ] = { 'petitioned' }
+        service_keys_to_statuses_to_tags[ cls._second_key ][ HC.CONTENT_STATUS_CURRENT ] = { 'deleted', u'\u2835' }
+        service_keys_to_statuses_to_tags[ cls._second_key ][ HC.CONTENT_STATUS_DELETED ] = { 'current' }
+        service_keys_to_statuses_to_tags[ cls._second_key ][ HC.CONTENT_STATUS_PENDING ] = { 'pending' }
+        service_keys_to_statuses_to_tags[ cls._second_key ][ HC.CONTENT_STATUS_PETITIONED ] = { 'petitioned' }
         
-        service_keys_to_statuses_to_tags[ self._third_key ][ HC.CURRENT ] = { 'petitioned' }
-        service_keys_to_statuses_to_tags[ self._third_key ][ HC.DELETED ] = { 'pending' }
+        service_keys_to_statuses_to_tags[ cls._third_key ][ HC.CONTENT_STATUS_CURRENT ] = { 'petitioned' }
+        service_keys_to_statuses_to_tags[ cls._third_key ][ HC.CONTENT_STATUS_DELETED ] = { 'pending' }
         
-        self._tags_manager = ClientMedia.TagsManager( service_keys_to_statuses_to_tags )
+        cls._tags_manager = ClientMedia.TagsManager( service_keys_to_statuses_to_tags )
         
-        self._service_keys_to_statuses_to_tags = service_keys_to_statuses_to_tags
+        cls._service_keys_to_statuses_to_tags = service_keys_to_statuses_to_tags
         
         #
         
-        self._pending_service_key = HydrusData.GenerateKey()
-        self._content_update_service_key = HydrusData.GenerateKey()
-        self._reset_service_key = HydrusData.GenerateKey()
+        cls._pending_service_key = HydrusData.GenerateKey()
+        cls._content_update_service_key = HydrusData.GenerateKey()
+        cls._reset_service_key = HydrusData.GenerateKey()
         
         other_service_keys_to_statuses_to_tags = collections.defaultdict( HydrusData.default_dict_set )
         
-        other_service_keys_to_statuses_to_tags[ self._pending_service_key ][ HC.PENDING ] = { 'pending' }
-        other_service_keys_to_statuses_to_tags[ self._pending_service_key ][ HC.PETITIONED ] = { 'petitioned' }
+        other_service_keys_to_statuses_to_tags[ cls._pending_service_key ][ HC.CONTENT_STATUS_PENDING ] = { 'pending' }
+        other_service_keys_to_statuses_to_tags[ cls._pending_service_key ][ HC.CONTENT_STATUS_PETITIONED ] = { 'petitioned' }
         
-        other_service_keys_to_statuses_to_tags[ self._reset_service_key ][ HC.CURRENT ] = { 'reset_current' }
-        other_service_keys_to_statuses_to_tags[ self._reset_service_key ][ HC.DELETED ] = { 'reset_deleted' }
-        other_service_keys_to_statuses_to_tags[ self._reset_service_key ][ HC.PENDING ] = { 'reset_pending' }
-        other_service_keys_to_statuses_to_tags[ self._reset_service_key ][ HC.PETITIONED ] = { 'reset_petitioned' }
+        other_service_keys_to_statuses_to_tags[ cls._reset_service_key ][ HC.CONTENT_STATUS_CURRENT ] = { 'reset_current' }
+        other_service_keys_to_statuses_to_tags[ cls._reset_service_key ][ HC.CONTENT_STATUS_DELETED ] = { 'reset_deleted' }
+        other_service_keys_to_statuses_to_tags[ cls._reset_service_key ][ HC.CONTENT_STATUS_PENDING ] = { 'reset_pending' }
+        other_service_keys_to_statuses_to_tags[ cls._reset_service_key ][ HC.CONTENT_STATUS_PETITIONED ] = { 'reset_petitioned' }
         
-        self._other_tags_manager = ClientMedia.TagsManager( other_service_keys_to_statuses_to_tags )
+        cls._other_tags_manager = ClientMedia.TagsManager( other_service_keys_to_statuses_to_tags )
         
-        self._other_service_keys_to_statuses_to_tags = other_service_keys_to_statuses_to_tags
+        cls._other_service_keys_to_statuses_to_tags = other_service_keys_to_statuses_to_tags
         
     
     def test_get_cstvcp( self ):
@@ -430,11 +430,11 @@ class TestTagObjects( unittest.TestCase ):
         
         self.assertEqual( p.GetUnicode(), u'system:everything (2,000)' )
         
-        p = ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( True, HC.CURRENT, CC.LOCAL_FILE_SERVICE_KEY ) )
+        p = ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( True, HC.CONTENT_STATUS_CURRENT, CC.LOCAL_FILE_SERVICE_KEY ) )
         
         self.assertEqual( p.GetUnicode(), u'system:is currently in local files' )
         
-        p = ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( False, HC.PENDING, CC.LOCAL_FILE_SERVICE_KEY ) )
+        p = ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, ( False, HC.CONTENT_STATUS_PENDING, CC.LOCAL_FILE_SERVICE_KEY ) )
         
         self.assertEqual( p.GetUnicode(), u'system:is not pending to local files' )
         
@@ -536,38 +536,38 @@ class TestTagObjects( unittest.TestCase ):
 class TestTagParents( unittest.TestCase ):
     
     @classmethod
-    def setUpClass( self ):
+    def setUpClass( cls ):
         
-        self._first_key = HydrusData.GenerateKey()
-        self._second_key = HydrusData.GenerateKey()
-        self._third_key = HydrusData.GenerateKey()
+        cls._first_key = HydrusData.GenerateKey()
+        cls._second_key = HydrusData.GenerateKey()
+        cls._third_key = HydrusData.GenerateKey()
         
         first_dict = HydrusData.default_dict_set()
         
-        first_dict[ HC.CURRENT ] = { ( 'current_a', 'current_b' ), ( 'child', 'mother' ), ( 'child', 'father' ), ( 'sister', 'mother' ), ( 'sister', 'father' ), ( 'brother', 'mother' ), ( 'brother', 'father' ), ( 'mother', 'grandmother' ), ( 'mother', 'grandfather' ), ( 'aunt', 'grandmother' ), ( 'aunt', 'grandfather' ), ( 'cousin', 'aunt' ), ( 'cousin', 'uncle' ), ( 'closed_loop', 'closed_loop' ), ( 'loop_a', 'loop_b' ), ( 'loop_b', 'loop_c' ) }
-        first_dict[ HC.DELETED ] = { ( 'deleted_a', 'deleted_b' ) }
+        first_dict[ HC.CONTENT_STATUS_CURRENT ] = { ( 'current_a', 'current_b' ), ( 'child', 'mother' ), ( 'child', 'father' ), ( 'sister', 'mother' ), ( 'sister', 'father' ), ( 'brother', 'mother' ), ( 'brother', 'father' ), ( 'mother', 'grandmother' ), ( 'mother', 'grandfather' ), ( 'aunt', 'grandmother' ), ( 'aunt', 'grandfather' ), ( 'cousin', 'aunt' ), ( 'cousin', 'uncle' ), ( 'closed_loop', 'closed_loop' ), ( 'loop_a', 'loop_b' ), ( 'loop_b', 'loop_c' ) }
+        first_dict[ HC.CONTENT_STATUS_DELETED ] = { ( 'deleted_a', 'deleted_b' ) }
         
         second_dict = HydrusData.default_dict_set()
         
-        second_dict[ HC.CURRENT ] = { ( 'loop_c', 'loop_a' ) }
-        second_dict[ HC.DELETED ] = { ( 'current_a', 'current_b' ) }
-        second_dict[ HC.PENDING ] = { ( 'pending_a', 'pending_b' ) }
-        second_dict[ HC.PETITIONED ] = { ( 'petitioned_a', 'petitioned_b' ) }
+        second_dict[ HC.CONTENT_STATUS_CURRENT ] = { ( 'loop_c', 'loop_a' ) }
+        second_dict[ HC.CONTENT_STATUS_DELETED ] = { ( 'current_a', 'current_b' ) }
+        second_dict[ HC.CONTENT_STATUS_PENDING ] = { ( 'pending_a', 'pending_b' ) }
+        second_dict[ HC.CONTENT_STATUS_PETITIONED ] = { ( 'petitioned_a', 'petitioned_b' ) }
         
         third_dict = HydrusData.default_dict_set()
         
-        third_dict[ HC.CURRENT ] = { ( 'petitioned_a', 'petitioned_b' ) }
-        third_dict[ HC.DELETED ] = { ( 'pending_a', 'pending_b' ) }
+        third_dict[ HC.CONTENT_STATUS_CURRENT ] = { ( 'petitioned_a', 'petitioned_b' ) }
+        third_dict[ HC.CONTENT_STATUS_DELETED ] = { ( 'pending_a', 'pending_b' ) }
         
         tag_parents = collections.defaultdict( HydrusData.default_dict_set )
         
-        tag_parents[ self._first_key ] = first_dict
-        tag_parents[ self._second_key ] = second_dict
-        tag_parents[ self._third_key ] = third_dict
+        tag_parents[ cls._first_key ] = first_dict
+        tag_parents[ cls._second_key ] = second_dict
+        tag_parents[ cls._third_key ] = third_dict
         
         HydrusGlobals.test_controller.SetRead( 'tag_parents', tag_parents )
         
-        self._tag_parents_manager = ClientCaches.TagParentsManager( HydrusGlobals.client_controller )
+        cls._tag_parents_manager = ClientCaches.TagParentsManager( HydrusGlobals.client_controller )
         
     
     def test_expand_predicates( self ):
@@ -681,44 +681,44 @@ class TestTagParents( unittest.TestCase ):
 class TestTagSiblings( unittest.TestCase ):
     
     @classmethod
-    def setUpClass( self ):
+    def setUpClass( cls ):
         
-        self._first_key = HydrusData.GenerateKey()
-        self._second_key = HydrusData.GenerateKey()
+        cls._first_key = HydrusData.GenerateKey()
+        cls._second_key = HydrusData.GenerateKey()
         
         tag_siblings = collections.defaultdict( HydrusData.default_dict_set )
         
         first_dict = HydrusData.default_dict_set()
         
-        first_dict[ HC.CURRENT ] = { ( 'ishygddt', 'i sure hope you guys don\'t do that' ), ( 'character:rei ayanami', 'character:ayanami rei' ), ( 'tree_1', 'tree_3' ), ( 'tree_2', 'tree_3' ), ( 'tree_3', 'tree_5' ), ( 'tree_4', 'tree_5' ), ( 'tree_5', 'tree_6' ), ( 'current_a', 'current_b' ), ( 'chain_a', 'chain_b' ), ( 'chain_b', 'chain_c' ), ( 'closed_loop', 'closed_loop' ), ( 'loop_a', 'loop_b' ), ( 'loop_b', 'loop_c' ), ( 'loop_c', 'loop_a' ) }
-        first_dict[ HC.DELETED ] = { ( 'deleted_a', 'deleted_b' ) }
+        first_dict[ HC.CONTENT_STATUS_CURRENT ] = { ( 'ishygddt', 'i sure hope you guys don\'t do that' ), ( 'character:rei ayanami', 'character:ayanami rei' ), ( 'tree_1', 'tree_3' ), ( 'tree_2', 'tree_3' ), ( 'tree_3', 'tree_5' ), ( 'tree_4', 'tree_5' ), ( 'tree_5', 'tree_6' ), ( 'current_a', 'current_b' ), ( 'chain_a', 'chain_b' ), ( 'chain_b', 'chain_c' ), ( 'closed_loop', 'closed_loop' ), ( 'loop_a', 'loop_b' ), ( 'loop_b', 'loop_c' ), ( 'loop_c', 'loop_a' ) }
+        first_dict[ HC.CONTENT_STATUS_DELETED ] = { ( 'deleted_a', 'deleted_b' ) }
         
         second_dict = HydrusData.default_dict_set()
         
-        second_dict[ HC.CURRENT ] = { ( 'loop_c', 'loop_a' ), ( 'current_a', 'current_b' ), ( 'petitioned_a', 'petitioned_b' ) }
-        second_dict[ HC.DELETED ] = { ( 'pending_a', 'pending_b' ) }
-        second_dict[ HC.PENDING ] = { ( 'pending_a', 'pending_b' ) }
-        second_dict[ HC.PETITIONED ] = { ( 'petitioned_a', 'petitioned_b' ) }
+        second_dict[ HC.CONTENT_STATUS_CURRENT ] = { ( 'loop_c', 'loop_a' ), ( 'current_a', 'current_b' ), ( 'petitioned_a', 'petitioned_b' ) }
+        second_dict[ HC.CONTENT_STATUS_DELETED ] = { ( 'pending_a', 'pending_b' ) }
+        second_dict[ HC.CONTENT_STATUS_PENDING ] = { ( 'pending_a', 'pending_b' ) }
+        second_dict[ HC.CONTENT_STATUS_PETITIONED ] = { ( 'petitioned_a', 'petitioned_b' ) }
         
-        tag_siblings[ self._first_key ] = first_dict
-        tag_siblings[ self._second_key ] = second_dict
+        tag_siblings[ cls._first_key ] = first_dict
+        tag_siblings[ cls._second_key ] = second_dict
         
         HydrusGlobals.test_controller.SetRead( 'tag_siblings', tag_siblings )
         
-        self._tag_siblings_manager = ClientCaches.TagSiblingsManager( HydrusGlobals.client_controller )
+        cls._tag_siblings_manager = ClientCaches.TagSiblingsManager( HydrusGlobals.client_controller )
         
     
     def test_autocomplete( self ):
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'ishy' ) ), set( [ 'ishygddt', 'i sure hope you guys don\'t do that' ] ) )
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'i su' ) ), set( [ 'ishygddt', 'i sure hope you guys don\'t do that' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'ishy*' ) ), set( [ 'ishygddt', 'i sure hope you guys don\'t do that' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'i su*' ) ), set( [ 'ishygddt', 'i sure hope you guys don\'t do that' ] ) )
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'ayan' ) ), set( [ 'character:rei ayanami', 'character:ayanami rei' ] ) )
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'rei' ) ), set( [ 'character:rei ayanami', 'character:ayanami rei' ] ) )
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'character:ayan' ) ), set( [ 'character:rei ayanami', 'character:ayanami rei' ] ) )
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'character:rei' ) ), set( [ 'character:rei ayanami', 'character:ayanami rei' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'ayan*' ) ), set( [ 'character:rei ayanami', 'character:ayanami rei' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'rei*' ) ), set( [ 'character:rei ayanami', 'character:ayanami rei' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'character:ayan*' ) ), set( [ 'character:rei ayanami', 'character:ayanami rei' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'character:rei*' ) ), set( [ 'character:rei ayanami', 'character:ayanami rei' ] ) )
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._second_key, 'ishy' ) ), set() )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._second_key, 'ishy*' ) ), set() )
         
     
     def test_collapse_predicates( self ):
@@ -747,7 +747,7 @@ class TestTagSiblings( unittest.TestCase ):
     
     def test_chain( self ):
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'chai' ) ), set( [ 'chain_a', 'chain_b', 'chain_c' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'chai*' ) ), set( [ 'chain_a', 'chain_b', 'chain_c' ] ) )
         
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._first_key, 'chain_a' ), 'chain_c' )
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._first_key, 'chain_b' ), 'chain_c' )
@@ -763,7 +763,7 @@ class TestTagSiblings( unittest.TestCase ):
     
     def test_current( self ):
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._second_key, 'curr' ) ), set( [ 'current_a', 'current_b' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._second_key, 'curr*' ) ), set( [ 'current_a', 'current_b' ] ) )
         
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._second_key, 'current_a' ), 'current_b' )
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._second_key, 'current_b' ), None )
@@ -780,7 +780,7 @@ class TestTagSiblings( unittest.TestCase ):
     
     def test_deleted( self ):
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'dele' ) ), set() )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'dele*' ) ), set() )
         
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._first_key, 'deleted_a' ), None )
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._first_key, 'deleted_b' ), None )
@@ -795,7 +795,7 @@ class TestTagSiblings( unittest.TestCase ):
     
     def test_no_loop( self ):
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'loop' ) ), set( [ 'loop_a', 'loop_b', 'loop_c' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'loop*' ) ), set( [ 'loop_a', 'loop_b', 'loop_c' ] ) )
         
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._first_key, 'closed_loop' ), None )
         
@@ -808,7 +808,7 @@ class TestTagSiblings( unittest.TestCase ):
     
     def test_not_exist( self ):
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._second_key, 'not_' ) ), set() )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._second_key, 'not_*' ) ), set() )
         
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._second_key, 'not_exist' ), None )
         
@@ -821,7 +821,7 @@ class TestTagSiblings( unittest.TestCase ):
     
     def test_pending_overwrite( self ):
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._second_key, 'pend' ) ), set( [ 'pending_a', 'pending_b' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._second_key, 'pend*' ) ), set( [ 'pending_a', 'pending_b' ] ) )
         
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._second_key, 'pending_a' ), 'pending_b' )
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._second_key, 'pending_b' ), None )
@@ -838,7 +838,7 @@ class TestTagSiblings( unittest.TestCase ):
     
     def test_petitioned_no_overwrite( self ):
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._second_key, 'petitioned_a' ) ), set( [ 'petitioned_a', 'petitioned_b' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._second_key, 'petitioned_a*' ) ), set( [ 'petitioned_a', 'petitioned_b' ] ) )
         
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._second_key, 'petitioned_a' ), 'petitioned_b' )
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._second_key, 'petitioned_b' ), None )
@@ -855,7 +855,7 @@ class TestTagSiblings( unittest.TestCase ):
     
     def test_tree( self ):
         
-        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'tree' ) ), set( [ 'tree_1', 'tree_2', 'tree_3', 'tree_4', 'tree_5', 'tree_6' ] ) )
+        self.assertEqual( set( self._tag_siblings_manager.GetAutocompleteSiblings( self._first_key, 'tree*' ) ), set( [ 'tree_1', 'tree_2', 'tree_3', 'tree_4', 'tree_5', 'tree_6' ] ) )
         
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._first_key, 'tree_1' ), 'tree_6' )
         self.assertEqual( self._tag_siblings_manager.GetSibling( self._first_key, 'tree_2' ), 'tree_6' )

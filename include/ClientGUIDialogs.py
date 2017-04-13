@@ -11,6 +11,7 @@ import ClientGUIACDropdown
 import ClientGUIFrames
 import ClientGUICommon
 import ClientGUICollapsible
+import ClientGUIListBoxes
 import ClientGUIPredicates
 import ClientGUITopLevelWindows
 import ClientThreading
@@ -19,6 +20,7 @@ import gc
 import HydrusExceptions
 import HydrusFileHandling
 import HydrusNATPunch
+import HydrusNetwork
 import HydrusPaths
 import HydrusSerialisable
 import HydrusTagArchive
@@ -28,6 +30,7 @@ import itertools
 import os
 import random
 import re
+import Queue
 import shutil
 import stat
 import string
@@ -54,199 +57,24 @@ COLOUR_SELECTED = wx.Colour( 217, 242, 255 )
 COLOUR_SELECTED_DARK = wx.Colour( 1, 17, 26 )
 COLOUR_UNSELECTED = wx.Colour( 223, 227, 230 )
 
-def ExportToHTA( parent, service_key, hashes ):
-    
-    with wx.FileDialog( parent, style = wx.FD_SAVE, defaultFile = 'archive.db' ) as dlg:
-        
-        if dlg.ShowModal() == wx.ID_OK:
-            
-            path = HydrusData.ToUnicode( dlg.GetPath() )
-            
-        else:
-            
-            return
-            
-        
-    
-    message = 'Would you like to use hydrus\'s normal hash type, or an alternative?'
-    message += os.linesep * 2
-    message += 'Hydrus uses SHA256 to identify files, but other services use different standards. MD5, SHA1 and SHA512 are available, but only for local files, which may limit your export.'
-    message += os.linesep * 2
-    message += 'If you do not know what this stuff means, click \'normal\'.'
-    
-    hash_type = None
-    
-    with DialogYesNo( parent, message, title = 'Choose which hash type.', yes_label = 'normal', no_label = 'alternative' ) as dlg:
-        
-        result = dlg.ShowModal()
-        
-        if result in ( wx.ID_YES, wx.ID_NO ):
-            
-            if result == wx.ID_YES:
-                
-                hash_type = HydrusTagArchive.HASH_TYPE_SHA256
-                
-            else:
-                
-                with DialogSelectFromListOfStrings( parent, 'Select the hash type', [ 'md5', 'sha1', 'sha512' ] ) as hash_dlg:
-                    
-                    if hash_dlg.ShowModal() == wx.ID_OK:
-                        
-                        s = hash_dlg.GetString()
-                        
-                        if s == 'md5': hash_type = HydrusTagArchive.HASH_TYPE_MD5
-                        elif s == 'sha1': hash_type = HydrusTagArchive.HASH_TYPE_SHA1
-                        elif s == 'sha512': hash_type = HydrusTagArchive.HASH_TYPE_SHA512
-                        
-                    
-                
-            
-        
-    
-    if hash_type is not None:
-        
-        HydrusGlobals.client_controller.Write( 'export_mappings', path, service_key, hash_type, hashes )
-        
-    
-def ImportFromHTA( parent, hta_path, tag_service_key, hashes ):
-    
-    hta = HydrusTagArchive.HydrusTagArchive( hta_path )
-    
-    potential_namespaces = hta.GetNamespaces()
-    
-    hash_type = hta.GetHashType() # this tests if the hta can produce a hashtype
-    
-    del hta
-    
-    service = HydrusGlobals.client_controller.GetServicesManager().GetService( tag_service_key )
-    
-    service_type = service.GetServiceType()
-    
-    can_delete = True
-    
-    if service_type == HC.TAG_REPOSITORY:
-        
-        account = service.GetInfo( 'account' )
-        
-        if not account.HasPermission( HC.RESOLVE_PETITIONS ): can_delete = False
-        
-    
-    if can_delete:
-        
-        text = 'Would you like to add or delete the archive\'s tags?'
-        
-        with DialogYesNo( parent, text, title = 'Add or delete?', yes_label = 'add', no_label = 'delete' ) as dlg_add:
-            
-            result = dlg_add.ShowModal()
-            
-            if result == wx.ID_YES: adding = True
-            elif result == wx.ID_NO: adding = False
-            else: return
-            
-        
-    else:
-        
-        text = 'You cannot quickly delete tags from this service, so I will assume you want to add tags.'
-        
-        wx.MessageBox( text )
-        
-        adding = True
-        
-    
-    text = 'Choose which namespaces to '
-    
-    if adding: text += 'add.'
-    else: text += 'delete.'
-    
-    with DialogCheckFromListOfStrings( parent, text, HydrusData.ConvertUglyNamespacesToPrettyStrings( potential_namespaces ) ) as dlg_namespaces:
-        
-        if dlg_namespaces.ShowModal() == wx.ID_OK:
-            
-            namespaces = HydrusData.ConvertPrettyStringsToUglyNamespaces( dlg_namespaces.GetChecked() )
-            
-            if hash_type == HydrusTagArchive.HASH_TYPE_SHA256:
-                
-                text = 'This tag archive can be fully merged into your database, but this may be more than you want.'
-                text += os.linesep * 2
-                text += 'Would you like to import the tags only for files you actually have, or do you want absolutely everything?'
-                
-                with DialogYesNo( parent, text, title = 'How much do you want?', yes_label = 'just for my local files', no_label = 'everything' ) as dlg_add:
-                    
-                    result = dlg_add.ShowModal()
-                    
-                    if result == wx.ID_YES:
-                        
-                        file_service_key = CC.LOCAL_FILE_SERVICE_KEY
-                        
-                    elif result == wx.ID_NO:
-                        
-                        file_service_key = CC.COMBINED_FILE_SERVICE_KEY
-                        
-                    else:
-                        
-                        return
-                        
-                    
-                
-            else:
-                
-                file_service_key = CC.LOCAL_FILE_SERVICE_KEY
-                
-            
-            text = 'Are you absolutely sure you want to '
-            
-            if adding: text += 'add'
-            else: text += 'delete'
-            
-            text += ' the namespaces:'
-            text += os.linesep * 2
-            text += os.linesep.join( HydrusData.ConvertUglyNamespacesToPrettyStrings( namespaces ) )
-            text += os.linesep * 2
-            
-            file_service = HydrusGlobals.client_controller.GetServicesManager().GetService( file_service_key )
-            
-            text += 'For '
-            
-            if hashes is None:
-                
-                text += 'all'
-                
-            else:
-                
-                text += HydrusData.ConvertIntToPrettyString( len( hashes ) )
-                
-            
-            text += ' files in \'' + file_service.GetName() + '\''
-            
-            if adding: text += ' to '
-            else: text += ' from '
-            
-            text += '\'' + service.GetName() + '\'?'
-            
-            with DialogYesNo( parent, text ) as dlg_final:
-                
-                if dlg_final.ShowModal() == wx.ID_YES:
-                    
-                    HydrusGlobals.client_controller.pub( 'sync_to_tag_archive', hta_path, tag_service_key, file_service_key, adding, namespaces, hashes )
-                    
-                
-            
-        
-    
-def SelectServiceKey( permission = None, service_types = HC.ALL_SERVICES, service_keys = None, unallowed = None ):
+def SelectServiceKey( service_types = HC.ALL_SERVICES, service_keys = None, unallowed = None ):
     
     if service_keys is None:
         
         services = HydrusGlobals.client_controller.GetServicesManager().GetServices( service_types )
         
-        if permission is not None: services = [ service for service in services if service.GetInfo( 'account' ).HasPermission( permission ) ]
-        
         service_keys = [ service.GetServiceKey() for service in services ]
         
     
-    if unallowed is not None: service_keys.difference_update( unallowed )
+    if unallowed is not None:
+        
+        service_keys.difference_update( unallowed )
+        
     
-    if len( service_keys ) == 0: return None
+    if len( service_keys ) == 0:
+        
+        return None
+        
     elif len( service_keys ) == 1:
         
         ( service_key, ) = service_keys
@@ -257,12 +85,20 @@ def SelectServiceKey( permission = None, service_types = HC.ALL_SERVICES, servic
         
         services = { HydrusGlobals.client_controller.GetServicesManager().GetService( service_key ) for service_key in service_keys }
         
-        names_to_service_keys = { service.GetName() : service.GetServiceKey() for service in services }
+        list_of_tuples = [ ( service.GetName(), service.GetServiceKey() ) for service in services ]
         
-        with DialogSelectFromListOfStrings( HydrusGlobals.client_controller.GetGUI(), 'select service', names_to_service_keys.keys() ) as dlg:
+        with DialogSelectFromList( HydrusGlobals.client_controller.GetGUI(), 'select service', list_of_tuples ) as dlg:
             
-            if dlg.ShowModal() == wx.ID_OK: return names_to_service_keys[ dlg.GetString() ]
-            else: return None
+            if dlg.ShowModal() == wx.ID_OK:
+                
+                service_key = dlg.GetChoice()
+                
+                return service_key
+                
+            else:
+                
+                return None
+                
             
         
     
@@ -328,268 +164,6 @@ class Dialog( wx.Dialog ):
         min_height = min( 240, height )
         
         self.SetMinSize( ( min_width, min_height ) )
-        
-    
-class DialogAdvancedContentUpdate( Dialog ):
-    
-    COPY = 0
-    DELETE = 1
-    DELETE_DELETED = 2
-    
-    ALL_MAPPINGS = 0
-    SPECIFIC_MAPPINGS = 1
-    SPECIFIC_NAMESPACE = 2
-    NAMESPACED = 3
-    UNNAMESPACED = 4
-    
-    def __init__( self, parent, service_key, hashes = None ):
-        
-        Dialog.__init__( self, parent, 'Advanced Content Update' )
-        
-        self._service_key = service_key
-        self._hashes = hashes
-        
-        service = HydrusGlobals.client_controller.GetServicesManager().GetService( self._service_key )
-        
-        self._service_name = service.GetName()
-        
-        self._command_panel = ClientGUICommon.StaticBox( self, 'database commands' )
-        
-        self._action_dropdown = ClientGUICommon.BetterChoice( self._command_panel )
-        self._action_dropdown.Bind( wx.EVT_CHOICE, self.EventChoice )
-        self._tag_type_dropdown = ClientGUICommon.BetterChoice( self._command_panel )
-        self._action_text = wx.StaticText( self._command_panel, label = 'initialising' )
-        self._service_key_dropdown = ClientGUICommon.BetterChoice( self._command_panel )
-        
-        self._go = ClientGUICommon.BetterButton( self._command_panel, 'Go!', self.Go )
-        
-        #
-        
-        self._hta_panel = ClientGUICommon.StaticBox( self, 'hydrus tag archives' )
-        
-        self._import_from_hta = ClientGUICommon.BetterButton( self._hta_panel, 'one-time mass import or delete using a hydrus tag archive', self.ImportFromHTA )
-        self._export_to_hta = ClientGUICommon.BetterButton( self._hta_panel, 'export to hydrus tag archive', self.ExportToHTA )
-        
-        #
-        
-        self._done = wx.Button( self, id = wx.ID_OK, label = 'done' )
-        
-        #
-        
-        services = [ service for service in HydrusGlobals.client_controller.GetServicesManager().GetServices( HC.TAG_SERVICES ) if service.GetServiceKey() != self._service_key ]
-        
-        if len( services ) > 0:
-            
-            self._action_dropdown.Append( 'copy', self.COPY )
-            
-        
-        if self._service_key == CC.LOCAL_TAG_SERVICE_KEY:
-            
-            self._action_dropdown.Append( 'delete', self.DELETE )
-            self._action_dropdown.Append( 'clear deleted record', self.DELETE_DELETED )
-            
-        
-        self._action_dropdown.Select( 0 )
-        
-        #
-        
-        self._tag_type_dropdown.Append( 'all mappings', self.ALL_MAPPINGS )
-        self._tag_type_dropdown.Append( 'all namespaced mappings', self.NAMESPACED )
-        self._tag_type_dropdown.Append( 'all unnamespaced mappings', self.UNNAMESPACED )
-        self._tag_type_dropdown.Append( 'specific tag\'s mappings', self.SPECIFIC_MAPPINGS )
-        self._tag_type_dropdown.Append( 'specific namespace\'s mappings', self.SPECIFIC_NAMESPACE )
-        
-        self._tag_type_dropdown.Select( 0 )
-        
-        #
-        
-        for service in services:
-            
-            self._service_key_dropdown.Append( service.GetName(), service.GetServiceKey() )
-            
-        
-        self._service_key_dropdown.Select( 0 )
-        
-        #
-        
-        hbox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        hbox.AddF( self._action_dropdown, CC.FLAGS_VCENTER )
-        hbox.AddF( self._tag_type_dropdown, CC.FLAGS_VCENTER )
-        hbox.AddF( self._action_text, CC.FLAGS_VCENTER )
-        hbox.AddF( self._service_key_dropdown, CC.FLAGS_VCENTER )
-        hbox.AddF( self._go, CC.FLAGS_VCENTER )
-        
-        self._command_panel.AddF( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        
-        #
-        
-        self._hta_panel.AddF( self._import_from_hta, CC.FLAGS_LONE_BUTTON )
-        self._hta_panel.AddF( self._export_to_hta, CC.FLAGS_LONE_BUTTON )
-        
-        #
-        
-        vbox = wx.BoxSizer( wx.VERTICAL )
-        
-        message = 'Regarding '
-        
-        if self._hashes is None:
-            
-            message += 'all'
-            
-        else:
-            
-            message += HydrusData.ConvertIntToPrettyString( len( self._hashes ) )
-            
-        
-        message += ' files on ' + self._service_name
-        
-        title_st = wx.StaticText( self, label = message)
-        
-        title_st.Wrap( 540 )
-        
-        message = 'These advanced operations are powerful, so think before you click. They can lock up your client for a _long_ time, and are not undoable. You may need to refresh your existing searches to see their effect.' 
-        
-        st = wx.StaticText( self, label = message )
-        
-        st.Wrap( 540 )
-        
-        vbox.AddF( title_st, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( st, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._command_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._hta_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._done, CC.FLAGS_LONE_BUTTON )
-        
-        self.SetSizer( vbox )
-        
-        ( x, y ) = self.GetEffectiveMinSize()
-        
-        if x < 540: x = 540
-        
-        self.SetInitialSize( ( x, y ) )
-        
-        self.EventChoice( None )
-        
-    
-    def EventChoice( self, event ):
-        
-        data = self._action_dropdown.GetChoice()
-        
-        if data in ( self.DELETE, self.DELETE_DELETED ):
-            
-            self._action_text.SetLabelText( 'from ' + self._service_name )
-            
-            self._service_key_dropdown.Hide()
-            
-        else:
-            
-            self._action_text.SetLabelText( 'from ' + self._service_name + ' to')
-            
-            self._service_key_dropdown.Show()
-            
-        
-        self.Layout()
-        
-    
-    def ExportToHTA( self ):
-        
-        ExportToHTA( self, self._service_key, self._hashes )
-        
-    
-    def Go( self ):
-        
-        # at some point, rewrite this to cope with multiple tags. setsometag is ready to go on that front
-        # this should prob be with a listbox so people can enter their new multiple tags in several separate goes, rather than overwriting every time
-        
-        action = self._action_dropdown.GetChoice()
-        
-        tag_type = self._tag_type_dropdown.GetChoice()
-        
-        if tag_type == self.ALL_MAPPINGS:
-            
-            tag = None
-            
-        elif tag_type == self.SPECIFIC_MAPPINGS:
-            
-            with DialogTextEntry( self, 'Enter tag' ) as dlg:
-                
-                if dlg.ShowModal() == wx.ID_OK:
-                    
-                    entry = dlg.GetValue()
-                    
-                    tag = ( 'tag', entry )
-                    
-                else:
-                    
-                    return
-                    
-                
-            
-        elif tag_type == self.SPECIFIC_NAMESPACE:
-            
-            with DialogTextEntry( self, 'Enter namespace' ) as dlg:
-                
-                if dlg.ShowModal() == wx.ID_OK:
-                    
-                    entry = dlg.GetValue()
-                    
-                    if entry.endswith( ':' ): entry = entry[:-1]
-                    
-                    tag = ( 'namespace', entry )
-                    
-                else:
-                    
-                    return
-                    
-                
-            
-        elif tag_type == self.NAMESPACED:
-            
-            tag = ( 'namespaced', None )
-            
-        elif tag_type == self.UNNAMESPACED:
-            
-            tag = ( 'unnamespaced', None )
-            
-        
-        with DialogYesNo( self, 'Are you sure?' ) as dlg:
-            
-            if dlg.ShowModal() != wx.ID_YES: return
-            
-        
-        if action == self.COPY:
-            
-            service_key_target = self._service_key_dropdown.GetChoice()
-            
-            content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_UPDATE_ADVANCED, ( 'copy', ( tag, self._hashes, service_key_target ) ) )
-            
-        elif action == self.DELETE:
-            
-            content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_UPDATE_ADVANCED, ( 'delete', ( tag, self._hashes ) ) )
-            
-        elif action == self.DELETE_DELETED:
-            
-            content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_UPDATE_ADVANCED, ( 'delete_deleted', ( tag, self._hashes ) ) )
-            
-        
-        service_keys_to_content_updates = { self._service_key : [ content_update ] }
-        
-        HydrusGlobals.client_controller.Write( 'content_updates', service_keys_to_content_updates )
-        
-    
-    def ImportFromHTA( self ):
-        
-        text = 'Select the Hydrus Tag Archive\'s location.'
-        
-        with wx.FileDialog( self, message = text, style = wx.FD_OPEN ) as dlg_file:
-            
-            if dlg_file.ShowModal() == wx.ID_OK:
-                
-                path = HydrusData.ToUnicode( dlg_file.GetPath() )
-                
-                ImportFromHTA( self, path, self._service_key, self._hashes )
-                
-            
         
     
 class DialogButtonChoice( Dialog ):
@@ -758,9 +332,9 @@ class DialogGenerateNewAccounts( Dialog ):
         
         self._num = wx.SpinCtrl( self, min = 1, max = 10000, size = ( 80, -1 ) )
         
-        self._account_types = wx.Choice( self, size = ( 400, -1 ) )
+        self._account_types = ClientGUICommon.BetterChoice( self )
         
-        self._lifetime = wx.Choice( self )
+        self._lifetime = ClientGUICommon.BetterChoice( self )
         
         self._ok = wx.Button( self, label = 'Ok' )
         self._ok.Bind( wx.EVT_BUTTON, self.EventOK )
@@ -779,10 +353,18 @@ class DialogGenerateNewAccounts( Dialog ):
         
         account_types = response[ 'account_types' ]
         
-        for account_type in account_types: self._account_types.Append( account_type.ConvertToString(), account_type )
-        self._account_types.SetSelection( 0 ) # admin
+        for account_type in account_types:
+            
+            self._account_types.Append( account_type.GetTitle(), account_type )
+            
         
-        for ( str, value ) in HC.lifetimes: self._lifetime.Append( str, value )
+        self._account_types.Select( 0 )
+        
+        for ( s, value ) in HC.lifetimes:
+            
+            self._lifetime.Append( s, value )
+            
+        
         self._lifetime.SetSelection( 3 ) # one year
         
         #
@@ -817,19 +399,31 @@ class DialogGenerateNewAccounts( Dialog ):
         
         num = self._num.GetValue()
         
-        account_type = self._account_types.GetClientData( self._account_types.GetSelection() )
+        account_type = self._account_types.GetChoice()
         
-        title = account_type.GetTitle()
+        account_type_key = account_type.GetAccountTypeKey()
         
-        lifetime = self._lifetime.GetClientData( self._lifetime.GetSelection() )
+        lifetime = self._lifetime.GetChoice()
+        
+        if lifetime is None:
+            
+            expires = None
+            
+        else:
+            
+            expires = HydrusData.GetNow() + lifetime
+            
         
         service = HydrusGlobals.client_controller.GetServicesManager().GetService( self._service_key )
         
         try:
             
-            request_args = { 'num' : num, 'title' : title }
+            request_args = { 'num' : num, 'account_type_key' : account_type_key }
             
-            if lifetime is not None: request_args[ 'lifetime' ] = lifetime
+            if expires is not None:
+                
+                request_args[ 'expires' ] = expires
+                
             
             response = service.Request( HC.GET, 'registration_keys', request_args )
             
@@ -837,7 +431,10 @@ class DialogGenerateNewAccounts( Dialog ):
             
             ClientGUIFrames.ShowKeys( 'registration', registration_keys )
             
-        finally: self.EndModal( wx.ID_OK )
+        finally:
+            
+            self.EndModal( wx.ID_OK )
+            
         
     
 class DialogInputImportTagOptions( Dialog ):
@@ -901,12 +498,9 @@ class DialogInputImportTagOptions( Dialog ):
     
 class DialogInputCustomFilterAction( Dialog ):
     
-    def __init__( self, parent, modifier = wx.ACCEL_NORMAL, key = wx.WXK_F7, service_key = None, action = 'archive' ):
+    def __init__( self, parent, shortcut, command ):
         
         Dialog.__init__( self, parent, 'input custom filter action' )
-        
-        self._service_key = service_key
-        self._action = action
         
         self._current_ratings_like_service = None
         self._current_ratings_numerical_service = None
@@ -915,11 +509,14 @@ class DialogInputCustomFilterAction( Dialog ):
         
         self._shortcut_panel = ClientGUICommon.StaticBox( self, 'shortcut' )
         
-        self._shortcut = ClientGUICommon.Shortcut( self._shortcut_panel, modifier, key )
+        self._shortcut = ClientGUICommon.Shortcut( self._shortcut_panel )
         
         self._none_panel = ClientGUICommon.StaticBox( self, 'non-service actions' )
         
-        self._none_actions = wx.Choice( self._none_panel, choices = [ 'manage_tags', 'manage_ratings', 'archive', 'inbox', 'delete', 'fullscreen_switch', 'frame_back', 'frame_next', 'next', 'first', 'last', 'open_externally', 'pan_up', 'pan_down', 'pan_left', 'pan_right', 'previous', 'remove', 'zoom_in', 'zoom_out', 'zoom_switch' ] )
+        choices = [ 'manage_tags', 'manage_ratings', 'archive', 'inbox', 'delete', 'fullscreen_switch', 'frame_back', 'frame_next', 'next', 'first', 'last', 'open_externally', 'pan_up', 'pan_down', 'pan_left', 'pan_right', 'previous', 'remove', 'zoom_in', 'zoom_out', 'zoom_switch' ]
+        choices.extend( CC.DUPLICATE_FILTER_ACTIONS )
+        
+        self._none_actions = wx.Choice( self._none_panel, choices = choices )
         
         self._ok_none = wx.Button( self._none_panel, label = 'ok' )
         self._ok_none.Bind( wx.EVT_BUTTON, self.EventOKNone )
@@ -976,11 +573,22 @@ class DialogInputCustomFilterAction( Dialog ):
         
         self._SetActions()
         
-        if self._service_key is None:
+        #
+        
+        self._shortcut.SetValue( shortcut )
+        
+        command_type = command.GetCommandType()
+        data = command.GetData()
+        
+        if command_type == CC.APPLICATION_COMMAND_TYPE_SIMPLE:
             
-            self._none_actions.SetStringSelection( self._action )
+            action = data
+            
+            self._none_actions.SetStringSelection( action )
             
         else:
+            
+            ( service_key, content_type, action, value ) = data
             
             self._service = HydrusGlobals.client_controller.GetServicesManager().GetService( service_key )
             
@@ -991,7 +599,7 @@ class DialogInputCustomFilterAction( Dialog ):
                 
                 self._tag_service_keys.SetStringSelection( service_name )
                 
-                self._tag_value.SetValue( self._action )
+                self._tag_value.SetValue( value )
                 
             elif service_type == HC.LOCAL_RATING_LIKE:
                 
@@ -999,9 +607,18 @@ class DialogInputCustomFilterAction( Dialog ):
                 
                 self._SetActions()
                 
-                if self._action is None: self._ratings_like_remove.SetValue( True )
-                elif self._action == True: self._ratings_like_like.SetValue( True )
-                elif self._action == False: self._ratings_like_dislike.SetValue( True )
+                if value is None:
+                    
+                    self._ratings_like_remove.SetValue( True )
+                    
+                elif value == True:
+                    
+                    self._ratings_like_like.SetValue( True )
+                    
+                elif value == False:
+                    
+                    self._ratings_like_dislike.SetValue( True )
+                    
                 
             elif service_type == HC.LOCAL_RATING_NUMERICAL:
                 
@@ -1009,12 +626,15 @@ class DialogInputCustomFilterAction( Dialog ):
                 
                 self._SetActions()
                 
-                if self._action is None: self._ratings_numerical_remove.SetValue( True )
+                if value is None:
+                    
+                    self._ratings_numerical_remove.SetValue( True )
+                    
                 else:
                     
-                    num_stars = self._current_ratings_numerical_service.GetInfo( 'num_stars' )
+                    num_stars = self._current_ratings_numerical_service.GetNumStars()
                     
-                    slider_value = int( round( self._action * num_stars ) )
+                    slider_value = int( round( value * num_stars ) )
                     
                     self._ratings_numerical_slider.SetValue( slider_value )
                     
@@ -1114,9 +734,9 @@ class DialogInputCustomFilterAction( Dialog ):
                 
                 self._current_ratings_numerical_service = service
                 
-                num_stars = service.GetInfo( 'num_stars' )
+                num_stars = service.GetNumStars()
                 
-                allow_zero = service.GetInfo( 'allow_zero' )
+                allow_zero = service.AllowZero()
                 
                 if allow_zero:
                     
@@ -1134,9 +754,9 @@ class DialogInputCustomFilterAction( Dialog ):
     
     def EventOKNone( self, event ):
         
-        self._service_key = None
-        self._action = self._none_actions.GetStringSelection()
-        self._pretty_action = self._action
+        action = self._none_actions.GetStringSelection()
+        
+        self._final_command = ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, action )
         
         self.EndModal( wx.ID_OK )
         
@@ -1147,27 +767,29 @@ class DialogInputCustomFilterAction( Dialog ):
         
         if selection != wx.NOT_FOUND:
             
-            self._service_key = self._ratings_like_service_keys.GetClientData( selection )
+            service_key = self._ratings_like_service_keys.GetClientData( selection )
             
             if self._ratings_like_like.GetValue():
                 
-                self._action = 1.0
-                self._pretty_action = 'like'
+                value = 1.0
                 
             elif self._ratings_like_dislike.GetValue():
                 
-                self._action = 0.0
-                self._pretty_action = 'dislike'
+                value = 0.0
                 
             else:
                 
-                self._action = None
-                self._pretty_action = 'remove'
+                value = None
                 
+            
+            self._final_command = ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_CONTENT, ( service_key, HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_FLIP, value ) )
             
             self.EndModal( wx.ID_OK )
             
-        else: self.EndModal( wx.ID_CANCEL )
+        else:
+            
+            self.EndModal( wx.ID_CANCEL )
+            
         
     
     def EventOKRatingsNumerical( self, event ):
@@ -1176,53 +798,57 @@ class DialogInputCustomFilterAction( Dialog ):
         
         if selection != wx.NOT_FOUND:
             
-            self._service_key = self._ratings_numerical_service_keys.GetClientData( selection )
+            service_key = self._ratings_numerical_service_keys.GetClientData( selection )
             
             if self._ratings_numerical_remove.GetValue():
                 
-                self._action = None
-                self._pretty_action = 'remove'
+                value = None
                 
             else:
                 
                 value = self._ratings_numerical_slider.GetValue()
                 
-                self._pretty_action = HydrusData.ToUnicode( value )
-                
-                num_stars = self._current_ratings_numerical_service.GetInfo( 'num_stars' )
-                allow_zero = self._current_ratings_numerical_service.GetInfo( 'allow_zero' )
+                num_stars = self._current_ratings_numerical_service.GetNumStars()
+                allow_zero = self._current_ratings_numerical_service.AllowZero()
                 
                 if allow_zero:
                     
-                    self._action = float( value ) / num_stars
+                    value = float( value ) / num_stars
                     
                 else:
                     
-                    self._action = float( value - 1 ) / ( num_stars - 1 )
+                    value = float( value - 1 ) / ( num_stars - 1 )
                     
                 
             
+            self._final_command = ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_CONTENT, ( service_key, HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_FLIP, value ) )
+            
             self.EndModal( wx.ID_OK )
             
-        else: self.EndModal( wx.ID_CANCEL )
+        else:
+            
+            self.EndModal( wx.ID_CANCEL )
+            
         
     
     def EventOKTag( self, event ):
-        
-        # this could support multiple tags now
         
         selection = self._tag_service_keys.GetSelection()
         
         if selection != wx.NOT_FOUND:
             
-            self._service_key = self._tag_service_keys.GetClientData( selection )
+            service_key = self._tag_service_keys.GetClientData( selection )
             
-            self._action = self._tag_value.GetValue()
-            self._pretty_action = self._action
+            value = self._tag_value.GetValue()
+            
+            self._final_command = ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_CONTENT, ( service_key, HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_UPDATE_FLIP, value ) )
             
             self.EndModal( wx.ID_OK )
             
-        else: self.EndModal( wx.ID_CANCEL )
+        else:
+            
+            self.EndModal( wx.ID_CANCEL )
+            
         
     
     def EventRecalcActions( self, event ):
@@ -1234,14 +860,9 @@ class DialogInputCustomFilterAction( Dialog ):
     
     def GetInfo( self ):
         
-        ( modifier, key ) = self._shortcut.GetValue()
+        shortcut = self._shortcut.GetValue()
         
-        if self._service_key is None: pretty_service_key = ''
-        else: pretty_service_key = HydrusGlobals.client_controller.GetServicesManager().GetService( self._service_key ).GetName()
-        
-        ( pretty_modifier, pretty_key ) = ClientData.ConvertShortcutToPrettyShortcut( modifier, key )
-        
-        return ( ( pretty_modifier, pretty_key, pretty_service_key, self._pretty_action ), ( modifier, key, self._service_key, self._action ) )
+        return ( shortcut, self._final_command )
         
     
     def SetTags( self, tags ):
@@ -1349,7 +970,9 @@ class DialogInputFileSystemPredicates( Dialog ):
         
         def EventCharHook( self, event ):
             
-            if event.KeyCode in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
+            ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+            
+            if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
                 
                 self._DoOK()
                 
@@ -1473,15 +1096,16 @@ class DialogInputLocalBooruShare( Dialog ):
         
         self._service = HydrusGlobals.client_controller.GetServicesManager().GetService( CC.LOCAL_BOORU_SERVICE_KEY )
         
-        info = self._service.GetInfo()
-        
         external_ip = HydrusNATPunch.GetExternalIP() # eventually check for optional host replacement here
         
-        external_port = info[ 'upnp' ]
+        external_port = self._service.GetUPnPPort()
         
-        if external_port is None: external_port = info[ 'port' ]
+        if external_port is None:
+            
+            external_port = self._service.GetPort()
+            
         
-        url = 'http://' + external_ip + ':' + str( external_port ) + '/gallery?share_key=' + self._share_key.encode( 'hex' )
+        url = 'http://' + external_ip + ':' + HydrusData.ToUnicode( external_port ) + '/gallery?share_key=' + self._share_key.encode( 'hex' )
         
         HydrusGlobals.client_controller.pub( 'clipboard', 'text', url )
         
@@ -1490,11 +1114,9 @@ class DialogInputLocalBooruShare( Dialog ):
         
         self._service = HydrusGlobals.client_controller.GetServicesManager().GetService( CC.LOCAL_BOORU_SERVICE_KEY )
         
-        info = self._service.GetInfo()
-        
         internal_ip = '127.0.0.1'
         
-        internal_port = info[ 'port' ]
+        internal_port = self._service.GetPort()
         
         url = 'http://' + internal_ip + ':' + str( internal_port ) + '/gallery?share_key=' + self._share_key.encode( 'hex' )
         
@@ -1526,17 +1148,13 @@ class DialogInputLocalFiles( Dialog ):
         
         self._paths_list = ClientGUICommon.SaneListCtrl( self, 120, [ ( 'path', -1 ), ( 'guessed mime', 110 ), ( 'size', 60 ) ], delete_key_callback = self.RemovePaths )
         
-        self._gauge = ClientGUICommon.Gauge( self )
+        self._progress = ClientGUICommon.TextAndGauge( self )
         
-        self._gauge_text = wx.StaticText( self, label = '' )
+        self._progress_pause = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.pause, self.PauseProgress )
+        self._progress_pause.Disable()
         
-        self._gauge_pause = wx.BitmapButton( self, bitmap = CC.GlobalBMPs.pause )
-        self._gauge_pause.Bind( wx.EVT_BUTTON, self.EventGaugePause )
-        self._gauge_pause.Disable()
-        
-        self._gauge_cancel = wx.BitmapButton( self, bitmap = CC.GlobalBMPs.stop )
-        self._gauge_cancel.Bind( wx.EVT_BUTTON, self.EventGaugeCancel )
-        self._gauge_cancel.Disable()
+        self._progress_cancel = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.stop, self.StopProgress )
+        self._progress_cancel.Disable()
         
         self._add_files_button = ClientGUICommon.BetterButton( self, 'add files', self.AddPaths )
         
@@ -1562,10 +1180,9 @@ class DialogInputLocalFiles( Dialog ):
         
         gauge_sizer = wx.BoxSizer( wx.HORIZONTAL )
         
-        gauge_sizer.AddF( self._gauge_text, CC.FLAGS_EXPAND_BOTH_WAYS )
-        gauge_sizer.AddF( self._gauge, CC.FLAGS_EXPAND_BOTH_WAYS )
-        gauge_sizer.AddF( self._gauge_pause, CC.FLAGS_VCENTER )
-        gauge_sizer.AddF( self._gauge_cancel, CC.FLAGS_VCENTER )
+        gauge_sizer.AddF( self._progress, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        gauge_sizer.AddF( self._progress_pause, CC.FLAGS_VCENTER )
+        gauge_sizer.AddF( self._progress_cancel, CC.FLAGS_VCENTER )
         
         file_buttons = wx.BoxSizer( wx.HORIZONTAL )
         
@@ -1598,6 +1215,8 @@ class DialogInputLocalFiles( Dialog ):
         
         self.SetInitialSize( ( x, y ) )
         
+        self._lock = threading.Lock()
+        
         self._processing_queue = []
         self._currently_parsing = False
         
@@ -1606,13 +1225,16 @@ class DialogInputLocalFiles( Dialog ):
         
         self._job_key = ClientThreading.JobKey()
         
-        self._dialog_key = HydrusData.GenerateKey()
+        self._parsed_path_queue = Queue.Queue()
         
-        HydrusGlobals.client_controller.sub( self, 'AddParsedPath', 'DialogInputLocalFiles_AddParsedPath' )
-        HydrusGlobals.client_controller.sub( self, 'DoneParsing', 'DialogInputLocalFiles_DoneParsing' )
-        HydrusGlobals.client_controller.sub( self, 'SetGaugeInfo', 'DialogInputLocalFiles_SetGaugeInfo' )
+        self._add_path_updater = ClientGUICommon.ThreadToGUIUpdater( self._paths_list, self.AddParsedPaths )
+        self._progress_updater = ClientGUICommon.ThreadToGUIUpdater( self._progress, self._progress.SetValue )
+        self._done_parsing_updater = ClientGUICommon.ThreadToGUIUpdater( self._progress_cancel, self.DoneParsing )
         
-        if len( paths ) > 0: self._AddPathsToList( paths )
+        if len( paths ) > 0:
+            
+            self._AddPathsToList( paths )
+            
         
         wx.CallAfter( self._add_button.SetFocus )
         
@@ -1632,8 +1254,8 @@ class DialogInputLocalFiles( Dialog ):
             
             if len( self._processing_queue ) == 0:
                 
-                self._gauge_pause.Disable()
-                self._gauge_cancel.Disable()
+                self._progress_pause.Disable()
+                self._progress_cancel.Disable()
                 
                 self._add_button.Enable()
                 self._tag_button.Enable()
@@ -1644,8 +1266,8 @@ class DialogInputLocalFiles( Dialog ):
                 
                 paths = self._processing_queue.pop( 0 )
                 
-                self._gauge_pause.Enable()
-                self._gauge_cancel.Enable()
+                self._progress_pause.Enable()
+                self._progress_cancel.Enable()
                 
                 self._add_button.Disable()
                 self._tag_button.Disable()
@@ -1675,9 +1297,11 @@ class DialogInputLocalFiles( Dialog ):
             
         
     
-    def AddParsedPath( self, dialog_key, path, mime, size ):
+    def AddParsedPaths( self ):
         
-        if dialog_key == self._dialog_key:
+        while not self._parsed_path_queue.empty():
+            
+            ( path, mime, size ) = self._parsed_path_queue.get()
             
             pretty_mime = HC.mime_string_lookup[ mime ]
             pretty_size = HydrusData.ConvertIntToBytes( size )
@@ -1705,14 +1329,11 @@ class DialogInputLocalFiles( Dialog ):
             
         
     
-    def DoneParsing( self, dialog_key ):
+    def DoneParsing( self ):
         
-        if dialog_key == self._dialog_key:
-            
-            self._currently_parsing = False
-            
-            self._ProcessQueue()
-            
+        self._currently_parsing = False
+        
+        self._ProcessQueue()
         
     
     def EventCancel( self, event ):
@@ -1720,37 +1341,6 @@ class DialogInputLocalFiles( Dialog ):
         self._TidyUp()
         
         self.EndModal( wx.ID_CANCEL )
-        
-    
-    def EventGaugeCancel( self, event ):
-        
-        self._job_key.Cancel()
-        
-        self._gauge_pause.Disable()
-        self._gauge_cancel.Disable()
-        
-        self._add_button.Enable()
-        self._tag_button.Enable()
-        
-    
-    def EventGaugePause( self, event ):
-        
-        self._job_key.PausePlay()
-        
-        if self._job_key.IsPaused():
-            
-            self._add_button.Enable()
-            self._tag_button.Enable()
-            
-            self._gauge_pause.SetBitmap( CC.GlobalBMPs.play )
-            
-        else:
-            
-            self._add_button.Disable()
-            self._tag_button.Disable()
-            
-            self._gauge_pause.SetBitmap( CC.GlobalBMPs.pause )
-            
         
     
     def EventOK( self, event ):
@@ -1793,32 +1383,54 @@ class DialogInputLocalFiles( Dialog ):
             
         
     
-    def RemovePaths( self ):
+    def PauseProgress( self ):
         
-        self._paths_list.RemoveAllSelected()
+        self._job_key.PausePlay()
         
-        self._current_paths = [ row[0] for row in self._paths_list.GetClientData() ]
-        self._current_paths_set = set( self._current_paths )
+        if self._job_key.IsPaused():
+            
+            self._add_button.Enable()
+            self._tag_button.Enable()
+            
+            self._progress_pause.SetBitmap( CC.GlobalBMPs.play )
+            
+        else:
+            
+            self._add_button.Disable()
+            self._tag_button.Disable()
+            
+            self._progress_pause.SetBitmap( CC.GlobalBMPs.pause )
+            
         
     
-    def SetGaugeInfo( self, dialog_key, gauge_range, gauge_value, text ):
+    def RemovePaths( self ):
         
-        if dialog_key == self._dialog_key:
+        with DialogYesNo( self, 'Remove all selected?' ) as dlg:
             
-            if gauge_range is None: self._gauge.Pulse()
-            else:
+            if dlg.ShowModal() == wx.ID_YES:
                 
-                self._gauge.SetRange( gauge_range )
-                self._gauge.SetValue( gauge_value )
+                self._paths_list.RemoveAllSelected()
+                
+                self._current_paths = [ row[0] for row in self._paths_list.GetClientData() ]
+                self._current_paths_set = set( self._current_paths )
                 
             
-            self._gauge_text.SetLabelText( text )
-            
+        
+    
+    def StopProgress( self ):
+        
+        self._job_key.Cancel()
+        
+        self._progress_pause.Disable()
+        self._progress_cancel.Disable()
+        
+        self._add_button.Enable()
+        self._tag_button.Enable()
         
     
     def THREADParseImportablePaths( self, raw_paths, job_key ):
         
-        HydrusGlobals.client_controller.pub( 'DialogInputLocalFiles_SetGaugeInfo', self._dialog_key, None, None, u'Parsing files and folders.' )
+        self._progress_updater.Update( 'Finding all files', None, None )
         
         file_paths = ClientFiles.GetAllPaths( raw_paths )
         
@@ -1839,7 +1451,9 @@ class DialogInputLocalFiles( Dialog ):
             
             if i % 500 == 0: gc.collect()
             
-            HydrusGlobals.client_controller.pub( 'DialogInputLocalFiles_SetGaugeInfo', self._dialog_key, num_file_paths, i, u'Done ' + HydrusData.ConvertValueRangeToPrettyString( i, num_file_paths ) )
+            message = 'Parsed ' + HydrusData.ConvertValueRangeToPrettyString( i, num_file_paths )
+            
+            self._progress_updater.Update( message, i, num_file_paths )
             
             ( i_paused, should_quit ) = job_key.WaitIfNeeded()
             
@@ -1865,7 +1479,9 @@ class DialogInputLocalFiles( Dialog ):
                 
                 num_good_files += 1
                 
-                HydrusGlobals.client_controller.pub( 'DialogInputLocalFiles_AddParsedPath', self._dialog_key, path, mime, size )
+                self._parsed_path_queue.put( ( path, mime, size ) )
+                
+                self._add_path_updater.Update()
                 
             else:
                 
@@ -1925,8 +1541,9 @@ class DialogInputLocalFiles( Dialog ):
         
         HydrusData.Print( message )
         
-        HydrusGlobals.client_controller.pub( 'DialogInputLocalFiles_SetGaugeInfo', self._dialog_key, num_file_paths, num_file_paths, message )
-        HydrusGlobals.client_controller.pub( 'DialogInputLocalFiles_DoneParsing', self._dialog_key )
+        self._progress_updater.Update( message, num_file_paths, num_file_paths )
+        
+        self._done_parsing_updater.Update()
         
     
 class DialogInputNamespaceRegex( Dialog ):
@@ -1970,7 +1587,7 @@ class DialogInputNamespaceRegex( Dialog ):
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        intro = 'Put the namespace (e.g. page) on the left.' + os.linesep + 'Put the regex (e.g. [1-9]+\d*(?=.{4}$)) on the right.' + os.linesep + 'All files will be tagged with "namespace:regex".'
+        intro = r'Put the namespace (e.g. page) on the left.' + os.linesep + r'Put the regex (e.g. [1-9]+\d*(?=.{4}$)) on the right.' + os.linesep + r'All files will be tagged with "namespace:regex".'
         
         vbox.AddF( wx.StaticText( self, label = intro ), CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( control_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
@@ -2024,134 +1641,6 @@ class DialogInputNamespaceRegex( Dialog ):
         regex = self._regex.GetValue()
         
         return ( namespace, regex )
-        
-    
-class DialogInputNewAccountType( Dialog ):
-    
-    def __init__( self, parent, account_type = None ):
-        
-        if account_type is None:
-            
-            title = ''
-            permissions = [ HC.GET_DATA ]
-            max_num_bytes = 104857600
-            max_num_requests = 1000
-            
-        else:
-            
-            title = account_type.GetTitle()
-            permissions = account_type.GetPermissions()
-            max_num_bytes = account_type.GetMaxBytes()
-            max_num_requests = account_type.GetMaxRequests()
-            
-        
-        Dialog.__init__( self, parent, 'edit account type' )
-        
-        self._title = wx.TextCtrl( self )
-        
-        self._permissions_panel = ClientGUICommon.StaticBox( self, 'permissions' )
-        
-        self._permissions = wx.ListBox( self._permissions_panel )
-        
-        self._permission_choice = wx.Choice( self._permissions_panel )
-        
-        self._add_permission = wx.Button( self._permissions_panel, label = 'add' )
-        self._add_permission.Bind( wx.EVT_BUTTON, self.EventAddPermission )
-        
-        self._remove_permission = wx.Button( self._permissions_panel, label = 'remove' )
-        self._remove_permission.Bind( wx.EVT_BUTTON, self.EventRemovePermission )
-        
-        self._max_num_mb = ClientGUICommon.NoneableSpinCtrl( self, 'max monthly data (MB)', multiplier = 1048576 )
-        self._max_num_mb.SetValue( max_num_bytes )
-        
-        self._max_num_requests = ClientGUICommon.NoneableSpinCtrl( self, 'max monthly requests' )
-        self._max_num_requests.SetValue( max_num_requests )
-        
-        self._apply = wx.Button( self, id = wx.ID_OK, label = 'apply' )
-        self._apply.SetForegroundColour( ( 0, 128, 0 ) )
-        
-        self._cancel = wx.Button( self, id = wx.ID_CANCEL, label = 'cancel' )
-        self._cancel.SetForegroundColour( ( 128, 0, 0 ) )
-        
-        #
-        
-        self._title.SetValue( title )
-        
-        for permission in permissions: self._permissions.Append( HC.permissions_string_lookup[ permission ], permission )
-        
-        for permission in HC.CREATABLE_PERMISSIONS: self._permission_choice.Append( HC.permissions_string_lookup[ permission ], permission )
-        self._permission_choice.SetSelection( 0 )
-        
-        #
-        
-        t_box = wx.BoxSizer( wx.HORIZONTAL )
-        
-        t_box.AddF( wx.StaticText( self, label = 'title: ' ), CC.FLAGS_SMALL_INDENT )
-        t_box.AddF( self._title, CC.FLAGS_EXPAND_BOTH_WAYS )
-        
-        perm_buttons_box = wx.BoxSizer( wx.HORIZONTAL )
-        
-        perm_buttons_box.AddF( self._permission_choice, CC.FLAGS_VCENTER )
-        perm_buttons_box.AddF( self._add_permission, CC.FLAGS_VCENTER )
-        perm_buttons_box.AddF( self._remove_permission, CC.FLAGS_VCENTER )
-        
-        self._permissions_panel.AddF( self._permissions, CC.FLAGS_EXPAND_BOTH_WAYS )
-        self._permissions_panel.AddF( perm_buttons_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        
-        b_box = wx.BoxSizer( wx.HORIZONTAL )
-        
-        b_box.AddF( self._apply, CC.FLAGS_VCENTER )
-        b_box.AddF( self._cancel, CC.FLAGS_VCENTER )
-        
-        vbox = wx.BoxSizer( wx.VERTICAL )
-        
-        vbox.AddF( t_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        vbox.AddF( self._permissions_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._max_num_mb, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._max_num_requests, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( b_box, CC.FLAGS_BUTTON_SIZER )
-        
-        self.SetSizer( vbox )
-        
-        ( x, y ) = self.GetEffectiveMinSize()
-        
-        self.SetInitialSize( ( 800, y ) )
-        
-        wx.CallAfter( self._apply.SetFocus )
-        
-    
-    def EventAddPermission( self, event ):
-        
-        selection = self._permission_choice.GetSelection()
-        
-        if selection != wx.NOT_FOUND:
-            
-            permission = self._permission_choice.GetClientData( selection )
-            
-            existing_permissions = [ self._permissions.GetClientData( i ) for i in range( self._permissions.GetCount() ) ]
-            
-            if permission not in existing_permissions: self._permissions.Append( HC.permissions_string_lookup[ permission ], permission )
-            
-        
-    
-    def EventRemovePermission( self, event ):
-        
-        selection = self._permissions.GetSelection()
-        
-        if selection != wx.NOT_FOUND: self._permissions.Delete( selection )
-        
-    
-    def GetAccountType( self ):
-        
-        title = self._title.GetValue()
-        
-        permissions = [ self._permissions.GetClientData( i ) for i in range( self._permissions.GetCount() ) ]
-        
-        max_num_bytes = self._max_num_mb.GetValue()
-        
-        max_num_requests = self._max_num_requests.GetValue()
-        
-        return HydrusData.AccountType( title, permissions, ( max_num_bytes, max_num_requests ) )
         
     
 class DialogInputNewFormField( Dialog ):
@@ -2236,11 +1725,11 @@ class DialogInputShortcut( Dialog ):
     
     def __init__( self, parent, modifier = wx.ACCEL_NORMAL, key = wx.WXK_F7, action = 'new_page' ):
         
-        Dialog.__init__( self, parent, 'configure shortcut' )
+        Dialog.__init__( self, parent, 'edit shortcut' )
         
         self._action = action
         
-        self._shortcut = ClientGUICommon.Shortcut( self, modifier, key )
+        self._shortcut = ClientGUICommon.Shortcut( self )
         
         self._actions = wx.Choice( self, choices = [ 'archive', 'inbox', 'close_page', 'filter', 'fullscreen_switch', 'frame_back', 'frame_next', 'manage_ratings', 'manage_tags', 'new_page', 'unclose_page', 'refresh', 'set_media_focus', 'set_search_focus', 'show_hide_splitters', 'synchronised_wait_switch', 'next', 'first', 'last', 'undo', 'redo', 'open_externally', 'pan_up', 'pan_down', 'pan_left', 'pan_right', 'previous', 'remove', 'zoom_in', 'zoom_out', 'zoom_switch' ] )
         
@@ -2252,6 +1741,18 @@ class DialogInputShortcut( Dialog ):
         
         #
         
+        if modifier not in CC.shortcut_wx_to_hydrus_lookup:
+            
+            modifiers = []
+            
+        else:
+            
+            modifiers = [ CC.shortcut_wx_to_hydrus_lookup[ modifier ] ]
+            
+        
+        shortcut = ClientData.Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, key, modifiers )
+        
+        self._shortcut.SetValue( shortcut )
         self._actions.SetSelection( self._actions.FindString( action ) )
         
         #
@@ -2259,7 +1760,7 @@ class DialogInputShortcut( Dialog ):
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
         hbox.AddF( self._shortcut, CC.FLAGS_VCENTER )
-        hbox.AddF( self._actions, CC.FLAGS_EXPAND_PERPENDICULAR )
+        hbox.AddF( self._actions, CC.FLAGS_VCENTER )
         
         b_box = wx.BoxSizer( wx.HORIZONTAL )
         b_box.AddF( self._ok, CC.FLAGS_VCENTER )
@@ -2281,7 +1782,37 @@ class DialogInputShortcut( Dialog ):
     
     def GetInfo( self ):
         
-        ( modifier, key ) = self._shortcut.GetValue()
+        shortcut = self._shortcut.GetValue()
+        
+        modifiers = shortcut._modifiers
+        
+        if modifiers == []:
+            
+            modifier = wx.ACCEL_NORMAL
+            
+        else:
+            
+            hydrus_modifier = modifiers[0]
+            
+            if hydrus_modifier == CC.SHORTCUT_MODIFIER_ALT:
+                
+                modifier = wx.ACCEL_ALT
+                
+            elif hydrus_modifier == CC.SHORTCUT_MODIFIER_CTRL:
+                
+                modifier = wx.ACCEL_CTRL
+                
+            elif hydrus_modifier == CC.SHORTCUT_MODIFIER_SHIFT:
+                
+                modifier = wx.ACCEL_SHIFT
+                
+            else:
+                
+                modifier = wx.ACCEL_NORMAL
+                
+            
+        
+        key = shortcut._shortcut_key
         
         return ( modifier, key, self._actions.GetStringSelection() )
         
@@ -2294,7 +1825,7 @@ class DialogInputTags( Dialog ):
         
         self._service_key = service_key
         
-        self._tags = ClientGUICommon.ListBoxTagsStringsAddRemove( self, service_key = service_key )
+        self._tags = ClientGUIListBoxes.ListBoxTagsStringsAddRemove( self, service_key = service_key )
         
         expand_parents = True
         
@@ -2366,11 +1897,11 @@ class DialogInputTags( Dialog ):
     
 class DialogInputTimeDelta( Dialog ):
     
-    def __init__( self, parent, initial_value, min = 1, days = False, hours = False, minutes = False, seconds = False ):
+    def __init__( self, parent, initial_value, min = 1, days = False, hours = False, minutes = False, seconds = False, monthly_allowed = False ):
         
         Dialog.__init__( self, parent, 'input time delta' )
         
-        self._time_delta = ClientGUICommon.TimeDeltaCtrl( self, min = min, days = days, hours = hours, minutes = minutes, seconds = seconds )
+        self._time_delta = ClientGUICommon.TimeDeltaCtrl( self, min = min, days = days, hours = hours, minutes = minutes, seconds = seconds, monthly_allowed = monthly_allowed )
         
         self._ok = wx.Button( self, id = wx.ID_OK, label = 'Ok' )
         self._ok.SetForegroundColour( ( 0, 128, 0 ) )
@@ -2563,22 +2094,16 @@ class DialogModifyAccounts( Dialog ):
         
         for ( string, value ) in HC.lifetimes:
             
-            if value is not None: self._add_to_expires.Append( string, value ) # don't want 'add no limit'
+            if value is not None:
+                
+                self._add_to_expires.Append( string, value ) # don't want 'add no limit'
+                
             
         
         self._add_to_expires.SetSelection( 1 ) # three months
         
         for ( string, value ) in HC.lifetimes: self._set_expires.Append( string, value )
         self._set_expires.SetSelection( 1 ) # three months
-        
-        #
-        
-        if not self._service.GetInfo( 'account' ).HasPermission( HC.GENERAL_ADMIN ):
-            
-            self._account_types_ok.Disable()
-            self._add_to_expires_ok.Disable()
-            self._set_expires_ok.Disable()
-            
         
         #
         
@@ -2625,19 +2150,12 @@ class DialogModifyAccounts( Dialog ):
         wx.CallAfter( self._exit.SetFocus )
         
     
-    def _DoModification( self, action, **kwargs ):
+    def _DoModification( self ):
         
-        request_args = HydrusSerialisable.SerialisableDictionary()
+        # change this to saveaccounts or whatever. the previous func changes the accounts, and then we push that change
+        # generate accounts, with the modification having occured
         
-        for ( k, v ) in kwargs.items():
-            
-            request_args[ k ] = v
-            
-        
-        request_args[ 'subject_identifiers' ] = HydrusSerialisable.SerialisableList( self._subject_identifiers )
-        request_args[ 'action' ] = action
-        
-        self._service.Request( HC.POST, 'account', request_args )
+        self._service.Request( HC.POST, 'account', { 'accounts' : self._accounts } )
         
         if len( self._subject_identifiers ) == 1:
             
@@ -2653,7 +2171,10 @@ class DialogModifyAccounts( Dialog ):
         if len( self._subject_identifiers ) > 1: wx.MessageBox( 'Done!' )
         
     
-    def EventAddToExpires( self, event ): self._DoModification( HC.ADD_TO_EXPIRES, timespan = self._add_to_expires.GetClientData( self._add_to_expires.GetSelection() ) )
+    def EventAddToExpires( self, event ):
+        
+        self._DoModification( HC.ADD_TO_EXPIRES, timespan = self._add_to_expires.GetClientData( self._add_to_expires.GetSelection() ) )
+        
     
     def EventBan( self, event ):
         
@@ -2663,7 +2184,10 @@ class DialogModifyAccounts( Dialog ):
             
         
     
-    def EventChangeAccountType( self, event ): self._DoModification( HC.CHANGE_ACCOUNT_TYPE, title = self._account_types.GetClientData( self._account_types.GetSelection() ).GetTitle() )
+    def EventChangeAccountType( self, event ):
+        
+        self._DoModification( HC.CHANGE_ACCOUNT_TYPE, account_type_key = self._account_types.GetChoice() )
+        
     
     def EventSetExpires( self, event ):
         
@@ -2680,91 +2204,6 @@ class DialogModifyAccounts( Dialog ):
             
             if dlg.ShowModal() == wx.ID_OK: self._DoModification( HC.SUPERBAN, reason = dlg.GetValue() )
             
-        
-    
-class DialogNews( Dialog ):
-    
-    def __init__( self, parent, service_key ):
-        
-        Dialog.__init__( self, parent, 'news' )
-        
-        self._news = ClientGUICommon.SaneMultilineTextCtrl( self, style = wx.TE_READONLY )
-        
-        self._previous = wx.Button( self, label = '<' )
-        self._previous.Bind( wx.EVT_BUTTON, self.EventPrevious )
-        
-        self._news_position = wx.TextCtrl( self )
-        
-        self._next = wx.Button( self, label = '>' )
-        self._next.Bind( wx.EVT_BUTTON, self.EventNext )
-        
-        self._done = wx.Button( self, id = wx.ID_CANCEL, label = 'Done' )
-        
-        #
-        
-        self._newslist = HydrusGlobals.client_controller.Read( 'news', service_key )
-        
-        self._current_news_position = len( self._newslist )
-        
-        self._ShowNews()
-        
-        #
-        
-        buttonbox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        buttonbox.AddF( self._previous, CC.FLAGS_VCENTER )
-        buttonbox.AddF( self._news_position, CC.FLAGS_VCENTER )
-        buttonbox.AddF( self._next, CC.FLAGS_VCENTER )
-        
-        donebox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        donebox.AddF( self._done, CC.FLAGS_VCENTER )
-        
-        vbox = wx.BoxSizer( wx.VERTICAL )
-        
-        vbox.AddF( self._news, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( buttonbox, CC.FLAGS_BUTTON_SIZER )
-        vbox.AddF( donebox, CC.FLAGS_BUTTON_SIZER )
-        
-        self.SetSizer( vbox )
-        
-        ( x, y ) = self.GetEffectiveMinSize()
-        
-        self.SetInitialSize( ( x + 200, 580 ) )
-        
-        wx.CallAfter( self._done.SetFocus )
-        
-    
-    def _ShowNews( self ):
-        
-        if self._current_news_position == 0:
-            
-            self._news.SetValue( '' )
-            
-            self._news_position.SetValue( 'No News' )
-            
-        else:
-            
-            ( news, timestamp ) = self._newslist[ self._current_news_position - 1 ]
-            
-            self._news.SetValue( time.ctime( timestamp ) + ' (' + HydrusData.ConvertTimestampToPrettyAgo( timestamp ) + '):' + os.linesep * 2 + news )
-            
-            self._news_position.SetValue( HydrusData.ConvertIntToPrettyString( self._current_news_position ) + ' / ' + HydrusData.ConvertIntToPrettyString( len( self._newslist ) ) )
-            
-        
-    
-    def EventNext( self, event ):
-        
-        if self._current_news_position < len( self._newslist ): self._current_news_position += 1
-        
-        self._ShowNews()
-        
-    
-    def EventPrevious( self, event ):
-        
-        if self._current_news_position > 1: self._current_news_position -= 1
-        
-        self._ShowNews()
         
     
 class DialogPageChooser( Dialog ):
@@ -2803,7 +2242,9 @@ class DialogPageChooser( Dialog ):
         
         self._services = HydrusGlobals.client_controller.GetServicesManager().GetServices()
         
-        self._petition_service_keys = [ service.GetServiceKey() for service in self._services if service.GetServiceType() in HC.REPOSITORIES and service.GetInfo( 'account' ).HasPermission( HC.RESOLVE_PETITIONS ) ]
+        repository_petition_permissions = [ ( content_type, HC.PERMISSION_ACTION_OVERRULE ) for content_type in HC.REPOSITORY_CONTENT_TYPES ]
+        
+        self._petition_service_keys = [ service.GetServiceKey() for service in self._services if service.GetServiceType() in HC.REPOSITORIES and True in ( service.HasPermission( content_type, action ) for ( content_type, action ) in repository_petition_permissions ) ]
         
         self._InitButtons( 'home' )
         
@@ -3014,22 +2455,22 @@ class DialogPageChooser( Dialog ):
         
         id = None
         
-        kc = event.KeyCode
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
         
-        if kc == wx.WXK_UP: id = 8
-        elif kc == wx.WXK_LEFT: id = 4
-        elif kc == wx.WXK_RIGHT: id = 6
-        elif kc == wx.WXK_DOWN: id = 2
-        elif kc == wx.WXK_NUMPAD1: id = 1
-        elif kc == wx.WXK_NUMPAD2: id = 2
-        elif kc == wx.WXK_NUMPAD3: id = 3
-        elif kc == wx.WXK_NUMPAD4: id = 4
-        elif kc == wx.WXK_NUMPAD5: id = 5
-        elif kc == wx.WXK_NUMPAD6: id = 6
-        elif kc == wx.WXK_NUMPAD7: id = 7
-        elif kc == wx.WXK_NUMPAD8: id = 8
-        elif kc == wx.WXK_NUMPAD9: id = 9
-        elif kc == wx.WXK_ESCAPE:
+        if key == wx.WXK_UP: id = 8
+        elif key == wx.WXK_LEFT: id = 4
+        elif key == wx.WXK_RIGHT: id = 6
+        elif key == wx.WXK_DOWN: id = 2
+        elif key == wx.WXK_NUMPAD1: id = 1
+        elif key == wx.WXK_NUMPAD2: id = 2
+        elif key == wx.WXK_NUMPAD3: id = 3
+        elif key == wx.WXK_NUMPAD4: id = 4
+        elif key == wx.WXK_NUMPAD5: id = 5
+        elif key == wx.WXK_NUMPAD6: id = 6
+        elif key == wx.WXK_NUMPAD7: id = 7
+        elif key == wx.WXK_NUMPAD8: id = 8
+        elif key == wx.WXK_NUMPAD9: id = 9
+        elif key == wx.WXK_ESCAPE:
             
             self.EndModal( wx.ID_CANCEL )
             
@@ -3068,9 +2509,7 @@ class DialogPathsToTags( Dialog ):
         
         for service in services:
             
-            account = service.GetInfo( 'account' )
-            
-            if account.HasPermission( HC.POST_DATA ) or account.IsUnknownAccount():
+            if service.HasPermission( HC.CONTENT_TYPE_MAPPINGS, HC.PERMISSION_ACTION_CREATE ):
                 
                 service_key = service.GetServiceKey()
                 
@@ -3182,6 +2621,12 @@ class DialogPathsToTags( Dialog ):
             tags.extend( self._advanced_panel.GetTags( index, path ) )
             
             tags = HydrusTags.CleanTags( tags )
+            
+            siblings_manager = HydrusGlobals.client_controller.GetManager( 'tag_siblings' )
+            parents_manager = HydrusGlobals.client_controller.GetManager( 'tag_parents' )
+            
+            tags = siblings_manager.CollapseTags( self._service_key, tags )
+            tags = parents_manager.ExpandTags( self._service_key, tags )
             
             tags = list( tags )
             
@@ -3338,9 +2783,15 @@ class DialogPathsToTags( Dialog ):
             
             def DeleteQuickNamespaces( self ):
                 
-                self._quick_namespaces_list.RemoveAllSelected()
-                
-                self._refresh_callable()
+                with DialogYesNo( self, 'Remove all selected?' ) as dlg:
+                    
+                    if dlg.ShowModal() == wx.ID_YES:
+                        
+                        self._quick_namespaces_list.RemoveAllSelected()
+                        
+                        self._refresh_callable()
+                        
+                    
                 
             
             def EditQuickNamespaces( self ):
@@ -3496,7 +2947,7 @@ class DialogPathsToTags( Dialog ):
                 
                 self._tags_panel = ClientGUICommon.StaticBox( self, 'tags for all' )
                 
-                self._tags = ClientGUICommon.ListBoxTagsStringsAddRemove( self._tags_panel, self._service_key, self.TagsRemoved )
+                self._tags = ClientGUIListBoxes.ListBoxTagsStringsAddRemove( self._tags_panel, self._service_key, self.TagsRemoved )
                 
                 expand_parents = True
                 
@@ -3508,7 +2959,7 @@ class DialogPathsToTags( Dialog ):
                 
                 self._paths_to_single_tags = collections.defaultdict( set )
                 
-                self._single_tags = ClientGUICommon.ListBoxTagsStringsAddRemove( self._single_tags_panel, self._service_key, self.SingleTagsRemoved )
+                self._single_tags = ClientGUIListBoxes.ListBoxTagsStringsAddRemove( self._single_tags_panel, self._service_key, self.SingleTagsRemoved )
                 
                 expand_parents = True
                 
@@ -3808,107 +3259,6 @@ class DialogPathsToTags( Dialog ):
             
         
     
-class DialogRegisterService( Dialog ):
-    
-    def __init__( self, parent, service_type ):
-        
-        Dialog.__init__( self, parent, 'register account', position = 'center' )
-        
-        self._service_type = service_type
-        
-        self._address = wx.TextCtrl( self )
-        self._registration_key = wx.TextCtrl( self )
-        
-        self._register_button = wx.Button( self, label = 'register' )
-        self._register_button.Bind( wx.EVT_BUTTON, self.EventRegister )
-        
-        self._cancel = wx.Button( self, id = wx.ID_CANCEL, label = 'cancel' )
-        
-        #
-        
-        self._address.SetValue( 'hostname:port' )
-        self._registration_key.SetValue( 'r0000000000000000000000000000000000000000000000000000000000000000' )
-        
-        #
-        
-        vbox = wx.BoxSizer( wx.VERTICAL )
-        
-        vbox.AddF( wx.StaticText( self, label = 'Please fill out the forms with the appropriate information for your service.' ), CC.FLAGS_EXPAND_PERPENDICULAR )
-        
-        rows = []
-        
-        rows.append( ( 'address: ', self._address ) )
-        rows.append( ( 'registration key: ', self._registration_key ) )
-        
-        gridbox = ClientGUICommon.WrapInGrid( self, rows )
-        
-        vbox.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        
-        buttonbox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        buttonbox.AddF( self._register_button, CC.FLAGS_VCENTER )
-        buttonbox.AddF( self._cancel, CC.FLAGS_VCENTER )
-        
-        vbox.AddF( buttonbox, CC.FLAGS_BUTTON_SIZER )
-        
-        self.SetSizer( vbox )
-        
-        ( x, y ) = self.GetEffectiveMinSize()
-        
-        self.SetInitialSize( ( x, y ) )
-        
-        self._register = False
-        
-        wx.CallAfter( self._register_button.SetFocus )
-        
-    
-    def EventRegister( self, event ):
-        
-        address = self._address.GetValue()
-        
-        try:
-            
-            ( host, port ) = address.split( ':' )
-            
-            port = int( port )
-            
-        except:
-            
-            wx.MessageBox( 'Could not parse that address!' )
-            
-            return
-            
-        
-        registration_key_encoded = self._registration_key.GetValue()
-        
-        if registration_key_encoded[0] == 'r': registration_key_encoded = registration_key_encoded[1:]
-        
-        try: registration_key = registration_key_encoded.decode( 'hex' )
-        except:
-            
-            wx.MessageBox( 'Could not parse that registration key!' )
-            
-            return
-            
-        
-        service_key = HydrusData.GenerateKey()
-        name = 'temp registering service'
-        
-        info = { 'host' : host, 'port' : port }
-        
-        service = ClientData.GenerateService( service_key, self._service_type, name, info )
-        
-        response = service.Request( HC.GET, 'access_key', request_headers = { 'Hydrus-Key' : registration_key_encoded } )
-        
-        access_key = response[ 'access_key' ]
-        
-        self._credentials = ClientData.Credentials( host, port, access_key )
-        
-        self.EndModal( wx.ID_OK )
-        
-    
-    def GetCredentials( self ): return self._credentials
-    
 class DialogSelectBooru( Dialog ):
     
     def __init__( self, parent ):
@@ -4203,27 +3553,26 @@ class DialogCheckFromListOfStrings( Dialog ):
     
     def GetChecked( self ): return self._strings.GetCheckedStrings()
     
-class DialogSelectFromListOfStrings( Dialog ):
+class DialogSelectFromList( Dialog ):
     
-    def __init__( self, parent, title, list_of_strings ):
+    def __init__( self, parent, title, list_of_tuples ):
         
         Dialog.__init__( self, parent, title )
         
-        self._hidden_cancel = wx.Button( self, id = wx.ID_CANCEL, size = ( 0, 0 ) )
+        self._list = wx.ListBox( self )
+        self._list.Bind( wx.EVT_KEY_DOWN, self.EventListKeyDown )
+        self._list.Bind( wx.EVT_LISTBOX_DCLICK, self.EventSelect )
         
-        self._strings = wx.ListBox( self )
-        self._strings.Bind( wx.EVT_KEY_DOWN, self.EventKeyDown )
-        self._strings.Bind( wx.EVT_LISTBOX_DCLICK, self.EventSelect )
+        list_of_tuples.sort()
         
-        self._ok = wx.Button( self, id = wx.ID_OK, size = ( 0, 0 ) )
-        self._ok.Bind( wx.EVT_BUTTON, self.EventOK )
-        self._ok.SetDefault()
-        
-        for s in list_of_strings: self._strings.Append( s )
+        for ( label, value ) in list_of_tuples:
+            
+            self._list.Append( label, value )
+            
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._strings, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.AddF( self._list, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
@@ -4234,31 +3583,53 @@ class DialogSelectFromListOfStrings( Dialog ):
         
         self.SetInitialSize( ( x, y ) )
         
-    
-    def EventKeyDown( self, event ):
-        
-        if event.KeyCode == wx.WXK_SPACE:
-            
-            selection = self._strings.GetSelection()
-            
-            if selection != wx.NOT_FOUND: self.EndModal( wx.ID_OK )
-            
-        else: event.Skip()
+        self.Bind( wx.EVT_CHAR_HOOK, self.EventCharHook )
         
     
-    def EventOK( self, event ):
+    def EventCharHook( self, event ):
         
-        selection = self._strings.GetSelection()
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
         
-        if selection != wx.NOT_FOUND:
+        if key == wx.WXK_ESCAPE:
             
-            self.EndModal( wx.ID_OK )
+            self.EndModal( wx.ID_CANCEL )
+            
+        else:
+            
+            event.Skip()
             
         
     
-    def EventSelect( self, event ): self.EndModal( wx.ID_OK )
+    def EventListKeyDown( self, event ):
+        
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+        
+        if key in ( wx.WXK_SPACE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
+            
+            selection = self._list.GetSelection()
+            
+            if selection != wx.NOT_FOUND:
+                
+                self.EndModal( wx.ID_OK )
+                
+            
+        else:
+            
+            event.Skip()
+            
+        
     
-    def GetString( self ): return self._strings.GetStringSelection()
+    def EventSelect( self, event ):
+        
+        self.EndModal( wx.ID_OK )
+        
+    
+    def GetChoice( self ):
+        
+        selection = self._list.GetSelection()
+        
+        return self._list.GetClientData( selection )
+        
     
 class DialogSelectYoutubeURL( Dialog ):
     
@@ -4342,7 +3713,7 @@ class DialogSetupExport( Dialog ):
         
         self._tag_txt_tag_services = []
         
-        t = ClientGUICommon.ListBoxTagsSelection( self._tags_box, include_counts = True, collapse_siblings = True )
+        t = ClientGUIListBoxes.ListBoxTagsSelection( self._tags_box, include_counts = True, collapse_siblings = True )
         
         self._tags_box.SetTagsBox( t )
         
@@ -4396,7 +3767,11 @@ class DialogSetupExport( Dialog ):
         
         self._directory_picker.SetPath( export_path )
         
-        self._pattern.SetValue( '{md5}' )
+        new_options = HydrusGlobals.client_controller.GetNewOptions()
+        
+        phrase = new_options.GetString( 'export_phrase' )
+        
+        self._pattern.SetValue( phrase )
         
         #
         
@@ -4487,9 +3862,15 @@ class DialogSetupExport( Dialog ):
     
     def DeletePaths( self ):
         
-        self._paths.RemoveAllSelected()
-        
-        self._RecalcPaths()
+        with DialogYesNo( self, 'Remove all selected?' ) as dlg:
+            
+            if dlg.ShowModal() == wx.ID_YES:
+                
+                self._paths.RemoveAllSelected()
+                
+                self._RecalcPaths()
+                
+            
         
     
     def EventExport( self, event ):
@@ -4503,6 +3884,10 @@ class DialogSetupExport( Dialog ):
         HydrusPaths.MakeSureDirectoryExists( directory )
         
         pattern = self._pattern.GetValue()
+        
+        new_options = HydrusGlobals.client_controller.GetNewOptions()
+        
+        new_options.SetString( 'export_phrase', pattern )
         
         terms = ClientExporting.ParseExportPhrase( pattern )
         
@@ -4616,10 +4001,23 @@ class DialogSetupExport( Dialog ):
                 
                 HydrusPaths.LaunchDirectory( directory )
                 
-            except: wx.MessageBox( 'Could not open that location!' )
+            except:
+                
+                wx.MessageBox( 'Could not open that location!' )
+                
+            
         
     
-    def EventRecalcPaths( self, event ): self._RecalcPaths()
+    def EventRecalcPaths( self, event ):
+        
+        pattern = self._pattern.GetValue()
+        
+        new_options = HydrusGlobals.client_controller.GetNewOptions()
+        
+        new_options.SetString( 'export_phrase', pattern )
+        
+        self._RecalcPaths()
+        
     
     def EventSelectPath( self, event ):
         
@@ -4705,7 +4103,6 @@ class DialogShortcuts( Dialog ):
         
         self.SetInitialSize( ( x, y ) )
         
-        
         wx.CallAfter( self.EventSelect, None )
         
         wx.CallAfter( self._ok.SetFocus )
@@ -4719,16 +4116,30 @@ class DialogShortcuts( Dialog ):
             
             for ( key, action ) in key_dict.items():
                 
+                if modifier not in CC.shortcut_wx_to_hydrus_lookup:
+                    
+                    modifiers = []
+                    
+                else:
+                    
+                    modifiers = [ CC.shortcut_wx_to_hydrus_lookup[ modifier ] ]
+                    
+                
+                shortcut = ClientData.Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, key, modifiers )
+                
                 if action in ( 'manage_tags', 'manage_ratings', 'archive', 'inbox', 'fullscreen_switch', 'frame_back', 'frame_next', 'next', 'first', 'last', 'open_externally', 'pan_up', 'pan_down', 'pan_left', 'pan_right', 'previous', 'remove', 'zoom_in', 'zoom_out', 'zoom_switch' ):
                     
-                    service_key = None
+                    command = ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, action )
                     
-                    default_shortcuts.SetKeyboardAction( modifier, key, ( service_key, action ) )
+                    default_shortcuts.SetCommand( shortcut, command )
                     
                 
             
         
-        default_shortcuts.SetKeyboardAction( wx.ACCEL_NORMAL, wx.WXK_DELETE, ( None, 'delete' ) )
+        shortcut = ClientData.Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, wx.WXK_DELETE, [] )
+        command = ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'delete' )
+        
+        default_shortcuts.SetCommand( shortcut, command )
         
         return default_shortcuts
         
@@ -4737,7 +4148,7 @@ class DialogShortcuts( Dialog ):
         
         name = self._shortcuts.GetCurrentKey()
         
-        if name is None: # 'default'
+        if name is None or name in CC.SHORTCUTS_RESERVED_NAMES: # None = 'default'
             
             return True
             
@@ -4814,14 +4225,9 @@ class DialogShortcuts( Dialog ):
                     
                     existing_shortcuts = page.GetShortcuts()
                     
-                    for ( ( modifier, key ), action ) in existing_shortcuts.IterateKeyboardShortcuts():
+                    for ( shortcut, command ) in existing_shortcuts:
                         
-                        shortcuts.SetKeyboardAction( modifier, key, action )
-                        
-                    
-                    for ( ( modifier, mouse_button ), action ) in existing_shortcuts.IterateMouseShortcuts():
-                        
-                        shortcuts.SetKeyboardAction( modifier, mouse_button, action )
+                        shortcuts.SetCommand( shortcut, command )
                         
                     
                 
@@ -4859,9 +4265,8 @@ class DialogShortcuts( Dialog ):
             
             wx.Panel.__init__( self, parent )
             
-            self._original_shortcuts = shortcuts
-            
-            self._shortcuts = ClientGUICommon.SaneListCtrl( self, 120, [ ( 'modifier', 150 ), ( 'key', 150 ), ( 'service', 150 ), ( 'action', -1 ) ], delete_key_callback = self.RemoveShortcuts, activation_callback = self.EditShortcuts )
+            self._name = shortcuts.GetName()
+            self._shortcuts = ClientGUICommon.SaneListCtrl( self, 120, [ ( 'shortcut', 150 ), ( 'command', -1 ) ], delete_key_callback = self.RemoveShortcuts, activation_callback = self.EditShortcuts )
             
             self._add = wx.Button( self, label = 'add' )
             self._add.Bind( wx.EVT_BUTTON, self.EventAdd )
@@ -4876,36 +4281,16 @@ class DialogShortcuts( Dialog ):
             
             #
             
-            for ( ( modifier, key ), action ) in self._original_shortcuts.IterateKeyboardShortcuts():
+            for ( shortcut, command ) in shortcuts:
                 
-                ( pretty_modifier, pretty_key ) = ClientData.ConvertShortcutToPrettyShortcut( modifier, key )
+                sort_tuple = ( shortcut, command )
                 
-                ( service_key, data ) = action
+                pretty_tuple = self._ConvertSortTupleToPrettyTuple( sort_tuple )
                 
-                if service_key is None:
-                    
-                    pretty_service_key = ''
-                    
-                else:
-                    
-                    try:
-                        
-                        service = HydrusGlobals.client_controller.GetServicesManager().GetService( service_key )
-                        
-                        pretty_service_key = service.GetName()
-                        
-                    except HydrusExceptions.DataMissing:
-                        
-                        pretty_service_key = 'service not found'
-                        
-                    
-                
-                pretty_data = data
-                
-                self._shortcuts.Append( ( pretty_modifier, pretty_key, pretty_service_key, pretty_data ), ( modifier, key, service_key, data ) )
+                self._shortcuts.Append( pretty_tuple, sort_tuple )
                 
             
-            self._SortListCtrl()
+            self._shortcuts.SortListItems( 1 )
             
             #
             
@@ -4923,26 +4308,28 @@ class DialogShortcuts( Dialog ):
             self.SetSizer( vbox )
             
         
-        def _SortListCtrl( self ):
+        def _ConvertSortTupleToPrettyTuple( self, ( shortcut, command ) ):
             
-            self._shortcuts.SortListItems( 3 )
+            return ( shortcut.ToString(), command.ToString() )
             
         
         def EditShortcuts( self ):
             
             for index in self._shortcuts.GetAllSelected():
                 
-                ( modifier, key, service_key, action ) = self._shortcuts.GetClientData( index )
+                ( shortcut, command ) = self._shortcuts.GetClientData( index )
                 
-                with DialogInputCustomFilterAction( self, modifier = modifier, key = key, service_key = service_key, action = action ) as dlg:
+                with DialogInputCustomFilterAction( self, shortcut, command ) as dlg:
                     
                     if dlg.ShowModal() == wx.ID_OK:
                         
-                        ( pretty_tuple, sort_tuple ) = dlg.GetInfo()
+                        ( shortcut, command ) = dlg.GetInfo()
+                        
+                        sort_tuple = ( shortcut, command )
+                        
+                        pretty_tuple = self._ConvertSortTupleToPrettyTuple( sort_tuple )
                         
                         self._shortcuts.UpdateRow( index, pretty_tuple, sort_tuple )
-                        
-                        self._SortListCtrl()
                         
                     
                 
@@ -4950,15 +4337,20 @@ class DialogShortcuts( Dialog ):
         
         def EventAdd( self, event ):
             
-            with DialogInputCustomFilterAction( self ) as dlg:
+            shortcut = ClientData.Shortcut()
+            command = ClientData.ApplicationCommand()
+            
+            with DialogInputCustomFilterAction( self, shortcut, command ) as dlg:
                 
                 if dlg.ShowModal() == wx.ID_OK:
                     
-                    ( pretty_tuple, sort_tuple ) = dlg.GetInfo()
+                    ( shortcut, command ) = dlg.GetInfo()
+                    
+                    sort_tuple = ( shortcut, command )
+                    
+                    pretty_tuple = self._ConvertSortTupleToPrettyTuple( sort_tuple )
                     
                     self._shortcuts.Append( pretty_tuple, sort_tuple )
-                    
-                    self._SortListCtrl()
                     
                 
             
@@ -4975,17 +4367,11 @@ class DialogShortcuts( Dialog ):
         
         def GetShortcuts( self ):
             
-            name = self._original_shortcuts.GetName()
+            shortcuts = ClientData.Shortcuts( self._name )
             
-            shortcuts = ClientData.Shortcuts( name )
-            
-            rows = self._shortcuts.GetClientData()
-            
-            for ( modifier, key, service_key, data ) in rows:
+            for ( shortcut, command ) in self._shortcuts.GetClientData():
                 
-                action = ( service_key, data )
-                
-                shortcuts.SetKeyboardAction( modifier, key, action )
+                shortcuts.SetCommand( shortcut, command )
                 
             
             return shortcuts
@@ -4993,7 +4379,13 @@ class DialogShortcuts( Dialog ):
         
         def RemoveShortcuts( self ):
             
-            self._shortcuts.RemoveAllSelected()
+            with DialogYesNo( self, 'Remove all selected?' ) as dlg:
+                
+                if dlg.ShowModal() == wx.ID_YES:
+                    
+                    self._shortcuts.RemoveAllSelected()
+                    
+                
             
         
     

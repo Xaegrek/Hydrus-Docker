@@ -1,10 +1,5 @@
-import collections
 import HydrusConstants as HC
-import HydrusExceptions
 import os
-import sys
-import threading
-import traceback
 import wx
 import wx.lib.newevent
 
@@ -15,6 +10,9 @@ ID_NULL = wx.NewId()
 ID_TIMER_UPDATES = wx.NewId()
 
 #
+
+APPLICATION_COMMAND_TYPE_SIMPLE = 0
+APPLICATION_COMMAND_TYPE_CONTENT = 1
 
 BLANK_PHASH = '\x80\x00\x00\x00\x00\x00\x00\x00' # first bit 1 but everything else 0 means only significant part of dct was [0,0], which represents flat colour
 
@@ -173,7 +171,8 @@ MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL_PAUSED = 1
 MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED = 2
 MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED_PAUSED = 3
 MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON = 4
-MEDIA_VIEWER_ACTION_DO_NOT_SHOW = 5
+MEDIA_VIEWER_ACTION_DO_NOT_SHOW_ON_ACTIVATION_OPEN_EXTERNALLY = 5
+MEDIA_VIEWER_ACTION_DO_NOT_SHOW = 6
 
 media_viewer_action_string_lookup = {}
 
@@ -182,11 +181,12 @@ media_viewer_action_string_lookup[ MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL_PAUSED ] =
 media_viewer_action_string_lookup[ MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED ] = 'show, but initially behind an embed button'
 media_viewer_action_string_lookup[ MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED_PAUSED ] = 'show, but initially behind an embed button, and start paused'
 media_viewer_action_string_lookup[ MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON ] = 'show an \'open externally\' button'
-media_viewer_action_string_lookup[ MEDIA_VIEWER_ACTION_DO_NOT_SHOW ] = 'do not show in the media viewer. on thumbnail activation, open externally'
+media_viewer_action_string_lookup[ MEDIA_VIEWER_ACTION_DO_NOT_SHOW_ON_ACTIVATION_OPEN_EXTERNALLY ] = 'do not show in the media viewer. on thumbnail activation, open externally'
+media_viewer_action_string_lookup[ MEDIA_VIEWER_ACTION_DO_NOT_SHOW ] = 'do not show at all'
 
-static_full_support = [ MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED, MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, MEDIA_VIEWER_ACTION_DO_NOT_SHOW ]
-animated_full_support = [ MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL_PAUSED, MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED, MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED_PAUSED, MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, MEDIA_VIEWER_ACTION_DO_NOT_SHOW ]
-no_support = [ MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, MEDIA_VIEWER_ACTION_DO_NOT_SHOW ]
+static_full_support = [ MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED, MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, MEDIA_VIEWER_ACTION_DO_NOT_SHOW_ON_ACTIVATION_OPEN_EXTERNALLY ]
+animated_full_support = [ MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL_PAUSED, MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED, MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED_PAUSED, MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, MEDIA_VIEWER_ACTION_DO_NOT_SHOW_ON_ACTIVATION_OPEN_EXTERNALLY ]
+no_support = [ MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, MEDIA_VIEWER_ACTION_DO_NOT_SHOW_ON_ACTIVATION_OPEN_EXTERNALLY, MEDIA_VIEWER_ACTION_DO_NOT_SHOW ]
 
 media_viewer_capabilities = {}
 
@@ -196,7 +196,7 @@ media_viewer_capabilities[ HC.IMAGE_GIF ] = animated_full_support
 
 if HC.PLATFORM_WINDOWS:
     
-    media_viewer_capabilities[ HC.APPLICATION_FLASH ] = [ MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED, MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, MEDIA_VIEWER_ACTION_DO_NOT_SHOW ]
+    media_viewer_capabilities[ HC.APPLICATION_FLASH ] = [ MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED, MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, MEDIA_VIEWER_ACTION_DO_NOT_SHOW_ON_ACTIVATION_OPEN_EXTERNALLY, MEDIA_VIEWER_ACTION_DO_NOT_SHOW ]
     
 else:
     
@@ -215,7 +215,9 @@ media_viewer_capabilities[ HC.VIDEO_WMV ] = animated_full_support
 media_viewer_capabilities[ HC.AUDIO_MP3 ] = no_support
 media_viewer_capabilities[ HC.AUDIO_OGG ] = no_support
 media_viewer_capabilities[ HC.AUDIO_FLAC ] = no_support
-media_viewer_capabilities[ HC.AUDIO_WMA] = no_support
+media_viewer_capabilities[ HC.AUDIO_WMA ] = no_support
+media_viewer_capabilities[ HC.APPLICATION_HYDRUS_UPDATE_CONTENT ] = no_support
+media_viewer_capabilities[ HC.APPLICATION_HYDRUS_UPDATE_DEFINITIONS ] = no_support
 
 MEDIA_VIEWER_SCALE_100 = 0
 MEDIA_VIEWER_SCALE_MAX_REGULAR = 1
@@ -226,6 +228,40 @@ media_viewer_scale_string_lookup = {}
 media_viewer_scale_string_lookup[ MEDIA_VIEWER_SCALE_100 ] = 'show at 100%'
 media_viewer_scale_string_lookup[ MEDIA_VIEWER_SCALE_MAX_REGULAR ] = 'scale to the largest regular zoom that fits'
 media_viewer_scale_string_lookup[ MEDIA_VIEWER_SCALE_TO_CANVAS ] = 'scale to the canvas size'
+
+SHORTCUT_MODIFIER_CTRL = 0
+SHORTCUT_MODIFIER_ALT = 1
+SHORTCUT_MODIFIER_SHIFT = 2
+
+shortcut_wx_to_hydrus_lookup = {}
+
+shortcut_wx_to_hydrus_lookup[ wx.ACCEL_ALT ] = SHORTCUT_MODIFIER_ALT
+shortcut_wx_to_hydrus_lookup[ wx.ACCEL_CTRL ] = SHORTCUT_MODIFIER_CTRL
+shortcut_wx_to_hydrus_lookup[ wx.ACCEL_CMD ] = SHORTCUT_MODIFIER_CTRL
+shortcut_wx_to_hydrus_lookup[ wx.ACCEL_SHIFT ] = SHORTCUT_MODIFIER_SHIFT
+
+SHORTCUT_MOUSE_LEFT = 0
+SHORTCUT_MOUSE_RIGHT = 1
+SHORTCUT_MOUSE_MIDDLE = 2
+SHORTCUT_MOUSE_SCROLL_UP = 3
+SHORTCUT_MOUSE_SCROLL_DOWN = 4
+
+shortcut_mouse_string_lookup = {}
+
+shortcut_mouse_string_lookup[ SHORTCUT_MOUSE_LEFT ] = 'left-click'
+shortcut_mouse_string_lookup[ SHORTCUT_MOUSE_RIGHT ] = 'right-click'
+shortcut_mouse_string_lookup[ SHORTCUT_MOUSE_MIDDLE ] = 'middle-click'
+shortcut_mouse_string_lookup[ SHORTCUT_MOUSE_SCROLL_UP ] = 'scroll up'
+shortcut_mouse_string_lookup[ SHORTCUT_MOUSE_SCROLL_DOWN ] = 'scroll down'
+
+SHORTCUT_TYPE_KEYBOARD = 0
+SHORTCUT_TYPE_MOUSE = 1
+
+SHORTCUTS_RESERVED_NAMES = [ 'duplicate_filter' ]
+
+# shortcut commands
+
+DUPLICATE_FILTER_ACTIONS = [ 'duplicate_filter_this_is_better', 'duplicate_filter_exactly_the_same', 'duplicate_filter_alternates', 'duplicate_filter_not_dupes', 'duplicate_filter_custom_action', 'duplicate_filter_skip' ]
 
 SHUTDOWN_TIMESTAMP_VACUUM = 0
 SHUTDOWN_TIMESTAMP_FATTEN_AC_CACHE = 1
@@ -471,6 +507,8 @@ class GlobalBMPs( object ):
 LOCAL_TAG_SERVICE_KEY = 'local tags'
 
 LOCAL_FILE_SERVICE_KEY = 'local files'
+
+LOCAL_UPDATE_SERVICE_KEY = 'repository updates'
 
 LOCAL_BOORU_SERVICE_KEY = 'local booru'
 

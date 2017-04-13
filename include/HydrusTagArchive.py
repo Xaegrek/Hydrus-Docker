@@ -76,7 +76,7 @@ class HydrusTagArchive( object ):
         self._c.execute( 'CREATE TABLE hashes ( hash_id INTEGER PRIMARY KEY, hash BLOB_BYTES );' )
         self._c.execute( 'CREATE UNIQUE INDEX hashes_hash_index ON hashes ( hash );' )
         
-        self._c.execute( 'CREATE TABLE mappings ( hash_id INTEGER, tag_id INTEGER, PRIMARY KEY( hash_id, tag_id ) );' )
+        self._c.execute( 'CREATE TABLE mappings ( hash_id INTEGER, tag_id INTEGER, PRIMARY KEY ( hash_id, tag_id ) );' )
         self._c.execute( 'CREATE INDEX mappings_hash_id_index ON mappings ( hash_id );' )
         
         self._c.execute( 'CREATE TABLE namespaces ( namespace TEXT );' )
@@ -136,7 +136,10 @@ class HydrusTagArchive( object ):
         return tag_id
         
     
-    def BeginBigJob( self ): self._c.execute( 'BEGIN IMMEDIATE;' )
+    def BeginBigJob( self ):
+        
+        self._c.execute( 'BEGIN IMMEDIATE;' )
+        
     
     def CommitBigJob( self ):
         
@@ -189,28 +192,31 @@ class HydrusTagArchive( object ):
     
     def GetHashType( self ):
         
-        try: ( hash_type, ) = self._c.execute( 'SELECT hash_type FROM hash_type;' ).fetchone()
-        except:
+        result = self._c.execute( 'SELECT hash_type FROM hash_type;' ).fetchone()
+        
+        if result is None:
             
-            try:
-                
-                ( hash, ) = self._c.execute( 'SELECT hash FROM hashes;' ).fetchone()
-                
-                if len( hash ) == 16: self.SetHashType( HASH_TYPE_MD5 )
-                elif len( hash ) == 20: self.SetHashType( HASH_TYPE_SHA1 )
-                elif len( hash ) == 32: self.SetHashType( HASH_TYPE_SHA256 )
-                elif len( hash ) == 64: self.SetHashType( HASH_TYPE_SHA512 )
-                else: raise Exception()
-                
-                return self.GetHashType()
-                
-            except TypeError:
+            result = self._c.execute( 'SELECT hash FROM hashes;' ).fetchone()
+            
+            if result is None:
                 
                 raise Exception( 'This archive has no hash type set, and as it has no files, no hash type guess can be made.' )
                 
             
-        
-        return hash_type
+            if len( hash ) == 16: self.SetHashType( HASH_TYPE_MD5 )
+            elif len( hash ) == 20: self.SetHashType( HASH_TYPE_SHA1 )
+            elif len( hash ) == 32: self.SetHashType( HASH_TYPE_SHA256 )
+            elif len( hash ) == 64: self.SetHashType( HASH_TYPE_SHA512 )
+            else: raise Exception()
+            
+            return self.GetHashType()
+            
+        else:
+            
+            ( hash_type, ) = result
+            
+            return hash_type
+            
         
     
     def GetMappings( self, hash ): return self.GetTags( hash )
@@ -219,7 +225,10 @@ class HydrusTagArchive( object ):
         
         filename = os.path.basename( self._path )
         
-        if '.' in filename: filename = filename.split( '.', 1 )[0]
+        if '.' in filename:
+            
+            filename = filename.split( '.', 1 )[0]
+            
         
         return filename
         
@@ -231,7 +240,7 @@ class HydrusTagArchive( object ):
         try: hash_id = self._GetHashId( hash, read_only = True )
         except: return []
         
-        result = { tag for ( tag, ) in self._c.execute( 'SELECT tag FROM mappings, tags USING ( tag_id ) WHERE hash_id = ?;', ( hash_id, ) ) }
+        result = { tag for ( tag, ) in self._c.execute( 'SELECT tag FROM mappings NATURAL JOIN tags WHERE hash_id = ?;', ( hash_id, ) ) }
         
         return result
         
@@ -244,7 +253,17 @@ class HydrusTagArchive( object ):
             
             return True
             
-        except: return False
+        except:
+            
+            return False
+            
+        
+    
+    def HasHashTypeSet( self ):
+        
+        result = self._c.execute( 'SELECT hash_type FROM hash_type;' ).fetchone()
+        
+        return result is not None
         
     
     def IterateHashes( self ):

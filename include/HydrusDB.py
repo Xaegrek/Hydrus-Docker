@@ -47,37 +47,11 @@ def CanVacuum( db_path, stop_time = None ):
                 
             
         
-        temp_dir = tempfile.gettempdir()
         ( db_dir, db_filename ) = os.path.split( db_path )
         
-        temp_disk_usage = psutil.disk_usage( temp_dir )
+        ( has_space, reason ) = HydrusPaths.HasSpaceForDBTransaction( db_dir, db_size )
         
-        a = HydrusPaths.GetDevice( temp_dir )
-        b = HydrusPaths.GetDevice( db_dir )
-        
-        if HydrusPaths.GetDevice( temp_dir ) == HydrusPaths.GetDevice( db_dir ):
-            
-            if temp_disk_usage.free < db_size * 2.2:
-                
-                return False
-                
-            
-        else:
-            
-            if temp_disk_usage.free < db_size * 1.1:
-                
-                return False
-                
-            
-            db_disk_usage = psutil.disk_usage( db_dir )
-            
-            if db_disk_usage.free < db_size * 1.1:
-                
-                return False
-                
-            
-        
-        return True
+        return has_space
         
     except Exception as e:
         
@@ -155,6 +129,8 @@ class HydrusDB( object ):
         self._db_name = db_name
         self._no_wal = no_wal
         
+        self._in_transaction = False
+        
         self._connection_timestamp = 0
         
         main_db_filename = db_name
@@ -206,13 +182,24 @@ class HydrusDB( object ):
         
         ( version, ) = self._c.execute( 'SELECT version FROM version;' ).fetchone()
         
-        if version < HC.SOFTWARE_VERSION - 50: raise Exception( 'Your current version of hydrus ' + str( version ) + ' is too old for this version ' + str( HC.SOFTWARE_VERSION ) + ' to update. Please try updating with version ' + str( version + 45 ) + ' or earlier first.' )
+        if version < HC.SOFTWARE_VERSION - 50:
+            
+            raise Exception( 'Your current database version of hydrus ' + str( version ) + ' is too old for this software version ' + str( HC.SOFTWARE_VERSION ) + ' to update. Please try updating with version ' + str( version + 45 ) + ' or earlier first.' )
+            
+        
+        if version < 238:
+            
+            raise Exception( 'Unfortunately, this software cannot update your database. Please try installing version 238 first.' )
+            
         
         while version < HC.SOFTWARE_VERSION:
             
             time.sleep( self.UPDATE_WAIT )
             
-            try: self._c.execute( 'BEGIN IMMEDIATE;' )
+            try:
+                
+                self._BeginImmediate()
+                
             except Exception as e:
                 
                 raise HydrusExceptions.DBAccessException( HydrusData.ToUnicode( e ) )
@@ -222,7 +209,7 @@ class HydrusDB( object ):
                 
                 self._UpdateDB( version )
                 
-                self._c.execute( 'COMMIT;' )
+                self._Commit()
                 
                 self._is_db_updated = True
                 
@@ -232,7 +219,7 @@ class HydrusDB( object ):
                 
                 try:
                     
-                    self._c.execute( 'ROLLBACK;' )
+                    self._Rollback()
                     
                 except Exception as rollback_e:
                     
@@ -289,6 +276,20 @@ class HydrusDB( object ):
             
         
     
+    def _BeginImmediate( self ):
+        
+        if self._in_transaction:
+            
+            HydrusData.Print( 'Received a call to begin, but was already in a transaction!' )
+            
+        else:
+            
+            self._c.execute( 'BEGIN IMMEDIATE;' )
+            
+            self._in_transaction = True
+            
+        
+    
     def _CleanUpCaches( self ):
         
         pass
@@ -297,6 +298,11 @@ class HydrusDB( object ):
     def _CloseDBCursor( self ):
         
         if self._db is not None:
+            
+            if self._in_transaction:
+                
+                self._Commit()
+                
             
             self._c.close()
             self._db.close()
@@ -309,9 +315,52 @@ class HydrusDB( object ):
             
         
     
+    def _Commit( self ):
+        
+        if self._in_transaction:
+            
+            self._c.execute( 'COMMIT;' )
+            
+            self._in_transaction = False
+            
+        else:
+            
+            HydrusData.Print( 'Received a call to commit, but was not in a transaction!' )
+            
+        
+    
     def _CreateDB( self ):
         
         raise NotImplementedError()
+        
+    
+    def _CreateIndex( self, table_name, columns, unique = False ):
+        
+        if '.' in table_name:
+            
+            table_name_simple = table_name.split( '.' )[1]
+            
+        else:
+            
+            table_name_simple = table_name
+            
+        
+        index_name = table_name + '_' + '_'.join( columns ) + '_index'
+        
+        if unique:
+            
+            create_phrase = 'CREATE UNIQUE INDEX IF NOT EXISTS '
+            
+        else:
+            
+            create_phrase = 'CREATE INDEX IF NOT EXISTS '
+            
+        
+        on_phrase = ' ON ' + table_name_simple + ' (' + ', '.join( columns ) + ');'
+        
+        statement = create_phrase + index_name + on_phrase
+        
+        self._c.execute( statement )
         
     
     def _GetRowCount( self ):
@@ -436,6 +485,11 @@ class HydrusDB( object ):
             
         
     
+    def _InitDiskCache( self ):
+        
+        pass
+        
+    
     def _InitExternalDatabases( self ):
         
         pass
@@ -452,25 +506,19 @@ class HydrusDB( object ):
         
         ( action, args, kwargs ) = job.GetCallableTuple()
         
-        in_transaction = False
-        
         try:
             
             if job_type in ( 'read_write', 'write' ):
                 
-                self._c.execute( 'BEGIN IMMEDIATE;' )
-                
-                in_transaction = True
+                self._BeginImmediate()
                 
             
             if job_type in ( 'read', 'read_write' ): result = self._Read( action, *args, **kwargs )
             elif job_type in ( 'write' ): result = self._Write( action, *args, **kwargs )
             
-            if in_transaction:
+            if self._in_transaction:
                 
-                self._c.execute( 'COMMIT;' )
-                
-                in_transaction = False
+                self._Commit()
                 
             
             for ( topic, args, kwargs ) in self._pubsubs:
@@ -485,11 +533,11 @@ class HydrusDB( object ):
             
         except Exception as e:
             
-            if in_transaction:
+            if self._in_transaction:
                 
                 try:
                     
-                    self._c.execute( 'ROLLBACK;' )
+                    self._Rollback()
                     
                 except Exception as rollback_e:
                     
@@ -511,6 +559,20 @@ class HydrusDB( object ):
     def _ReportStatus( self, text ):
         
         HydrusData.Print( text )
+        
+    
+    def _Rollback( self ):
+        
+        if self._in_transaction:
+            
+            self._c.execute( 'ROLLBACK;' )
+            
+            self._in_transaction = False
+            
+        else:
+            
+            HydrusData.Print( 'Received a call to rollback, but was not in a transaction!' )
+            
         
     
     def _SelectFromList( self, select_statement, xs ):
@@ -549,6 +611,32 @@ class HydrusDB( object ):
                 yield row
                 
             
+        
+    
+    def _SelectFromListFetchAll( self, select_statement, xs ):
+        
+        return [ row for row in self._SelectFromList( select_statement, xs ) ]
+        
+    
+    def _STI( self, iterable_cursor ):
+        
+        # strip singleton tuples to an iterator
+        
+        return ( item for ( item, ) in iterable_cursor )
+        
+    
+    def _STL( self, iterable_cursor ):
+        
+        # strip singleton tuples to a list
+        
+        return [ item for ( item, ) in iterable_cursor ]
+        
+    
+    def _STS( self, iterable_cursor ):
+        
+        # strip singleton tuples to a set
+        
+        return { item for ( item, ) in iterable_cursor }
         
     
     def _UpdateDB( self, version ):
@@ -597,6 +685,8 @@ class HydrusDB( object ):
             
             self._InitDBCursor() # have to reinitialise because the thread id has changed
             
+            self._InitDiskCache()
+            
             self._InitCaches()
             
         except:
@@ -628,9 +718,11 @@ class HydrusDB( object ):
                     
                     if HydrusGlobals.db_profile_mode:
                         
-                        HydrusData.ShowText( 'Profiling ' + job.ToString() )
+                        summary = 'Profiling ' + job.ToString()
                         
-                        HydrusData.Profile( 'self._ProcessJob( job )', globals(), locals() )
+                        HydrusData.ShowText( summary )
+                        
+                        HydrusData.Profile( summary, 'self._ProcessJob( job )', globals(), locals() )
                         
                     else:
                         

@@ -1,6 +1,5 @@
 import ClientConstants as CC
 import ClientData
-import ClientFiles
 import ClientSearch
 import hashlib
 import HydrusConstants as HC
@@ -8,6 +7,7 @@ import HydrusData
 import HydrusGlobals
 import HydrusPaths
 import HydrusSerialisable
+import HydrusTags
 import os
 import re
 import stat
@@ -30,7 +30,11 @@ def GenerateExportFilename( media, terms ):
             
             tags = tags_manager.GetNamespaceSlice( ( term, ) )
             
-            filename += ', '.join( [ tag.split( ':' )[1] for tag in tags ] )
+            subtags = [ HydrusTags.SplitTag( tag )[1] for tag in tags ]
+            
+            subtags.sort()
+            
+            filename += ', '.join( subtags )
             
         elif term_type == 'predicate':
             
@@ -41,8 +45,14 @@ def GenerateExportFilename( media, terms ):
                 
                 tags = list( current.union( pending ) )
                 
-                if term == 'nn tags': tags = [ tag for tag in tags if ':' not in tag ]
-                else: tags = [ tag if ':' not in tag else tag.split( ':' )[1] for tag in tags ]
+                if term == 'nn tags':
+                    
+                    tags = [ tag for tag in tags if ':' not in tag ]
+                    
+                else:
+                    
+                    tags = [ HydrusTags.SplitTag( tag )[1] for tag in tags ]
+                    
                 
                 tags.sort()
                 
@@ -70,9 +80,12 @@ def GenerateExportFilename( media, terms ):
             
         elif term_type == 'tag':
             
-            if ':' in term: term = term.split( ':' )[1]
+            ( namespace, subtag ) = HydrusTags.SplitTag( tag )
             
-            if tags_manager.HasTag( term ): filename += term
+            if tags_manager.HasTag( subtag ):
+                
+                filename += subtag
+                
             
         
     
@@ -202,6 +215,13 @@ class ExportFolder( HydrusSerialisable.SerialisableBaseNamed ):
         if file_search_context is None:
             
             file_search_context = ClientSearch.FileSearchContext( file_service_key = CC.LOCAL_FILE_SERVICE_KEY )
+            
+        
+        if phrase is None:
+            
+            new_options = HydrusGlobals.client_controller.GetNewOptions()
+            
+            phrase = new_options.GetString( 'export_phrase' )
             
         
         self._path = path

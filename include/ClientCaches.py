@@ -1,6 +1,5 @@
 import ClientDefaults
 import ClientDownloading
-import ClientFiles
 import ClientNetworking
 import ClientRendering
 import ClientSearch
@@ -8,16 +7,13 @@ import ClientThreading
 import HydrusConstants as HC
 import HydrusExceptions
 import HydrusFileHandling
-import HydrusImageHandling
 import HydrusPaths
 import HydrusSessions
 import itertools
 import json
 import os
 import random
-import Queue
 import requests
-import shutil
 import threading
 import time
 import urllib
@@ -92,7 +88,11 @@ def BuildSimpleChildrenToParents( pairs ):
     
     return simple_children_to_parents
     
-def CollapseTagSiblingPairs( pairs ):
+def CollapseTagSiblingPairs( groups_of_pairs ):
+    
+    # This now takes 'groups' of pairs in descending order of precedence
+    
+    # This allows us to mandate that local tags take precedence
     
     # a pair is invalid if:
     # it causes a loop (a->b, b->c, c->a)
@@ -100,40 +100,43 @@ def CollapseTagSiblingPairs( pairs ):
     
     valid_chains = {}
     
-    pairs = list( pairs )
-    
-    pairs.sort()
-    
-    for ( bad, good ) in pairs:
+    for pairs in groups_of_pairs:
         
-        if bad == good:
-            
-            # a->a is a loop!
-            
-            continue
-            
+        pairs = list( pairs )
         
-        if bad not in valid_chains:
+        pairs.sort()
+        
+        for ( bad, good ) in pairs:
             
-            we_have_a_loop = False
-            
-            current_best = good
-            
-            while current_best in valid_chains:
+            if bad == good:
                 
-                current_best = valid_chains[ current_best ]
+                # a->a is a loop!
                 
-                if current_best == bad:
+                continue
+                
+            
+            if bad not in valid_chains:
+                
+                we_have_a_loop = False
+                
+                current_best = good
+                
+                while current_best in valid_chains:
                     
-                    we_have_a_loop = True
+                    current_best = valid_chains[ current_best ]
                     
-                    break
+                    if current_best == bad:
+                        
+                        we_have_a_loop = True
+                        
+                        break
+                        
                     
                 
-            
-            if not we_have_a_loop:
-                
-                valid_chains[ bad ] = good
+                if not we_have_a_loop:
+                    
+                    valid_chains[ bad ] = good
+                    
                 
             
         
@@ -206,6 +209,7 @@ class ClientFilesManager( object ):
         self._prefixes_to_locations = {}
         
         self._bad_error_occured = False
+        self._missing_locations = set()
         
         self._Reinit()
         
@@ -552,39 +556,118 @@ class ClientFilesManager( object ):
         
         self._prefixes_to_locations = self._controller.Read( 'client_files_locations' )
         
-        missing = set()
+        if HydrusGlobals.client_controller.IsFirstStart():
+            
+            try:
+                
+                for ( prefix, location ) in self._prefixes_to_locations.items():
+                    
+                    HydrusPaths.MakeSureDirectoryExists( location )
+                    
+                    subdir = os.path.join( location, prefix )
+                    
+                    HydrusPaths.MakeSureDirectoryExists( subdir )
+                    
+                
+            except:
+                
+                text = 'Attempting to create the database\'s client_files folder structure failed!'
+                
+                wx.MessageBox( text )
+                
+                raise
+                
+            
+        else:
+            
+            self._missing_locations = set()
+            
+            for ( prefix, location ) in self._prefixes_to_locations.items():
+                
+                if os.path.exists( location ):
+                    
+                    subdir = os.path.join( location, prefix )
+                    
+                    if not os.path.exists( subdir ):
+                        
+                        self._missing_locations.add( ( location, prefix ) )
+                        
+                    
+                else:
+                    
+                    self._missing_locations.add( ( location, prefix ) )
+                    
+                
+            
+            if len( self._missing_locations ) > 0:
+                
+                self._bad_error_occured = True
+                
+                #
+                
+                missing_dict = HydrusData.BuildKeyToListDict( self._missing_locations )
+                
+                missing_locations = list( missing_dict.keys() )
+                
+                missing_locations.sort()
+                
+                missing_string = ''
+                
+                for l in missing_locations:
+                    
+                    missing_prefixes = list( missing_dict[ l ] )
+                    
+                    missing_prefixes.sort()
+                    
+                    missing_prefixes_string = '    ' + os.linesep.join( ( ', '.join( block ) for block in HydrusData.SplitListIntoChunks( missing_prefixes, 32 ) ) )
+                    
+                    missing_string += os.linesep
+                    missing_string += l
+                    missing_string += os.linesep
+                    missing_string += missing_prefixes_string
+                    
+                
+                #
+                
+                if len( self._missing_locations ) > 4:
+                    
+                    text = 'When initialising the client files manager, some file locations did not exist! They have all been written to the log!'
+                    text += os.linesep * 2
+                    text += 'If this is happening on client boot, you should now be presented with a dialog to correct this manually!'
+                    
+                    wx.MessageBox( text )
+                    
+                    HydrusData.DebugPrint( text )
+                    HydrusData.DebugPrint( 'Missing locations follow:' )
+                    HydrusData.DebugPrint( missing_string )
+                    
+                else:
+                    
+                    text = 'When initialising the client files manager, these file locations did not exist:'
+                    text += os.linesep * 2
+                    text += missing_string
+                    text += os.linesep * 2
+                    text += 'If this is happening on client boot, you should now be presented with a dialog to correct this manually!'
+                    
+                    wx.MessageBox( text )
+                    HydrusData.DebugPrint( text )
+                    
+                
+            
         
-        for ( prefix, location ) in self._prefixes_to_locations.items():
-            
-            if os.path.exists( location ):
-                
-                dir = os.path.join( location, prefix )
-                
-                if not os.path.exists( dir ):
-                    
-                    missing.add( dir )
-                    
-                    HydrusPaths.MakeSureDirectoryExists( dir )
-                    
-                
-            else:
-                
-                missing.add( location )
-                
-            
+    
+    def GetMissing( self ):
         
-        if len( missing ) > 0 and not HydrusGlobals.client_controller.IsFirstStart():
+        return self._missing_locations
+        
+    
+    def LocklessAddFileFromString( self, hash, mime, data ):
+        
+        dest_path = self._GenerateExpectedFilePath( hash, mime )
+        
+        with open( dest_path, 'wb' ) as f:
             
-            self._bad_error_occured = True
-            
-            text = 'The external locations:'
-            text += os.linesep * 2
-            text += ', '.join( missing )
-            text += os.linesep * 2
-            text += 'Did not exist on boot! Please check your external storage options and locations and restart the client.'
-            
-            HydrusData.DebugPrint( text )
-            wx.MessageBox( text )
+            f.write( data )
             
         
     
@@ -828,9 +911,12 @@ class ClientFilesManager( object ):
             
         
     
-    def DelayedDeleteFiles( self, hashes ):
+    def DelayedDeleteFiles( self, hashes, time_to_delete ):
         
-        time.sleep( 2 )
+        while not HydrusData.TimeHasPassed( time_to_delete ):
+            
+            time.sleep( 0.5 )
+            
         
         with self._lock:
             
@@ -849,9 +935,12 @@ class ClientFilesManager( object ):
                 
             
     
-    def DelayedDeleteThumbnails( self, hashes ):
+    def DelayedDeleteThumbnails( self, hashes, time_to_delete ):
         
-        time.sleep( 2 )
+        while not HydrusData.TimeHasPassed( time_to_delete ):
+            
+            time.sleep( 0.5 )
+            
         
         with self._lock:
             
@@ -938,14 +1027,11 @@ class ClientFilesManager( object ):
             
         
     
-    def HaveFullSizeThumbnail( self, hash ):
+    def LocklessHasFullSizeThumbnail( self, hash ):
         
-        with self._lock:
-            
-            path = self._GenerateExpectedFullSizeThumbnailPath( hash )
-            
-            return os.path.exists( path )
-            
+        path = self._GenerateExpectedFullSizeThumbnailPath( hash )
+        
+        return os.path.exists( path )
         
     
     def Rebalance( self, partial = True, stop_time = None ):
@@ -1079,7 +1165,14 @@ class ClientFilesManager( object ):
                     
                     ( base, filename ) = os.path.split( path )
                     
-                    ( hash_encoded, ext ) = filename.split( '.', 1 )
+                    if '.' in filename:
+                        
+                        ( hash_encoded, ext ) = filename.split( '.', 1 )
+                        
+                    else:
+                        
+                        continue # it is an update file, so let's save us some ffmpeg lag and logspam
+                        
                     
                     hash = hash_encoded.decode( 'hex' )
                     
@@ -1294,12 +1387,10 @@ class LocalBooruCache( object ):
     
     def _CheckDataUsage( self ):
         
-        info = self._local_booru_service.GetInfo()
-        
-        max_monthly_data = info[ 'max_monthly_data' ]
-        used_monthly_data = info[ 'used_monthly_data' ]
-        
-        if max_monthly_data is not None and used_monthly_data > max_monthly_data: raise HydrusExceptions.ForbiddenException( 'This booru has used all its monthly data. Please try again next month.' )
+        if not self._local_booru_service.BandwidthOk():
+            
+            raise HydrusExceptions.ForbiddenException( 'This booru has used all its monthly data. Please try again next month.' )
+            
         
     
     def _CheckFileAuthorised( self, share_key, hash ):
@@ -1968,11 +2059,29 @@ class ServicesManager( object ):
             
         
     
+    def _SetServices( self, services ):
+        
+        self._keys_to_services = { service.GetServiceKey() : service for service in services }
+        
+        def compare_function( a, b ):
+            
+            return cmp( a.GetName(), b.GetName() )
+            
+        
+        self._services_sorted = list( services )
+        self._services_sorted.sort( cmp = compare_function )
+        
+    
     def Filter( self, service_keys, desired_types ):
         
         with self._lock:
             
-            filtered_service_keys = [ service_key for service_key in service_keys if self._keys_to_services[ service_key ].GetServiceType() in desired_types ]
+            def func( service_key ):
+                
+                return self._keys_to_services[ service_key ].GetServiceType() in desired_types
+                
+            
+            filtered_service_keys = filter( func, service_keys )
             
             return filtered_service_keys
             
@@ -1982,7 +2091,12 @@ class ServicesManager( object ):
         
         with self._lock:
             
-            filtered_service_keys = [ service_key for service_key in service_keys if service_key in self._keys_to_services ]
+            def func( service_key ):
+                
+                return service_key in self._keys_to_services
+                
+            
+            filtered_service_keys = filter( func, service_keys )
             
             return filtered_service_keys
             
@@ -2020,7 +2134,12 @@ class ServicesManager( object ):
         
         with self._lock:
             
-            services = [ service for service in self._services_sorted if service.GetServiceType() in desired_types ]
+            def func( service ):
+                
+                return service.GetServiceType() in desired_types
+                
+            
+            services = filter( func, self._services_sorted )
             
             if randomised:
                 
@@ -2037,14 +2156,8 @@ class ServicesManager( object ):
             
             services = self._controller.Read( 'services' )
             
-            self._keys_to_services = { service.GetServiceKey() : service for service in services }
+            self._SetServices( services )
             
-            compare_function = lambda a, b: cmp( a.GetName(), b.GetName() )
-            
-            self._services_sorted = list( services )
-            self._services_sorted.sort( cmp = compare_function )
-            
-        
     
     def ServiceExists( self, service_key ):
         
@@ -2233,7 +2346,7 @@ class TagParentsManager( object ):
         
         for ( service_key, statuses_to_pairs ) in collapsed_service_keys_to_statuses_to_pairs.items():
             
-            pairs_flat = statuses_to_pairs[ HC.CURRENT ].union( statuses_to_pairs[ HC.PENDING ] )
+            pairs_flat = statuses_to_pairs[ HC.CONTENT_STATUS_CURRENT ].union( statuses_to_pairs[ HC.CONTENT_STATUS_PENDING ] )
             
             service_keys_to_pairs_flat[ service_key ] = pairs_flat
             
@@ -2365,17 +2478,26 @@ class TagSiblingsManager( object ):
         self._service_keys_to_siblings = collections.defaultdict( dict )
         self._service_keys_to_reverse_lookup = collections.defaultdict( dict )
         
-        combined_pairs = set()
+        local_tags_pairs = set()
+        
+        tag_repo_pairs = set()
         
         service_keys_to_statuses_to_pairs = self._controller.Read( 'tag_siblings' )
         
         for ( service_key, statuses_to_pairs ) in service_keys_to_statuses_to_pairs.items():
             
-            all_pairs = statuses_to_pairs[ HC.CURRENT ].union( statuses_to_pairs[ HC.PENDING ] )
+            all_pairs = statuses_to_pairs[ HC.CONTENT_STATUS_CURRENT ].union( statuses_to_pairs[ HC.CONTENT_STATUS_PENDING ] )
             
-            combined_pairs.update( all_pairs )
+            if service_key == CC.LOCAL_TAG_SERVICE_KEY:
+                
+                local_tags_pairs = set( all_pairs )
+                
+            else:
+                
+                tag_repo_pairs.update( all_pairs )
+                
             
-            siblings = CollapseTagSiblingPairs( all_pairs )
+            siblings = CollapseTagSiblingPairs( [ all_pairs ] )
             
             self._service_keys_to_siblings[ service_key ] = siblings
             
@@ -2389,7 +2511,7 @@ class TagSiblingsManager( object ):
             self._service_keys_to_reverse_lookup[ service_key ] = reverse_lookup
             
         
-        combined_siblings = CollapseTagSiblingPairs( combined_pairs )
+        combined_siblings = CollapseTagSiblingPairs( [ local_tags_pairs, tag_repo_pairs ] )
         
         self._service_keys_to_siblings[ CC.COMBINED_TAG_SERVICE_KEY ] = combined_siblings
         
@@ -2406,6 +2528,13 @@ class TagSiblingsManager( object ):
         
     
     def GetAutocompleteSiblings( self, service_key, search_text, exact_match = False ):
+        
+        new_options = self._controller.GetNewOptions()
+        
+        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+            
+            service_key = CC.COMBINED_TAG_SERVICE_KEY
+            
         
         with self._lock:
             
@@ -2429,11 +2558,11 @@ class TagSiblingsManager( object ):
                 
             else:
                 
-                matching_keys = ClientSearch.FilterTagsBySearchEntry( service_key, search_text, siblings.keys(), search_siblings = False )
+                matching_keys = ClientSearch.FilterTagsBySearchText( service_key, search_text, siblings.keys(), search_siblings = False )
                 
                 key_based_matching_values = { siblings[ key ] for key in matching_keys }
                 
-                value_based_matching_values = ClientSearch.FilterTagsBySearchEntry( service_key, search_text, siblings.values(), search_siblings = False )
+                value_based_matching_values = ClientSearch.FilterTagsBySearchText( service_key, search_text, siblings.values(), search_siblings = False )
                 
             
             matching_values = key_based_matching_values.union( value_based_matching_values )
@@ -2453,6 +2582,13 @@ class TagSiblingsManager( object ):
     
     def GetSibling( self, service_key, tag ):
         
+        new_options = self._controller.GetNewOptions()
+        
+        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+            
+            service_key = CC.COMBINED_TAG_SERVICE_KEY
+            
+        
         with self._lock:
             
             siblings = self._service_keys_to_siblings[ service_key ]
@@ -2469,6 +2605,13 @@ class TagSiblingsManager( object ):
         
     
     def GetAllSiblings( self, service_key, tag ):
+        
+        new_options = self._controller.GetNewOptions()
+        
+        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+            
+            service_key = CC.COMBINED_TAG_SERVICE_KEY
+            
         
         with self._lock:
             
@@ -2505,6 +2648,13 @@ class TagSiblingsManager( object ):
         
     
     def CollapsePredicates( self, service_key, predicates ):
+        
+        new_options = self._controller.GetNewOptions()
+        
+        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+            
+            service_key = CC.COMBINED_TAG_SERVICE_KEY
+            
         
         with self._lock:
             
@@ -2558,6 +2708,13 @@ class TagSiblingsManager( object ):
     
     def CollapsePairs( self, service_key, pairs ):
         
+        new_options = self._controller.GetNewOptions()
+        
+        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+            
+            service_key = CC.COMBINED_TAG_SERVICE_KEY
+            
+        
         with self._lock:
             
             siblings = self._service_keys_to_siblings[ service_key ]
@@ -2585,6 +2742,13 @@ class TagSiblingsManager( object ):
     
     def CollapseStatusesToTags( self, service_key, statuses_to_tags ):
         
+        new_options = self._controller.GetNewOptions()
+        
+        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+            
+            service_key = CC.COMBINED_TAG_SERVICE_KEY
+            
+        
         with self._lock:
             
             statuses = statuses_to_tags.keys()
@@ -2601,6 +2765,13 @@ class TagSiblingsManager( object ):
         
     
     def CollapseTag( self, service_key, tag ):
+        
+        new_options = self._controller.GetNewOptions()
+        
+        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+            
+            service_key = CC.COMBINED_TAG_SERVICE_KEY
+            
         
         with self._lock:
             
@@ -2619,6 +2790,13 @@ class TagSiblingsManager( object ):
     
     def CollapseTags( self, service_key, tags ):
         
+        new_options = self._controller.GetNewOptions()
+        
+        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+            
+            service_key = CC.COMBINED_TAG_SERVICE_KEY
+            
+        
         with self._lock:
             
             return self._CollapseTags( service_key, tags )
@@ -2626,6 +2804,13 @@ class TagSiblingsManager( object ):
         
     
     def CollapseTagsToCount( self, service_key, tags_to_count ):
+        
+        new_options = self._controller.GetNewOptions()
+        
+        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+            
+            service_key = CC.COMBINED_TAG_SERVICE_KEY
+            
         
         with self._lock:
             

@@ -10,20 +10,30 @@ import HydrusExceptions
 import re
 import HydrusGlobals
 
+re_newlines = re.compile( '[\r\n]', re.UNICODE )
+re_multiple_spaces = re.compile( '\\s+', re.UNICODE )
+re_trailing_space = re.compile( '\\s$', re.UNICODE )
+re_leading_space_or_garbage = re.compile( '^(\\s|-|system:)', re.UNICODE )
+re_leading_single_colon = re.compile( '^:(?!:)', re.UNICODE )
+
 def CensorshipMatch( tag, censorships ):
     
     for censorship in censorships:
         
         if censorship == '': # '' - all non namespaced tags
             
-            if ':' not in tag:
+            ( namespace, subtag ) = SplitTag( tag )
+            
+            if namespace == '':
                 
                 return True
                 
             
         elif censorship == ':': # ':' - all namespaced tags
             
-            if ':' in tag:
+            ( namespace, subtag ) = SplitTag( tag )
+            
+            if namespace != '':
                 
                 return True
                 
@@ -32,7 +42,9 @@ def CensorshipMatch( tag, censorships ):
             
             if censorship.endswith( ':' ): # 'series:' - namespaced tags
                 
-                if tag.startswith( censorship ):
+                ( namespace, subtag ) = SplitTag( tag )
+                
+                if namespace == censorship[:-1]:
                     
                     return True
                     
@@ -49,21 +61,11 @@ def CensorshipMatch( tag, censorships ):
             
             # 'table' - normal tag, or namespaced version of same
             
-            if ':' in tag:
+            ( namespace, subtag ) = SplitTag( tag )
+            
+            if subtag == censorship:
                 
-                ( namespace, comparison_tag ) = tag.split( ':', 1 )
-                
-                if comparison_tag == censorship:
-                    
-                    return True
-                    
-                
-            else:
-                
-                if tag == censorship:
-                    
-                    return True
-                    
+                return True
                 
             
         
@@ -72,7 +74,7 @@ def CensorshipMatch( tag, censorships ):
     
 def ConvertTagToSortable( t ):
     
-    if t[0].isdecimal():
+    if len( t ) > 0 and t[0].isdecimal():
         
         # We want to maintain that:
         # 0 < 0a < 0b < 1 ( lexicographic comparison )
@@ -110,22 +112,23 @@ def FilterNamespaces( tags, namespaces ):
     
     for tag in tags:
         
-        if ':' in tag:
-            
-            ( namespace, subtag ) = tag.split( ':', 1 )
-            
-            processed_tags[ namespace ].add( tag )
-            
-        else: processed_tags[ '' ].add( tag )
+        ( namespace, subtag ) = SplitTag( tag )
+        
+        processed_tags[ namespace ].add( tag )
         
     
     result = set()
     
     for namespace in namespaces:
         
-        if namespace in ( '', None ): result.update( processed_tags[ '' ] )
-        
-        result.update( processed_tags[ namespace ] )
+        if namespace == None:
+            
+            result.update( processed_tags[ '' ] )
+            
+        else:
+            
+            result.update( processed_tags[ namespace ] )
+            
         
     
     return result
@@ -140,19 +143,13 @@ def SortNumericTags( tags ):
     
 def CheckTagNotEmpty( tag ):
     
-    empty_tag = False
+    ( namespace, subtag ) = SplitTag( tag )
     
-    if tag == '': empty_tag = True
-    
-    if ':' in tag:
+    if subtag == '':
         
-        ( namespace, subtag ) = tag.split( ':', 1 )
-        
-        if subtag == '': empty_tag = True
+        raise HydrusExceptions.SizeException( 'Received a zero-length tag!' )
         
     
-    if empty_tag: raise HydrusExceptions.SizeException( 'Received a zero-length tag!' )
-
 def CleanTag( tag ):
     
     try:
@@ -163,25 +160,33 @@ def CleanTag( tag ):
         
         tag = HydrusData.ToUnicode( tag )
         
-        tag.replace( '\r', '' )
-        tag.replace( '\n', '' )
-        
-        tag = re.sub( '[\\s]+', ' ', tag, flags = re.UNICODE ) # turns multiple spaces into single spaces
-        
-        tag = re.sub( '\\s\\Z', '', tag, flags = re.UNICODE ) # removes space at the end
-        
-        while re.match( '\\s|-|system:', tag, flags = re.UNICODE ) is not None:
+        if tag.startswith( ':' ):
             
-            tag = re.sub( '\\A(\\s|-|system:)', '', tag, flags = re.UNICODE ) # removes spaces or garbage at the beginning
+            tag = re_leading_single_colon.sub( '::', tag ) # Convert anything starting with one colon to start with two i.e. :D -> ::D
             
-        
-        tag = re.sub( '^:(?!:)', '::', tag, flags = re.UNICODE ) # Convert anything starting with one colon to start with two i.e. :D -> ::D
+            tag = StripTextOfGumpf( tag )
+            
+        elif ':' in tag:
+            
+            tag = StripTextOfGumpf( tag ) # need to repeat here to catch 'system:' stuff
+            
+            ( namespace, subtag ) = SplitTag( tag )
+            
+            namespace = StripTextOfGumpf( namespace )
+            subtag = StripTextOfGumpf( subtag )
+            
+            tag = CombineTag( namespace, subtag )
+            
+        else:
+            
+            tag = StripTextOfGumpf( tag )
+            
         
     except Exception as e:
         
         text = 'Was unable to parse the tag: ' + HydrusData.ToUnicode( tag )
         text += os.linesep * 2
-        text += str( e )
+        text += HydrusData.ToUnicode( e )
         
         raise Exception( text )
         
@@ -204,32 +209,47 @@ def CleanTags( tags ):
     
     return clean_tags
     
-def CombineTag( namespace, tag ):
+def CombineTag( namespace, subtag ):
     
     if namespace == '':
         
-        if tag.startswith( ':' ):
+        if subtag.startswith( ':' ):
             
-            return ':' + tag
+            return ':' + subtag
             
         else:
             
-            return tag
+            return subtag
             
         
     else:
         
-        return namespace + ':' + tag
+        return namespace + ':' + subtag
         
     
-def RenderTag( tag ):
+def SplitTag( tag ):
     
-    if tag.startswith( '::' ):
+    if ':' in tag:
         
-        return tag[1:]
+        return tag.split( ':', 1 )
         
     else:
         
-        return tag
+        return ( '', tag )
         
+    
+def StripTextOfGumpf( t ):
+    
+    t = re_newlines.sub( '', t )
+    
+    t = re_multiple_spaces.sub( ' ', t )
+    
+    t = re_trailing_space.sub( '', t )
+    
+    while re_leading_space_or_garbage.search( t ) is not None:
+        
+        t = re_leading_space_or_garbage.sub( '', t )
+        
+    
+    return t
     

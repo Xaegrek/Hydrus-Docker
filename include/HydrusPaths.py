@@ -199,7 +199,7 @@ def DeletePath( path ):
             
         except Exception as e:
             
-            if 'Error 32' in str( e ):
+            if 'Error 32' in HydrusData.ToUnicode( e ):
                 
                 # file in use by another process
                 
@@ -256,11 +256,54 @@ def GetDevice( path ):
     
     return None
     
+def GetFreeSpace( path ):
+    
+    disk_usage = psutil.disk_usage( path )
+    
+    return disk_usage.free
+    
 def GetTempFile(): return tempfile.TemporaryFile()
 def GetTempFileQuick(): return tempfile.SpooledTemporaryFile( max_size = 1024 * 1024 * 4 )
 def GetTempPath( suffix = '' ):
     
     return tempfile.mkstemp( suffix = suffix, prefix = 'hydrus' )
+    
+def HasSpaceForDBTransaction( db_dir, num_bytes ):
+    
+    temp_dir = tempfile.gettempdir()
+    
+    temp_disk_free_space = GetFreeSpace( temp_dir )
+    
+    a = GetDevice( temp_dir )
+    b = GetDevice( db_dir )
+    
+    if GetDevice( temp_dir ) == GetDevice( db_dir ):
+        
+        space_needed = int( num_bytes * 2.2 )
+        
+        if temp_disk_free_space < space_needed:
+            
+            return ( False, 'I believe you need about ' + HydrusData.ConvertIntToBytes( space_needed ) + ' on your db\'s partition, which I think also holds your temporary path, but you only seem to have ' + HydrusData.ConvertIntToBytes( temp_disk_free_space ) + '.' )
+            
+        
+    else:
+        
+        space_needed = int( num_bytes * 1.1 )
+        
+        if temp_disk_free_space < space_needed:
+            
+            return ( False, 'I believe you need about ' + HydrusData.ConvertIntToBytes( space_needed ) + ' on your temporary path\'s partition, which I think is ' + temp_dir + ', but you only seem to have ' + HydrusData.ConvertIntToBytes( temp_disk_free_space ) + '.' )
+            
+        
+        db_disk_free_space = GetFreeSpace( db_dir )
+        
+        if db_disk_free_space < space_needed:
+            
+            return ( False, 'I believe you need about ' + HydrusData.ConvertIntToBytes( space_needed ) + ' on your db\'s partition, but you only seem to have ' + HydrusData.ConvertIntToBytes( db_disk_free_space ) + '.' )
+            
+        
+    
+    return ( True, 'You seem to have enough space!' )
     
 def LaunchDirectory( path ):
     
@@ -277,7 +320,9 @@ def LaunchDirectory( path ):
             
             cmd.append( path )
             
-            process = subprocess.Popen( cmd, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+            # setsid call un-childs this new process
+            
+            process = subprocess.Popen( cmd, preexec_fn = os.setsid, startupinfo = HydrusData.GetSubprocessStartupInfo() )
             
             process.wait()
             
@@ -306,11 +351,13 @@ def LaunchFile( path ):
             
             cmd.append( path )
             
-            process = subprocess.Popen( cmd, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+            # setsid call un-childs this new process
+            
+            process = subprocess.Popen( cmd, preexec_fn = os.setsid, startupinfo = HydrusData.GetSubprocessStartupInfo() )
             
             process.wait()
             
-            process.communicate()        
+            process.communicate()
             
         
     
@@ -386,7 +433,6 @@ def MergeTree( source, dest ):
         
     else:
         
-        
         MakeSureDirectoryExists( dest )
         
         num_errors = 0
@@ -428,7 +474,10 @@ def MergeTree( source, dest ):
                 
             
         
-        DeletePath( source )
+        if num_errors == 0:
+            
+            DeletePath( source )
+            
         
     
 def MirrorFile( source, dest ):

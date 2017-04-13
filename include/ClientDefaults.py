@@ -51,7 +51,7 @@ def GetClientDefaultOptions():
     
     regex_favourites = []
     
-    regex_favourites.append( ( r'[1-9]+\d*(?=.{4}$)', r'...0074.jpg -> 74 - [1-9]+\d*(?=.{4}$)' ) )
+    regex_favourites.append( ( r'[1-9]+\d*(?=.{4}$)', u'\u2026' + r'0074.jpg -> 74 - [1-9]+\d*(?=.{4}$)' ) )
     regex_favourites.append( ( r'[^' + os.path.sep.encode( 'string_escape' ) + ']+*(?=\s-)', r'E:\my collection\author name - v4c1p0074.jpg -> author name - [^' + os.path.sep.encode( 'string_escape' ) + ']+(?=\s-)' ) )
     
     options[ 'regex_favourites' ] = regex_favourites
@@ -180,8 +180,6 @@ def GetClientDefaultOptions():
     options[ 'processing_phase' ] = 0
     
     options[ 'rating_dialog_position' ] = ( False, None )
-    
-    options[ 'local_port' ] = None
     
     return options
     
@@ -574,3 +572,22 @@ def GetDefaultScriptRows():
     
     return script_info
     
+def GetDefaultShortcuts():
+    
+    shortcuts = []
+    
+    duplicate_filter = ClientData.Shortcuts( 'duplicate_filter' )
+    
+    duplicate_filter.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_MOUSE, CC.SHORTCUT_MOUSE_LEFT, [] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_this_is_better' ) )
+    duplicate_filter.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_MOUSE, CC.SHORTCUT_MOUSE_LEFT, [ wx.ACCEL_CTRL ] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_not_dupes' ) )
+    duplicate_filter.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_MOUSE, CC.SHORTCUT_MOUSE_RIGHT, [] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_alternates' ) )
+    duplicate_filter.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_MOUSE, CC.SHORTCUT_MOUSE_MIDDLE, [] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_exactly_the_same' ) )
+    duplicate_filter.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_MOUSE, CC.SHORTCUT_MOUSE_RIGHT, [ wx.ACCEL_CTRL ] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_skip' ) )
+    
+    duplicate_filter.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, wx.WXK_SPACE, [] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_this_is_better' ) )
+    duplicate_filter.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, wx.WXK_UP, [] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_skip' ) )
+    duplicate_filter.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, wx.WXK_NUMPAD_UP, [] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_skip' ) )
+    
+    shortcuts.append( duplicate_filter )
+    
+    return shortcuts

@@ -112,7 +112,7 @@ def ShutdownSiblingInstance( db_dir ):
             
             port_found = True
             
-            HydrusData.Print( 'Sending shut down instruction...' )
+            HydrusData.Print( u'Sending shut down instruction\u2026' )
             
             connection.request( 'POST', '/shutdown' )
             
@@ -160,6 +160,8 @@ class Controller( HydrusController.HydrusController ):
         
         HydrusController.HydrusController.__init__( self, db_dir, no_daemons, no_wal )
         
+        self._name = 'server'
+        
         HydrusGlobals.server_controller = self
         
     
@@ -168,19 +170,18 @@ class Controller( HydrusController.HydrusController ):
         return ServerDB.DB( self, self._db_dir, 'server', no_wal = self._no_wal )
         
     
-    def ActionService( self, service_key, action ):
-        
-        if action != 'stop': ( service_type, options ) = self.Read( 'service_info', service_key )
+    def StartService( self, service ):
         
         def TWISTEDDoIt():
             
-            def StartService( *args, **kwargs ):
+            service_key = service.GetServiceKey()
+            service_type = service.GetServiceType()
+            
+            def Start( *args, **kwargs ):
                 
                 try:
                     
-                    if 'port' not in options: return
-                    
-                    port = options[ 'port' ]
+                    port = service.GetPort()
                     
                     try:
                         
@@ -191,20 +192,28 @@ class Controller( HydrusController.HydrusController ):
                         
                     except:
                         
-                        message = options[ 'message' ]
-                        
-                        if service_type == HC.SERVER_ADMIN: service_object = ServerServer.HydrusServiceAdmin( service_key, service_type, message )
-                        elif service_type == HC.FILE_REPOSITORY: service_object = ServerServer.HydrusServiceRepositoryFile( service_key, service_type, message )
-                        elif service_type == HC.TAG_REPOSITORY: service_object = ServerServer.HydrusServiceRepositoryTag( service_key, service_type, message )
-                        elif service_type == HC.MESSAGE_DEPOT: return
+                        if service_type == HC.SERVER_ADMIN:
+                            
+                            http_factory = ServerServer.HydrusServiceAdmin( service )
+                            
+                        elif service_type == HC.FILE_REPOSITORY:
+                            
+                            http_factory = ServerServer.HydrusServiceRepositoryFile( service )
+                            
+                        elif service_type == HC.TAG_REPOSITORY:
+                            
+                            http_factory = ServerServer.HydrusServiceRepositoryTag( service )
+                            
+                        else:
+                            
+                            return
+                            
                         
                         ( ssl_cert_path, ssl_key_path ) = self._db.GetSSLPaths()
                         
                         context_factory = twisted.internet.ssl.DefaultOpenSSLContextFactory( ssl_key_path, ssl_cert_path )
                         
-                        self._services[ service_key ] = reactor.listenSSL( port, service_object, context_factory )
-                        
-                        #self._services[ service_key ] = reactor.listenTCP( port, service_object )
+                        self._service_keys_to_connected_ports[ service_key ] = reactor.listenSSL( port, http_factory, context_factory )
                         
                         try:
                             
@@ -222,19 +231,30 @@ class Controller( HydrusController.HydrusController ):
                     HydrusData.Print( traceback.format_exc() )
                     
                 
-            
-            if action == 'start': StartService()
+        
+            if service_key in self._service_keys_to_connected_ports:
+                
+                deferred = defer.maybeDeferred( self._service_keys_to_connected_ports[ service_key ].stopListening )
+                
+                deferred.addCallback( Start )
+                
             else:
                 
-                if service_key in self._services:
-                    
-                    deferred = defer.maybeDeferred( self._services[ service_key ].stopListening )
-                    
-                    if action == 'stop': del self._services[ service_key ]
-                    
+                Start()
                 
-                if action == 'restart': deferred.addCallback( StartService )
-                
+            
+            
+        
+        reactor.callFromThread( TWISTEDDoIt )
+        
+    
+    def StopService( self, service_key ):
+        
+        def TWISTEDDoIt():
+            
+            deferred = defer.maybeDeferred( self._service_keys_to_connected_ports[ service_key ].stopListening )
+            
+            del self._service_keys_to_connected_ports[ service_key ]
             
         
         reactor.callFromThread( TWISTEDDoIt )
@@ -242,17 +262,17 @@ class Controller( HydrusController.HydrusController ):
     
     def Exit( self ):
         
-        HydrusData.Print( 'Shutting down daemons and services...' )
+        HydrusData.Print( u'Shutting down daemons and services\u2026' )
         
         self.ShutdownView()
         
-        HydrusData.Print( 'Shutting down db...' )
+        HydrusData.Print( u'Shutting down db\u2026' )
         
         self.ShutdownModel()
         
         HydrusData.CleanRunningFile( self._db_dir, 'server' )
         
-
+    
     def GetFilesDir( self ):
         
         return self._db.GetFilesDir()
@@ -262,11 +282,6 @@ class Controller( HydrusController.HydrusController ):
         
         return self._server_session_manager
         
-
-    def GetUpdatesDir( self ):
-        
-        return self._db.GetUpdatesDir()
-        
     
     def InitModel( self ):
         
@@ -274,9 +289,7 @@ class Controller( HydrusController.HydrusController ):
         
         self._server_session_manager = HydrusSessions.HydrusSessionManagerServer()
         
-        self._services = {}
-        
-        self.sub( self, 'ActionService', 'action_service' )
+        self._service_keys_to_connected_ports = {}
         
     
     def InitView( self ):
@@ -285,21 +298,19 @@ class Controller( HydrusController.HydrusController ):
         
         if not self._no_daemons:
             
-            self._daemons.append( HydrusThreading.DAEMONQueue( self, 'FlushRequestsMade', ServerDaemons.DAEMONFlushRequestsMade, 'request_made', period = 60 ) )
-            
-            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'CheckMonthlyData', ServerDaemons.DAEMONCheckMonthlyData, period = 3600 ) )
-            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'ClearBans', ServerDaemons.DAEMONClearBans, period = 3600 ) )
             self._daemons.append( HydrusThreading.DAEMONWorker( self, 'DeleteOrphans', ServerDaemons.DAEMONDeleteOrphans, period = 86400 ) )
-            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'GenerateUpdates', ServerDaemons.DAEMONGenerateUpdates, period = 600 ) )
-            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'CheckDataUsage', ServerDaemons.DAEMONCheckDataUsage, period = 86400 ) )
+            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'GenerateUpdates', ServerDaemons.DAEMONGenerateUpdates, period = 600, init_wait = 10 ) )
+            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'SaveDirtyObjects', ServerDaemons.DAEMONSaveDirtyObjects, period = 30 ) )
             self._daemons.append( HydrusThreading.DAEMONWorker( self, 'UPnP', ServerDaemons.DAEMONUPnP, ( 'notify_new_options', ), period = 43200 ) )
             
         
         #
         
-        ( service_type, options ) = self.Read( 'service_info', HC.SERVER_ADMIN_KEY )
+        self._services = self.Read( 'services' )
         
-        port = options[ 'port' ]
+        [ self._admin_service ] = [ service for service in self._services if service.GetServiceType() == HC.SERVER_ADMIN ]
+        
+        port = self._admin_service.GetPort()
         
         already_bound = False
         
@@ -321,9 +332,10 @@ class Controller( HydrusController.HydrusController ):
             
         else:
             
-            service_keys = self.Read( 'service_keys' )
-            
-            for service_key in service_keys: self.ActionService( service_key, 'start' )
+            for service in self._services:
+                
+                self.StartService( service )
+                
             
         
     
@@ -341,15 +353,20 @@ class Controller( HydrusController.HydrusController ):
         self.CallToThread( self.ProcessPubSub )
         
     
+    def RequestMade( self, num_bytes ):
+        
+        self._admin_service.ServerRequestMade( num_bytes )
+        
+    
     def Run( self ):
         
         HydrusData.RecordRunningStart( self._db_dir, 'server' )
         
-        HydrusData.Print( 'Initialising db...' )
+        HydrusData.Print( u'Initialising db\u2026' )
         
         self.InitModel()
         
-        HydrusData.Print( 'Initialising daemons and services...' )
+        HydrusData.Print( u'Initialising daemons and services\u2026' )
         
         self.InitView()
         
@@ -369,7 +386,7 @@ class Controller( HydrusController.HydrusController ):
                     
                     interrupt_received = True
                     
-                    HydrusData.Print( 'Received a keyboard interrupt...' )
+                    HydrusData.Print( u'Received a keyboard interrupt\u2026' )
                     
                     def do_it():
                         
@@ -381,21 +398,74 @@ class Controller( HydrusController.HydrusController ):
                 
             
         
-        HydrusData.Print( 'Shutting down controller...' )
+        HydrusData.Print( u'Shutting down controller\u2026' )
+        
+    
+    def SaveDirtyObjects( self ):
+        
+        with HydrusGlobals.dirty_object_lock:
+            
+            dirty_services = [ service for service in self._services if service.IsDirty() ]
+            
+            if len( dirty_services ) > 0:
+                
+                self.WriteSynchronous( 'dirty_services', dirty_services )
+                
+            
+            dirty_accounts = self._server_session_manager.GetDirtyAccounts()
+            
+            if len( dirty_accounts ) > 0:
+                
+                self.WriteSynchronous( 'dirty_accounts', dirty_accounts )
+                
+            
+        
+    
+    def ServerBandwidthOk( self ):
+        
+        return self._admin_service.ServerBandwidthOk()
+        
+    
+    def SetServices( self, services ):
+        
+        self._services = services
+        
+        [ self._admin_service ] = [ service for service in self._services if service.GetServiceType() == HC.SERVER_ADMIN ]
+        
+        current_service_keys = set( self._service_keys_to_connected_ports.keys() )
+        future_service_keys = set( [ service.GetServiceKey() for service in self._services ] )
+        
+        stop_service_keys = current_service_keys.difference( future_service_keys )
+        
+        for service_key in stop_service_keys:
+            
+            self.StopService( service_key )
+            
+        
+        for service in self._services:
+            
+            self.StartService( service )
+            
         
     
     def ShutdownView( self ):
         
-        service_keys = self.Read( 'service_keys' )
-        
-        for service_key in service_keys: self.ActionService( service_key, 'stop' )
+        for service in self._services:
+            
+            service_key = service.GetServiceKey()
+            
+            if service_key in self._service_keys_to_connected_ports:
+                
+                self.StopService( service_key )
+                
+            
         
         HydrusController.HydrusController.ShutdownView( self )
         
     
     def ShutdownFromServer( self ):
         
-        HydrusData.Print( 'Received a server shut down request...' )
+        HydrusData.Print( u'Received a server shut down request\u2026' )
         
         def do_it():
             
@@ -407,3 +477,17 @@ class Controller( HydrusController.HydrusController ):
         self.CallToThread( do_it )
         
     
+    def SyncRepositories( self ):
+        
+        repositories = [ service for service in self._services if service.GetServiceType() in HC.REPOSITORIES ]
+        
+        for service in repositories:
+            
+            service.Sync()
+            
+        
+    
+    def UpdateAccounts( self, service_key, accounts ):
+        
+        self._server_session_manager.UpdateAccounts( service_key, accounts )
+        

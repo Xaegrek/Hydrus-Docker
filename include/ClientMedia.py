@@ -42,7 +42,7 @@ def MergeTagsManagers( tags_managers ):
         
         for ( service_key, statuses_to_tags ) in items:
             
-            filtered = { status : tags for ( status, tags ) in statuses_to_tags.items() if status in ( HC.CURRENT, HC.PENDING ) }
+            filtered = { status : tags for ( status, tags ) in statuses_to_tags.items() if status in ( HC.CONTENT_STATUS_CURRENT, HC.CONTENT_STATUS_PENDING ) }
             
             yield ( service_key, filtered )
             
@@ -350,6 +350,11 @@ class MediaList( object ):
         self._RecalcHashes()
         
     
+    def __len__( self ):
+        
+        return len( self._singleton_media ) + sum( map( len, self._collected_media ) )
+        
+    
     def _CalculateCollectionKeysToMedias( self, collect_by, medias ):
     
         namespaces_to_collect_by = [ data for ( collect_by_type, data ) in collect_by if collect_by_type == 'namespace' ]
@@ -438,11 +443,17 @@ class MediaList( object ):
             
             if sort_by_data == CC.SORT_BY_RANDOM:
                 
-                sort_function = lambda x: random.random()
+                def sort_key( x ):
+                    
+                    return random.random()
+                    
                 
             elif sort_by_data in ( CC.SORT_BY_SMALLEST, CC.SORT_BY_LARGEST ):
                 
-                sort_function = lambda x: deal_with_none( x.GetSize() )
+                def sort_key( x ):
+                    
+                    return deal_with_none( x.GetSize() )
+                    
                 
                 if sort_by_data == CC.SORT_BY_LARGEST:
                     
@@ -451,7 +462,10 @@ class MediaList( object ):
                 
             elif sort_by_data in ( CC.SORT_BY_SHORTEST, CC.SORT_BY_LONGEST ):
                 
-                sort_function = lambda x: deal_with_none( x.GetDuration() )
+                def sort_key( x ):
+                    
+                    return deal_with_none( x.GetDuration() )
+                    
                 
                 if sort_by_data == CC.SORT_BY_LONGEST:
                     
@@ -473,7 +487,10 @@ class MediaList( object ):
                     file_service_key = self._file_service_key
                     
                 
-                sort_function = lambda x: deal_with_none( x.GetTimestamp( file_service_key ) )
+                def sort_key( x ):
+                    
+                    return deal_with_none( x.GetTimestamp( file_service_key ) )
+                    
                 
                 if sort_by_data == CC.SORT_BY_NEWEST:
                     
@@ -482,7 +499,10 @@ class MediaList( object ):
                 
             elif sort_by_data in ( CC.SORT_BY_HEIGHT_ASC, CC.SORT_BY_HEIGHT_DESC ):
                 
-                sort_function = lambda x: deal_with_none( x.GetResolution()[0] )
+                def sort_key( x ):
+                    
+                    return deal_with_none( x.GetResolution()[1] )
+                    
                 
                 if sort_by_data == CC.SORT_BY_HEIGHT_DESC:
                     
@@ -491,7 +511,10 @@ class MediaList( object ):
                 
             elif sort_by_data in ( CC.SORT_BY_WIDTH_ASC, CC.SORT_BY_WIDTH_DESC ):
                 
-                sort_function = lambda x: deal_with_none( x.GetResolution()[1] )
+                def sort_key( x ):
+                    
+                    return deal_with_none( x.GetResolution()[0] )
+                    
                 
                 if sort_by_data == CC.SORT_BY_WIDTH_DESC:
                     
@@ -500,7 +523,7 @@ class MediaList( object ):
                 
             elif sort_by_data in ( CC.SORT_BY_RATIO_ASC, CC.SORT_BY_RATIO_DESC ):
                 
-                def sort_function( x ):
+                def sort_key( x ):
                     
                     ( width, height ) = x.GetResolution()
                     
@@ -521,7 +544,7 @@ class MediaList( object ):
                 
             elif sort_by_data in ( CC.SORT_BY_NUM_PIXELS_ASC, CC.SORT_BY_NUM_PIXELS_DESC ):
                 
-                def sort_function( x ):
+                def sort_key( x ):
                     
                     ( width, height ) = x.GetResolution()
                     
@@ -542,25 +565,28 @@ class MediaList( object ):
                 
             elif sort_by_data == CC.SORT_BY_MIME:
                 
-                sort_function = lambda x: x.GetMime()
+                def sort_key( x ):
+                    
+                    return x.GetMime()
+                    
                 
             
         elif sort_by_type == 'namespaces':
             
-            def namespace_sort_function( namespaces, x ):
+            namespaces = sort_by_data
+            
+            def sort_key( x ):
                 
                 x_tags_manager = x.GetTagsManager()
                 
                 return [ x_tags_manager.GetComparableNamespaceSlice( ( namespace, ) ) for namespace in namespaces ]
                 
             
-            sort_function = lambda x: namespace_sort_function( sort_by_data, x )
-            
         elif sort_by_type in ( 'rating_descend', 'rating_ascend' ):
             
             service_key = sort_by_data
             
-            def ratings_sort_function( service_key, x ):
+            def sort_key( x ):
                 
                 x_ratings_manager = x.GetRatingsManager()
                 
@@ -569,15 +595,13 @@ class MediaList( object ):
                 return rating
                 
             
-            sort_function = lambda x: ratings_sort_function( service_key, x )
-            
             if sort_by_type == 'rating_descend':
                 
                 reverse = True
                 
             
         
-        return ( sort_function, reverse )
+        return ( sort_key, reverse )
         
     
     def _RecalcHashes( self ):
@@ -824,7 +848,7 @@ class MediaList( object ):
                     
                     media_show_action = new_options.GetMediaShowAction( media.GetMime() )
                     
-                    if media_show_action == CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW:
+                    if media_show_action in ( CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW_ON_ACTIVATION_OPEN_EXTERNALLY, CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW ):
                         
                         continue
                         
@@ -835,6 +859,11 @@ class MediaList( object ):
             
         
         return media_results
+        
+    
+    def GetFirst( self ):
+        
+        return self._GetFirst()
         
     
     def GetFlatMedia( self ):
@@ -850,7 +879,22 @@ class MediaList( object ):
         return flat_media
         
     
+    def GetLast( self ):
+        
+        return self._GetLast()
+        
+    
     def GetMediaIndex( self, media ): return self._sorted_media.index( media )
+    
+    def GetNext( self, media ):
+        
+        return self._GetNext( media )
+        
+    
+    def GetPrevious( self, media ):
+        
+        return self._GetPrevious( media )
+        
     
     def GetSortedMedia( self ): return self._sorted_media
     
@@ -930,8 +974,14 @@ class MediaList( object ):
                 
                 ( action, row ) = service_update.ToTuple()
                 
-                if action == HC.SERVICE_UPDATE_DELETE_PENDING: self.DeletePending( service_key )
-                elif action == HC.SERVICE_UPDATE_RESET: self.ResetService( service_key )
+                if action == HC.SERVICE_UPDATE_DELETE_PENDING:
+                    
+                    self.DeletePending( service_key )
+                    
+                elif action == HC.SERVICE_UPDATE_RESET:
+                    
+                    self.ResetService( service_key )
+                    
                 
             
         
@@ -973,15 +1023,15 @@ class MediaList( object ):
             sort_by_fallback = sort_choices[ 0 ]
             
         
-        ( sort_function, reverse ) = self._GetSortFunction( sort_by_fallback )
+        ( sort_key, reverse ) = self._GetSortFunction( sort_by_fallback )
         
-        self._sorted_media.sort( sort_function, reverse = reverse )
+        self._sorted_media.sort( sort_key, reverse = reverse )
         
         # this is a stable sort, so the fallback order above will remain for equal items
         
-        ( sort_function, reverse ) = self._GetSortFunction( self._sort_by )
+        ( sort_key, reverse ) = self._GetSortFunction( self._sort_by )
         
-        self._sorted_media.sort( sort_function = sort_function, reverse = reverse )
+        self._sorted_media.sort( sort_key = sort_key, reverse = reverse )
         
     
 class ListeningMediaList( MediaList ):
@@ -1676,9 +1726,12 @@ class SortedList( object ):
     
     def __init__( self, initial_items = None ):
         
-        if initial_items is None: initial_items = []
+        if initial_items is None:
+            
+            initial_items = []
+            
         
-        self._sort_function = lambda x: x
+        self._sort_key = None
         self._sort_reverse = False
         
         self._sorted_list = list( initial_items )
@@ -1773,20 +1826,20 @@ class SortedList( object ):
         self._DirtyIndices()
         
     
-    def sort( self, sort_function = None, reverse = False ):
+    def sort( self, sort_key = None, reverse = False ):
         
-        if sort_function is None:
+        if sort_key is None:
             
-            sort_function = self._sort_function
+            sort_key = self._sort_key
             reverse = self._sort_reverse
             
         else:
             
-            self._sort_function = sort_function
+            self._sort_key = sort_key
             self._sort_reverse = reverse
             
         
-        self._sorted_list.sort( key = sort_function, reverse = reverse )
+        self._sorted_list.sort( key = sort_key, reverse = reverse )
         
         self._DirtyIndices()
         
@@ -1832,10 +1885,12 @@ class TagsManagerSimple( object ):
     
             combined_statuses_to_tags = self._service_keys_to_statuses_to_tags[ CC.COMBINED_TAG_SERVICE_KEY ]
             
-            combined_current = combined_statuses_to_tags[ HC.CURRENT ]
-            combined_pending = combined_statuses_to_tags[ HC.PENDING ]
+            combined_current = combined_statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ]
+            combined_pending = combined_statuses_to_tags[ HC.CONTENT_STATUS_PENDING ]
             
-            self._combined_namespaces_cache = HydrusData.BuildKeyToSetDict( tag.split( ':', 1 ) for tag in combined_current.union( combined_pending ) if ':' in tag )
+            pairs = ( HydrusTags.SplitTag( tag ) for tag in combined_current.union( combined_pending ) )
+            
+            self._combined_namespaces_cache = HydrusData.BuildKeyToSetDict( ( namespace, subtag ) for ( namespace, subtag ) in pairs if namespace != '' )
             
         
         result = { namespace : self._combined_namespaces_cache[ namespace ] for namespace in namespaces }
@@ -1849,24 +1904,22 @@ class TagsManagerSimple( object ):
         
         combined_statuses_to_tags = self._service_keys_to_statuses_to_tags[ CC.COMBINED_TAG_SERVICE_KEY ]
         
-        combined_current = combined_statuses_to_tags[ HC.CURRENT ]
-        combined_pending = combined_statuses_to_tags[ HC.PENDING ]
+        combined_current = combined_statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ]
+        combined_pending = combined_statuses_to_tags[ HC.CONTENT_STATUS_PENDING ]
         
         combined = combined_current.union( combined_pending )
         
+        pairs = [ HydrusTags.SplitTag( tag ) for tag in combined ]
+        
         slice = []
         
-        for namespace in namespaces:
+        for desired_namespace in namespaces:
             
-            tags = [ tag for tag in combined if tag.startswith( namespace + ':' ) ]
+            subtags = [ HydrusTags.ConvertTagToSortable( subtag ) for ( namespace, subtag ) in pairs if namespace == desired_namespace ]
             
-            tags = [ tag.split( ':', 1 )[1] for tag in tags ]
+            subtags.sort()
             
-            tags = HydrusTags.SortNumericTags( tags )
-            
-            tags = tuple( ( HydrusTags.ConvertTagToSortable( tag ) for tag in tags ) )
-            
-            slice.append( tags )
+            slice.append( tuple( subtags ) )
             
         
         return tuple( slice )
@@ -1878,8 +1931,8 @@ class TagsManagerSimple( object ):
         
         combined_statuses_to_tags = self._service_keys_to_statuses_to_tags[ CC.COMBINED_TAG_SERVICE_KEY ]
         
-        combined_current = combined_statuses_to_tags[ HC.CURRENT ]
-        combined_pending = combined_statuses_to_tags[ HC.PENDING ]
+        combined_current = combined_statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ]
+        combined_pending = combined_statuses_to_tags[ HC.CONTENT_STATUS_PENDING ]
         
         combined = combined_current.union( combined_pending )
         
@@ -1920,10 +1973,10 @@ class TagsManager( TagsManagerSimple ):
                 
                 statuses_to_tags = siblings_manager.CollapseStatusesToTags( service_key, statuses_to_tags )
                 
-                combined_statuses_to_tags[ HC.CURRENT ].update( statuses_to_tags[ HC.CURRENT ] )
-                combined_statuses_to_tags[ HC.PENDING ].update( statuses_to_tags[ HC.PENDING ] )
-                combined_statuses_to_tags[ HC.PETITIONED ].update( statuses_to_tags[ HC.PETITIONED ] )
-                combined_statuses_to_tags[ HC.DELETED ].update( statuses_to_tags[ HC.DELETED ] )
+                combined_statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ].update( statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ] )
+                combined_statuses_to_tags[ HC.CONTENT_STATUS_PENDING ].update( statuses_to_tags[ HC.CONTENT_STATUS_PENDING ] )
+                combined_statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ].update( statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ] )
+                combined_statuses_to_tags[ HC.CONTENT_STATUS_DELETED ].update( statuses_to_tags[ HC.CONTENT_STATUS_DELETED ] )
                 
             
             self._service_keys_to_statuses_to_tags[ CC.COMBINED_TAG_SERVICE_KEY ] = combined_statuses_to_tags
@@ -1938,10 +1991,10 @@ class TagsManager( TagsManagerSimple ):
         
         statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
         
-        if len( statuses_to_tags[ HC.PENDING ] ) + len( statuses_to_tags[ HC.PETITIONED ] ) > 0:
+        if len( statuses_to_tags[ HC.CONTENT_STATUS_PENDING ] ) + len( statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ] ) > 0:
             
-            statuses_to_tags[ HC.PENDING ] = set()
-            statuses_to_tags[ HC.PETITIONED ] = set()
+            statuses_to_tags[ HC.CONTENT_STATUS_PENDING ] = set()
+            statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ] = set()
             
             self._combined_is_calculated = False
             
@@ -1975,7 +2028,7 @@ class TagsManager( TagsManagerSimple ):
         
         statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
         
-        return set( statuses_to_tags[ HC.CURRENT ] )
+        return set( statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ] )
         
     
     def GetDeleted( self, service_key = CC.COMBINED_TAG_SERVICE_KEY ):
@@ -1987,7 +2040,7 @@ class TagsManager( TagsManagerSimple ):
         
         statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
         
-        return set( statuses_to_tags[ HC.DELETED ] )
+        return set( statuses_to_tags[ HC.CONTENT_STATUS_DELETED ] )
         
     
     def GetNumTags( self, service_key, include_current_tags = True, include_pending_tags = False ):
@@ -2001,8 +2054,8 @@ class TagsManager( TagsManagerSimple ):
         
         statuses_to_tags = self.GetStatusesToTags( service_key )
         
-        if include_current_tags: num_tags += len( statuses_to_tags[ HC.CURRENT ] )
-        if include_pending_tags: num_tags += len( statuses_to_tags[ HC.PENDING ] )
+        if include_current_tags: num_tags += len( statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ] )
+        if include_pending_tags: num_tags += len( statuses_to_tags[ HC.CONTENT_STATUS_PENDING ] )
         
         return num_tags
         
@@ -2016,7 +2069,7 @@ class TagsManager( TagsManagerSimple ):
         
         statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
         
-        return set( statuses_to_tags[ HC.PENDING ] )
+        return set( statuses_to_tags[ HC.CONTENT_STATUS_PENDING ] )
         
     
     def GetPetitioned( self, service_key = CC.COMBINED_TAG_SERVICE_KEY ):
@@ -2028,7 +2081,7 @@ class TagsManager( TagsManagerSimple ):
         
         statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
         
-        return set( statuses_to_tags[ HC.PETITIONED ] )
+        return set( statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ] )
         
     
     def GetServiceKeysToStatusesToTags( self ):
@@ -2054,7 +2107,7 @@ class TagsManager( TagsManagerSimple ):
         
         combined_statuses_to_tags = self._service_keys_to_statuses_to_tags[ CC.COMBINED_TAG_SERVICE_KEY ]
         
-        return tag in combined_statuses_to_tags[ HC.CURRENT ] or tag in combined_statuses_to_tags[ HC.PENDING ]
+        return tag in combined_statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ] or tag in combined_statuses_to_tags[ HC.CONTENT_STATUS_PENDING ]
         
     
     def NewSiblings( self ):
@@ -2079,37 +2132,37 @@ class TagsManager( TagsManagerSimple ):
         
         if action == HC.CONTENT_UPDATE_ADD:
             
-            statuses_to_tags[ HC.CURRENT ].add( tag )
+            statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ].add( tag )
             
-            statuses_to_tags[ HC.DELETED ].discard( tag )
-            statuses_to_tags[ HC.PENDING ].discard( tag )
+            statuses_to_tags[ HC.CONTENT_STATUS_DELETED ].discard( tag )
+            statuses_to_tags[ HC.CONTENT_STATUS_PENDING ].discard( tag )
             
         elif action == HC.CONTENT_UPDATE_DELETE:
             
-            statuses_to_tags[ HC.DELETED ].add( tag )
+            statuses_to_tags[ HC.CONTENT_STATUS_DELETED ].add( tag )
             
-            statuses_to_tags[ HC.CURRENT ].discard( tag )
-            statuses_to_tags[ HC.PETITIONED ].discard( tag )
+            statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ].discard( tag )
+            statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ].discard( tag )
             
         elif action == HC.CONTENT_UPDATE_PEND:
             
-            if tag not in statuses_to_tags[ HC.CURRENT ]:
+            if tag not in statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ]:
                 
-                statuses_to_tags[ HC.PENDING ].add( tag )
+                statuses_to_tags[ HC.CONTENT_STATUS_PENDING ].add( tag )
                 
             
         elif action == HC.CONTENT_UPDATE_RESCIND_PEND:
             
-            statuses_to_tags[ HC.PENDING ].discard( tag )
+            statuses_to_tags[ HC.CONTENT_STATUS_PENDING ].discard( tag )
             
         elif action == HC.CONTENT_UPDATE_PETITION:
             
-            if tag in statuses_to_tags[ HC.CURRENT ]:
+            if tag in statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ]:
                 
-                statuses_to_tags[ HC.PETITIONED ].add( tag )
+                statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ].add( tag )
                 
             
-        elif action == HC.CONTENT_UPDATE_RESCIND_PETITION: statuses_to_tags[ HC.PETITIONED ].discard( tag )
+        elif action == HC.CONTENT_UPDATE_RESCIND_PETITION: statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ].discard( tag )
         
         self._combined_is_calculated = False
         

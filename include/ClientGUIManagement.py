@@ -11,10 +11,13 @@ import ClientDefaults
 import ClientCaches
 import ClientFiles
 import ClientGUIACDropdown
+import ClientGUICanvas
 import ClientGUICollapsible
 import ClientGUICommon
 import ClientGUIDialogs
+import ClientGUIListBoxes
 import ClientGUIMedia
+import ClientGUIMenus
 import ClientGUIScrolledPanelsEdit
 import ClientGUITopLevelWindows
 import ClientImporting
@@ -75,6 +78,8 @@ def CreateManagementController( management_type, file_service_key = None ):
 def CreateManagementControllerDuplicateFilter():
     
     management_controller = CreateManagementController( MANAGEMENT_TYPE_DUPLICATE_FILTER )
+    
+    management_controller.SetKey( 'duplicate_filter_file_domain', CC.LOCAL_FILE_SERVICE_KEY )
     
     return management_controller
     
@@ -378,7 +383,9 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
     
     def EventKeyDown( self, event ):
         
-        if event.KeyCode in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ): self.EventReady( None )
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+        
+        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ): self.EventReady( None )
         else: event.Skip()
         
     
@@ -536,11 +543,21 @@ class ManagementController( HydrusSerialisable.SerialisableBase ):
         return ( self._management_type, serialisable_keys, serialisable_simples, serialisable_serialisables )
         
     
+    def _InitialiseDefaults( self ):
+        
+        if self._management_type == MANAGEMENT_TYPE_DUPLICATE_FILTER:
+            
+            self._keys[ 'duplicate_filter_file_domain' ] = CC.LOCAL_FILE_SERVICE_KEY
+            
+        
+    
     def _InitialiseFromSerialisableInfo( self, serialisable_info ):
         
         ( self._management_type, serialisable_keys, serialisable_simples, serialisables ) = serialisable_info
         
-        self._keys = { name : key.decode( 'hex' ) for ( name, key ) in serialisable_keys.items() }
+        self._InitialiseDefaults()
+        
+        self._keys.update( { name : key.decode( 'hex' ) for ( name, key ) in serialisable_keys.items() } )
         
         if 'file_service' in self._keys:
             
@@ -550,9 +567,9 @@ class ManagementController( HydrusSerialisable.SerialisableBase ):
                 
             
         
-        self._simples = dict( serialisable_simples )
+        self._simples.update( dict( serialisable_simples ) )
         
-        self._serialisables = { name : HydrusSerialisable.CreateFromSerialisableTuple( value ) for ( name, value ) in serialisables.items() }
+        self._serialisables.update( { name : HydrusSerialisable.CreateFromSerialisableTuple( value ) for ( name, value ) in serialisables.items() } )
         
     
     def _UpdateSerialisableInfo( self, version, old_serialisable_info ):
@@ -626,6 +643,8 @@ class ManagementController( HydrusSerialisable.SerialisableBase ):
         
         self._management_type = management_type
         
+        self._InitialiseDefaults()
+        
     
     def SetVariable( self, name, value ):
         
@@ -671,7 +690,7 @@ class ManagementPanel( wx.lib.scrolledpanel.ScrolledPanel ):
         
         tags_box = ClientGUICommon.StaticBoxSorterForListBoxTags( self, 'selection tags' )
         
-        t = ClientGUICommon.ListBoxTagsSelectionManagementPanel( tags_box, self._page_key )
+        t = ClientGUIListBoxes.ListBoxTagsSelectionManagementPanel( tags_box, self._page_key )
         
         tags_box.SetTagsBox( t )
         
@@ -699,746 +718,7 @@ class ManagementPanel( wx.lib.scrolledpanel.ScrolledPanel ):
     def SetSearchFocus( self, page_key ): pass
     
     def TestAbleToClose( self ): pass
-    '''
-class ManagementPanelDumper( ManagementPanel ):
     
-    def __init__( self, parent, page, controller, management_controller ):
-        
-        ManagementPanel.__init__( self, parent, page, controller, management_controller )
-        
-        result = self._controller.Read( 'serialisable_simple', '4chan_pass' )
-        
-        if result is None:
-            
-            result = ( '', '', 0 )
-            
-        
-        ( self._4chan_token, pin, timeout ) = result
-        
-        self._have_4chan_pass = timeout > HydrusData.GetNow()
-        
-        self._timer = wx.Timer( self, ID_TIMER_DUMP )
-        self.Bind( wx.EVT_TIMER, self.TIMEREvent, id = ID_TIMER_DUMP )
-        
-        ( self._post_url, self._flood_time, self._form_fields, self._restrictions ) = self._imageboard.GetBoardInfo()
-        
-        # progress
-        
-        self._import_queue_panel = ClientGUICommon.StaticBox( self, 'import queue' )
-        
-        self._progress_info = wx.StaticText( self._import_queue_panel )
-        
-        self._progress_gauge = ClientGUICommon.Gauge( self._import_queue_panel )
-        self._progress_gauge.SetRange( len( media_results ) )
-        
-        self._start_button = wx.Button( self._import_queue_panel, label = 'start' )
-        self._start_button.Bind( wx.EVT_BUTTON, self.EventStartButton )
-        
-        self._import_queue_panel.AddF( self._progress_info, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._import_queue_panel.AddF( self._progress_gauge, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._import_queue_panel.AddF( self._start_button, CC.FLAGS_EXPAND_PERPENDICULAR )
-        
-        # thread options
-        
-        self._thread_panel = ClientGUICommon.StaticBox( self, 'thread options' )
-        
-        self._thread_fields = {}
-        
-        gridbox = wx.FlexGridSizer( 0, 2 )
-        
-        gridbox.AddGrowableCol( 1, 1 )
-        
-        for ( name, field_type, default, editable ) in self._form_fields:
-            
-            if field_type in ( CC.FIELD_TEXT, CC.FIELD_THREAD_ID ): field = wx.TextCtrl( self._thread_panel, value = default )
-            elif field_type == CC.FIELD_PASSWORD: field = wx.TextCtrl( self._thread_panel, value = default, style = wx.TE_PASSWORD )
-            else: continue
-            
-            self._thread_fields[ name ] = ( field_type, field )
-            
-            if editable:
-                
-                gridbox.AddF( wx.StaticText( self._thread_panel, label = name + ':' ), CC.FLAGS_VCENTER )
-                gridbox.AddF( field, CC.FLAGS_EXPAND_BOTH_WAYS )
-                
-            else: field.Hide()
-            
-        
-        self._thread_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        
-        # post options
-        
-        self._post_panel = ClientGUICommon.StaticBox( self, 'post options' )
-        
-        self._post_fields = {}
-        
-        postbox = wx.BoxSizer( wx.VERTICAL )
-        
-        self._post_info = wx.StaticText( self._post_panel, label = 'no file selected', style = wx.ALIGN_CENTER | wx.ST_NO_AUTORESIZE )
-        
-        for ( name, field_type, default, editable ) in self._form_fields:
-            
-            if field_type == CC.FIELD_VERIFICATION_RECAPTCHA:
-                
-                if self._have_4chan_pass: continue
-                
-                field = CaptchaControl( self._post_panel, field_type, default )
-                field.Bind( CAPTCHA_FETCH_EVENT, self.EventCaptchaRefresh )
-                
-            elif field_type == CC.FIELD_COMMENT: field = Comment( self._post_panel )
-            else: continue
-            
-            self._post_fields[ name ] = ( field_type, field, default )
-            
-            postbox.AddF( field, CC.FLAGS_EXPAND_PERPENDICULAR )
-            
-        
-        gridbox = wx.FlexGridSizer( 0, 2 )
-        
-        gridbox.AddGrowableCol( 1, 1 )
-        
-        for ( name, field_type, default, editable ) in self._form_fields:
-            
-            if field_type == CC.FIELD_CHECKBOX:
-                
-                field = wx.CheckBox( self._post_panel )
-                
-                field.SetValue( default == 'True' )
-                
-            else: continue
-            
-            self._post_fields[ name ] = ( field_type, field, default )
-            
-            gridbox.AddF( wx.StaticText( self._post_panel, label = name + ':' ), CC.FLAGS_VCENTER )
-            gridbox.AddF( field, CC.FLAGS_EXPAND_BOTH_WAYS )
-            
-        
-        for ( name, field_type, default, editable ) in self._form_fields:
-            
-            if field_type == CC.FIELD_FILE: self._file_post_name = name
-            
-        
-        self._post_panel.AddF( self._post_info, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._post_panel.AddF( postbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        self._post_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        
-        # misc
-        
-        self._import_tag_options = ClientGUICollapsible.CollapsibleOptionsTags( self, namespaces = [ 'creator', 'series', 'title', 'volume', 'chapter', 'page', 'character', 'person', 'all others' ] )
-        
-        # arrange stuff
-        
-        vbox = wx.BoxSizer( wx.VERTICAL )
-        
-        self._MakeSort( vbox )
-        
-        vbox.AddF( self._import_queue_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._thread_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._post_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._import_tag_options, CC.FLAGS_EXPAND_PERPENDICULAR )
-        
-        self._MakeCurrentSelectionTagsBox( vbox )
-        
-        self.SetSizer( vbox )
-        
-        self._controller.sub( self, 'FocusChanged', 'focus_changed' )
-        self._controller.sub( self, 'SortedMediaPulse', 'sorted_media_pulse' )
-        
-        self._sorted_media_hashes = [ media_result.GetHash() for media_result in media_results ]
-        
-        self._hashes_to_media = { media_result.GetHash() : ClientMedia.MediaSingleton( media_result ) for media_result in media_results }
-        
-        self._hashes_to_dump_info = {}
-        
-        for ( hash, media ) in self._hashes_to_media.items():
-            
-            dump_status_enum = CC.DUMPER_NOT_DUMPED
-            
-            dump_status_string = 'not yet dumped'
-            
-            post_field_info = []
-            
-            for ( name, ( field_type, field, default ) ) in self._post_fields.items():
-                
-                if field_type == CC.FIELD_COMMENT:
-                    
-                    post_field_info.append( ( name, field_type, ( self._GetInitialComment( media ), '' ) ) )
-                    
-                elif field_type == CC.FIELD_CHECKBOX: post_field_info.append( ( name, field_type, default == 'True' ) )
-                elif field_type == CC.FIELD_VERIFICATION_RECAPTCHA: post_field_info.append( ( name, field_type, None ) )
-                
-            
-            self._hashes_to_dump_info[ hash ] = ( dump_status_enum, dump_status_string, post_field_info )
-            
-        
-        self.Bind( wx.EVT_MENU, self.EventMenu )
-        
-        self._timer.Start( 1000, wx.TIMER_CONTINUOUS )
-        
-    
-    def _THREADDoDump( self, hash, post_field_info, headers, body ):
-        
-        try:
-            
-            response = self._controller.DoHTTP( HC.POST, self._post_url, request_headers = headers, body = body )
-            
-            ( status, phrase ) = ClientDownloading.Parse4chanPostScreen( response )
-            
-        except Exception as e:
-            
-            ( status, phrase ) = ( 'big error', HydrusData.ToUnicode( e ) )
-            
-        
-        wx.CallAfter( self.CALLBACKDoneDump, hash, post_field_info, status, phrase )
-        
-    
-    def _FreezeCurrentMediaPostInfo( self ):
-        
-        ( dump_status_enum, dump_status_string, post_field_info ) = self._hashes_to_dump_info[ self._current_hash ]
-        
-        post_field_info = []
-        
-        for ( name, ( field_type, field, default ) ) in self._post_fields.items():
-            
-            if field_type == CC.FIELD_COMMENT: post_field_info.append( ( name, field_type, field.GetValues() ) )
-            elif field_type == CC.FIELD_CHECKBOX: post_field_info.append( ( name, field_type, field.GetValue() ) )
-            elif field_type == CC.FIELD_VERIFICATION_RECAPTCHA: post_field_info.append( ( name, field_type, field.GetValues() ) )
-            
-        
-        self._hashes_to_dump_info[ self._current_hash ] = ( dump_status_enum, dump_status_string, post_field_info )
-        
-    
-    def _GetInitialComment( self, media ):
-        
-        hash = media.GetHash()
-        
-        try: index = self._sorted_media_hashes.index( hash )
-        except: return 'media removed'
-        
-        num_files = len( self._sorted_media_hashes )
-        
-        if index == 0:
-            
-            total_size = sum( [ m.GetSize() for m in self._hashes_to_media.values() ] )
-            
-            initial = 'Hydrus Network Client is starting a dump of ' + str( num_files ) + ' files, totalling ' + HydrusData.ConvertIntToBytes( total_size ) + ':' + os.linesep * 2
-            
-        else: initial = ''
-        
-        initial += HydrusData.ConvertValueRangeToPrettyString( index + 1, num_files )
-        
-        advanced_tag_options = self._import_tag_options.GetInfo()
-        
-        for ( service_key, namespaces ) in advanced_tag_options.items():
-            
-            tags_manager = media.GetTagsManager()
-            
-            try: service = self._controller.GetServicesManager().GetService( service_key )
-            except HydrusExceptions.FileMissingException: continue
-            
-            service_key = service.GetServiceKey()
-            
-            current = tags_manager.GetCurrent( service_key )
-            pending = tags_manager.GetPending( service_key )
-            
-            tags = current.union( pending )
-            
-            tags_to_include = []
-            
-            for namespace in namespaces:
-                
-                if namespace == 'all others': tags_to_include.extend( [ tag for tag in tags if not True in ( tag.startswith( n ) for n in namespaces if n != 'all others' ) ] )
-                else: tags_to_include.extend( [ tag for tag in tags if tag.startswith( namespace + ':' ) ] )
-                
-            
-            initial += os.linesep * 2 + ', '.join( tags_to_include )
-            
-        
-        return initial
-        
-    
-    def _ShowCurrentMedia( self ):
-        
-        if self._current_hash is None:
-            
-            self._post_info.SetLabelText( 'no file selected' )
-            
-            for ( name, ( field_type, field, default ) ) in self._post_fields.items():
-                
-                if field_type == CC.FIELD_CHECKBOX: field.SetValue( False )
-                
-                field.Disable()
-                
-            
-        else:
-            
-            num_files = len( self._sorted_media_hashes )
-            
-            ( dump_status_enum, dump_status_string, post_field_info ) = self._hashes_to_dump_info[ self._current_hash ]
-            
-            index = self._sorted_media_hashes.index( self._current_hash )
-            
-            self._post_info.SetLabelText( HydrusData.ConvertValueRangeToPrettyString( index + 1, num_files ) + ': ' + dump_status_string )
-            
-            for ( name, field_type, value ) in post_field_info:
-                
-                ( field_type, field, default ) = self._post_fields[ name ]
-                
-                if field_type == CC.FIELD_COMMENT:
-                    
-                    ( initial, append ) = value
-                    
-                    field.EnableWithValues( initial, append )
-                    
-                elif field_type == CC.FIELD_CHECKBOX:
-                    
-                    field.SetValue( value )
-                    field.Enable()
-                    
-                elif field_type == CC.FIELD_VERIFICATION_RECAPTCHA:
-                    
-                    if value is None: field.Enable()
-                    else:
-                        
-                        ( challenge, bitmap, captcha_runs_out, entry, ready ) = value
-                        
-                        field.EnableWithValues( challenge, bitmap, captcha_runs_out, entry, ready )
-                        
-                    
-                
-            
-            if dump_status_enum in ( CC.DUMPER_DUMPED_OK, CC.DUMPER_UNRECOVERABLE_ERROR ):
-                
-                for ( name, ( field_type, field, default ) ) in self._post_fields.items():
-                    
-                    if field_type == CC.FIELD_CHECKBOX: field.SetValue( False )
-                    
-                    field.Disable()
-                    
-                
-            
-        
-    
-    def _UpdatePendingInitialComments( self ):
-        
-        hashes_to_dump = self._sorted_media_hashes[ self._next_dump_index : ]
-        
-        for hash in hashes_to_dump:
-            
-            if hash == self._current_hash: self._FreezeCurrentMediaPostInfo()
-            
-            ( dump_status_enum, dump_status_string, post_field_info ) = self._hashes_to_dump_info[ hash ]
-            
-            new_post_field_info = []
-            
-            for ( name, field_type, value ) in post_field_info:
-                
-                if field_type == CC.FIELD_COMMENT:
-                    
-                    ( initial, append ) = value
-                    
-                    media = self._hashes_to_media[ hash ]
-                    
-                    initial = self._GetInitialComment( media )
-                    
-                    new_post_field_info.append( ( name, field_type, ( initial, append ) ) )
-                    
-                else: new_post_field_info.append( ( name, field_type, value ) )
-                
-            
-            self._hashes_to_dump_info[ hash ] = ( dump_status_enum, dump_status_string, new_post_field_info )
-            
-            if hash == self._current_hash: self._ShowCurrentMedia()
-            
-        
-    
-    def CALLBACKDoneDump( self, hash, post_field_info, status, phrase ):
-        
-        self._actually_dumping = False
-        
-        if HC.options[ 'play_dumper_noises' ]:
-            
-            if status == 'success': HydrusAudioHandling.PlayNoise( 'success' )
-            else: HydrusAudioHandling.PlayNoise( 'error' )
-            
-        
-        if status == 'success':
-            
-            dump_status_enum = CC.DUMPER_DUMPED_OK
-            dump_status_string = 'dumped ok'
-            
-            if hash == self._current_hash: self._controller.pub( 'set_focus', self._page_key, None )
-            
-            self._next_dump_time = HydrusData.GetNow() + self._flood_time
-            
-            self._num_dumped += 1
-            
-            self._progress_gauge.SetValue( self._num_dumped )
-            
-            self._next_dump_index += 1
-            
-        elif status == 'captcha':
-            
-            dump_status_enum = CC.DUMPER_RECOVERABLE_ERROR
-            dump_status_string = 'captcha was incorrect'
-            
-            self._next_dump_time = HydrusData.GetNow() + 10
-            
-            new_post_field_info = []
-            
-            for ( name, field_type, value ) in post_field_info:
-                
-                if field_type == CC.FIELD_VERIFICATION_RECAPTCHA: new_post_field_info.append( ( name, field_type, None ) )
-                else: new_post_field_info.append( ( name, field_type, value ) )
-                
-                if hash == self._current_hash:
-                    
-                    ( field_type, field, default ) = self._post_fields[ name ]
-                    
-                    field.Enable()
-                    
-                
-            
-            post_field_info = new_post_field_info
-            
-        elif status == 'too quick':
-            
-            dump_status_enum = CC.DUMPER_RECOVERABLE_ERROR
-            dump_status_string = ''
-            
-            self._progress_info.SetLabelText( 'Flood limit hit, retrying.' )
-            
-            self._next_dump_time = HydrusData.GetNow() + self._flood_time
-            
-        elif status == 'big error':
-            
-            dump_status_enum = CC.DUMPER_UNRECOVERABLE_ERROR
-            dump_status_string = ''
-            
-            HydrusData.ShowText( phrase )
-            
-            self._progress_info.SetLabelText( 'error: ' + phrase )
-            
-            self._start_button.Disable()
-            
-            self._timer.Stop()
-            
-        elif 'Thread specified does not exist' in phrase:
-            
-            dump_status_enum = CC.DUMPER_UNRECOVERABLE_ERROR
-            dump_status_string = ''
-            
-            self._progress_info.SetLabelText( 'thread specified does not exist!' )
-            
-            self._start_button.Disable()
-            
-            self._timer.Stop()
-            
-        else:
-            
-            dump_status_enum = CC.DUMPER_UNRECOVERABLE_ERROR
-            dump_status_string = phrase
-            
-            if hash == self._current_hash: self._controller.pub( 'set_focus', self._page_key, None )
-            
-            self._next_dump_time = HydrusData.GetNow() + self._flood_time
-            
-            self._next_dump_index += 1
-            
-        
-        self._hashes_to_dump_info[ hash ] = ( dump_status_enum, dump_status_string, post_field_info )
-        
-        self._controller.pub( 'file_dumped', self._page_key, hash, dump_status_enum )
-        
-        if self._next_dump_index == len( self._sorted_media_hashes ):
-            
-            self._progress_info.SetLabelText( 'done - ' + str( self._num_dumped ) + ' dumped' )
-            
-            self._start_button.Disable()
-            
-            self._timer.Stop()
-            
-            self._dumping = False
-            
-        
-    
-    def EventCaptchaRefresh( self, event ):
-        
-        try:
-            
-            index = self._sorted_media_hashes.index( self._current_hash )
-            
-            if ( ( index + 1 ) - self._next_dump_index ) * ( self._flood_time + 10 ) > 5 * 60: event.Veto()
-            
-        except: event.Veto()
-        
-    
-    def EventMenu( self, event ):
-        
-        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
-        
-        if action is not None:
-            
-            ( command, data ) = action
-            
-            if command == 'import_tag_options_changed': self._UpdatePendingInitialComments()
-            else: event.Skip()
-            
-        
-    
-    def EventStartButton( self, event ):
-        
-        if self._start_button.GetLabelText() in ( 'start', 'continue' ):
-            
-            for ( name, ( field_type, field ) ) in self._thread_fields.items():
-                
-                if field_type == CC.FIELD_THREAD_ID:
-                    
-                    try: int( field.GetValue() )
-                    except:
-                        
-                        # let's assume they put the url in
-                        
-                        value = field.GetValue()
-                        
-                        thread_id = value.split( '/' )[ -1 ]
-                        
-                        try: int( thread_id )
-                        except:
-                            
-                            self._progress_info.SetLabelText( 'set thread_id field first' )
-                            
-                            return
-                            
-                        
-                        field.SetValue( thread_id )
-                        
-                    
-                
-            
-            for ( field_type, field ) in self._thread_fields.values(): field.Disable()
-            
-            self._dumping = True
-            self._start_button.SetLabelText( 'pause' )
-            
-            if self._next_dump_time == 0: self._next_dump_time = HydrusData.GetNow() + 5
-            
-            # disable thread fields here
-            
-        else:
-            
-            for ( field_type, field ) in self._thread_fields.values(): field.Enable()
-            
-            self._dumping = False
-            
-            if self._num_dumped == 0: self._start_button.SetLabelText( 'start' )
-            else: self._start_button.SetLabelText( 'continue' )
-            
-        
-    
-    def FocusChanged( self, page_key, media ):
-        
-        if page_key == self._page_key:
-            
-            if media is None: hash = None
-            else: hash = media.GetHash()
-            
-            if hash != self._current_hash:
-                
-                old_hash = self._current_hash
-                
-                if old_hash is not None: self._FreezeCurrentMediaPostInfo()
-                
-                self._current_hash = hash
-                
-                self._ShowCurrentMedia()
-                
-            
-        
-    
-    def SortedMediaPulse( self, page_key, sorted_media ):
-        
-        if page_key == self._page_key:
-            
-            self._sorted_media_hashes = [ media.GetHash() for media in sorted_media ]
-            
-            self._hashes_to_media = { hash : self._hashes_to_media[ hash ] for hash in self._sorted_media_hashes }
-            
-            new_hashes_to_dump_info = {}
-            
-            for ( hash, ( dump_status_enum, dump_status_string, post_field_info ) ) in self._hashes_to_dump_info.items():
-                
-                if hash not in self._sorted_media_hashes: continue
-                
-                new_post_field_info = []
-                
-                for ( name, field_type, value ) in post_field_info:
-                    
-                    if field_type == CC.FIELD_COMMENT:
-                        
-                        ( initial, append ) = value
-                        
-                        media = self._hashes_to_media[ hash ]
-                        
-                        initial = self._GetInitialComment( media )
-                        
-                        value = ( initial, append )
-                        
-                    
-                    new_post_field_info.append( ( name, field_type, value ) )
-                    
-                
-                new_hashes_to_dump_info[ hash ] = ( dump_status_enum, dump_status_string, new_post_field_info )
-                
-            
-            self._hashes_to_dump_info = new_hashes_to_dump_info
-            
-            self._ShowCurrentMedia()
-            
-            if self._current_hash is None and len( self._sorted_media_hashes ) > 0:
-                
-                hash_to_select = self._sorted_media_hashes[0]
-                
-                media_to_select = self._hashes_to_media[ hash_to_select ]
-                
-                self._controller.pub( 'set_focus', self._page_key, media_to_select )
-                
-            
-        
-    
-    def TestAbleToClose( self ):
-        
-        if self._dumping:
-            
-            with ClientGUIDialogs.DialogYesNo( self, 'This page is still dumping. Are you sure you want to close it?' ) as dlg:
-                
-                if dlg.ShowModal() == wx.ID_NO:
-                    
-                    raise HydrusExceptions.PermissionException()
-                    
-                
-            
-        
-    
-    def TIMEREvent( self, event ):
-        
-        if self._actually_dumping: return
-        
-        if self._dumping:
-            
-            time_left = self._next_dump_time - HydrusData.GetNow()
-            
-            if time_left < 1:
-                
-                try:
-                    
-                    hash = self._sorted_media_hashes[ self._next_dump_index ]
-                    
-                    wait = False
-                    
-                    if hash == self._current_hash: self._FreezeCurrentMediaPostInfo()
-                    
-                    ( dump_status_enum, dump_status_string, post_field_info ) = self._hashes_to_dump_info[ hash ]
-                    
-                    for ( name, field_type, value ) in post_field_info:
-                        
-                        if field_type == CC.FIELD_VERIFICATION_RECAPTCHA:
-                            
-                            if value is None:
-                                
-                                wait = True
-                                
-                                break
-                                
-                            else:
-                                
-                                ( challenge, bitmap, captcha_runs_out, entry, ready ) = value
-                                
-                                if HydrusData.TimeHasPassed( captcha_runs_out ) or not ready:
-                                    
-                                    wait = True
-                                    
-                                    break
-                                    
-                                
-                            
-                        
-                    
-                    if wait: self._progress_info.SetLabelText( 'waiting for captcha' )
-                    else:
-                        
-                        self._progress_info.SetLabelText( 'dumping' ) # 100% cpu time here - may or may not be desirable
-                        
-                        post_fields = []
-                        
-                        for ( name, ( field_type, field ) ) in self._thread_fields.items():
-                            
-                            post_fields.append( ( name, field_type, field.GetValue() ) )
-                            
-                        
-                        for ( name, field_type, value ) in post_field_info:
-                            
-                            if field_type == CC.FIELD_VERIFICATION_RECAPTCHA:
-                                
-                                ( challenge, bitmap, captcha_runs_out, entry, ready ) = value
-                                
-                                post_fields.append( ( 'recaptcha_challenge_field', field_type, challenge ) )
-                                post_fields.append( ( 'recaptcha_response_field', field_type, entry ) )
-                                
-                            elif field_type == CC.FIELD_COMMENT:
-                                
-                                ( initial, append ) = value
-                                
-                                comment = initial
-                                
-                                if len( append ) > 0: comment += os.linesep * 2 + append
-                                
-                                post_fields.append( ( name, field_type, comment ) )
-                                
-                            else: post_fields.append( ( name, field_type, value ) )
-                            
-                        
-                        media = self._hashes_to_media[ hash ]
-                        
-                        mime = media.GetMime()
-                        
-                        client_files_manager = self._controller.GetClientFilesManager()
-                        
-                        path = client_files_manager.GetFilePath( hash, mime )
-                        
-                        with open( path, 'rb' ) as f: file = f.read()
-                        
-                        post_fields.append( ( self._file_post_name, CC.FIELD_FILE, ( hash, mime, file ) ) )
-                        
-                        ( ct, body ) = GenerateDumpMultipartFormDataCTAndBody( post_fields )
-                        
-                        headers = {}
-                        headers[ 'Content-Type' ] = ct
-                        if self._have_4chan_pass: headers[ 'Cookie' ] = 'pass_enabled=1; pass_id=' + self._4chan_token
-                        
-                        self._actually_dumping = True
-                        
-                        self._controller.CallToThread( self._THREADDoDump, hash, post_field_info, headers, body )
-                        
-                    
-                except Exception as e:
-                    
-                    ( status, phrase ) = ( 'big error', HydrusData.ToUnicode( e ) )
-                    
-                    wx.CallAfter( self.CALLBACKDoneDump, hash, post_field_info, status, phrase )
-                    
-                
-            else: self._progress_info.SetLabelText( 'dumping next file in ' + str( time_left ) + ' seconds' )
-            
-        else:
-            
-            if self._num_dumped == 0: self._progress_info.SetLabelText( 'will dump to ' + self._imageboard.GetName() )
-            else: self._progress_info.SetLabelText( 'paused after ' + str( self._num_dumped ) + ' files dumped' )
-            
-        
-    
-management_panel_types_to_classes[ MANAGEMENT_TYPE_DUMPER ] = ManagementPanelDumper
-'''
 class ManagementPanelDuplicateFilter( ManagementPanel ):
     
     def __init__( self, parent, page, controller, management_controller ):
@@ -1453,9 +733,10 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         menu_items.append( ( 'normal', 'refresh', 'This panel does not update itself when files are added or deleted elsewhere in the client. Hitting this will refresh the numbers from the database.', self._RefreshAndUpdateStatus ) )
         menu_items.append( ( 'normal', 'reset potential duplicates', 'This will delete all the potential duplicate pairs found so far and reset their files\' search status.', self._ResetUnknown ) )
         menu_items.append( ( 'separator', 0, 0, 0 ) )
-        menu_items.append( ( 'check', 'regenerate file information in normal db maintenance', 'Tell the client to include file phash regeneration in its normal db maintenance cycles, whether you have that set to idle or shutdown time.', 'maintain_similar_files_phashes_during_idle' ) )
-        menu_items.append( ( 'check', 'rebalance tree in normal db maintenance', 'Tell the client to balance the tree in its normal db maintenance cycles, whether you have that set to idle or shutdown time. It will not occur whille there are phashes still to regenerate.', 'maintain_similar_files_tree_during_idle' ) )
-        menu_items.append( ( 'check', 'find duplicate pairs at the current distance in normal db maintenance', 'Tell the client to find duplicate pairs in its normal db maintenance cycles, whether you have that set to idle or shutdown time. It will not occur whille there are phashes still to regenerate or if the tree still needs rebalancing.', 'maintain_similar_files_duplicate_pairs_during_idle' ) )
+        
+        check_manager = ClientGUICommon.CheckboxManagerOptions( 'maintain_similar_files_duplicate_pairs_during_idle' )
+        
+        menu_items.append( ( 'check', 'search for duplicate pairs at the current distance during normal db maintenance', 'Tell the client to find duplicate pairs in its normal db maintenance cycles, whether you have that set to idle or shutdown time.', check_manager ) )
         
         self._cog_button = ClientGUICommon.MenuBitmapButton( self, CC.GlobalBMPs.cog, menu_items )
         
@@ -1493,16 +774,23 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         
         self._filtering_panel = ClientGUICommon.StaticBox( self, 'filtering' )
         
+        self._file_domain_button = ClientGUICommon.BetterButton( self._filtering_panel, 'file domain', self._FileDomainButtonHit )
         self._num_unknown_duplicates = wx.StaticText( self._filtering_panel )
+        self._num_better_duplicates = wx.StaticText( self._filtering_panel )
         self._num_same_file_duplicates = wx.StaticText( self._filtering_panel )
         self._num_alternate_duplicates = wx.StaticText( self._filtering_panel )
         self._show_some_dupes = ClientGUICommon.BetterButton( self._filtering_panel, 'show some pairs (prototype!)', self._ShowSomeDupes )
+        self._launch_filter = ClientGUICommon.BetterButton( self._filtering_panel, 'launch filter (prototype!)', self._LaunchFilter )
         
         #
         
         new_options = self._controller.GetNewOptions()
         
         self._search_distance_spinctrl.SetValue( new_options.GetInteger( 'similar_files_duplicate_pairs_search_distance' ) )
+        
+        duplicate_filter_file_domain = management_controller.GetKey( 'duplicate_filter_file_domain' )
+        
+        self._SetFileDomain( duplicate_filter_file_domain ) # this spawns a refreshandupdatestatus
         
         #
         
@@ -1539,10 +827,13 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         
         #
         
+        self._filtering_panel.AddF( self._file_domain_button, CC.FLAGS_EXPAND_PERPENDICULAR )
         self._filtering_panel.AddF( self._num_unknown_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.AddF( self._num_better_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
         self._filtering_panel.AddF( self._num_same_file_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
         self._filtering_panel.AddF( self._num_alternate_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
         self._filtering_panel.AddF( self._show_some_dupes, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.AddF( self._launch_filter, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         #
         
@@ -1558,9 +849,38 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         self.Bind( wx.EVT_TIMER, self.TIMEREventUpdateDBJob, id = ID_TIMER_UPDATE )
         self._update_db_job_timer = wx.Timer( self, id = ID_TIMER_UPDATE )
         
-        #
+    
+    def _FileDomainButtonHit( self ):
         
-        self._RefreshAndUpdateStatus()
+        services_manager = HydrusGlobals.client_controller.GetServicesManager()
+        
+        services = []
+        
+        services.append( services_manager.GetService( CC.LOCAL_FILE_SERVICE_KEY ) )
+        services.append( services_manager.GetService( CC.TRASH_SERVICE_KEY ) )
+        services.append( services_manager.GetService( CC.COMBINED_LOCAL_FILE_SERVICE_KEY ) )
+        
+        menu = wx.Menu()
+        
+        for service in services:
+            
+            call = HydrusData.Call( self._SetFileDomain, service.GetServiceKey() )
+            
+            ClientGUIMenus.AppendMenuItem( self, menu, service.GetName(), 'Set the filtering file domain.', call )
+            
+        
+        HydrusGlobals.client_controller.PopupMenu( self._file_domain_button, menu )
+        
+    
+    def _LaunchFilter( self ):
+        
+        duplicate_filter_file_domain = self._management_controller.GetKey( 'duplicate_filter_file_domain' )
+        
+        canvas_frame = ClientGUICanvas.CanvasFrame( self.GetTopLevelParent() )
+        
+        canvas_window = ClientGUICanvas.CanvasFilterDuplicates( canvas_frame, duplicate_filter_file_domain )
+        
+        canvas_frame.SetCanvas( canvas_window )
         
     
     def _RebalanceTree( self ):
@@ -1600,6 +920,19 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         self._StartStopDBJob()
         
     
+    def _SetFileDomain( self, service_key ):
+        
+        self._management_controller.SetKey( 'duplicate_filter_file_domain', service_key )
+        
+        services_manager = HydrusGlobals.client_controller.GetServicesManager()
+        
+        service = services_manager.GetService( service_key )
+        
+        self._file_domain_button.SetLabelText( service.GetName() )
+        
+        self._RefreshAndUpdateStatus()
+        
+    
     def _SetSearchDistance( self, value ):
         
         self._search_distance_spinctrl.SetValue( value )
@@ -1609,7 +942,9 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
     
     def _ShowSomeDupes( self ):
         
-        hashes = self._controller.Read( 'some_dupes' )
+        duplicate_filter_file_domain = self._management_controller.GetKey( 'duplicate_filter_file_domain' )
+        
+        hashes = self._controller.Read( 'some_dupes', duplicate_filter_file_domain )
         
         media_results = self._controller.Read( 'media_results', hashes )
         
@@ -1662,6 +997,15 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
             
             self._job_key.Cancel()
             
+        
+    
+    def _RefreshAndUpdateStatus( self ):
+        
+        duplicate_filter_file_domain = self._management_controller.GetKey( 'duplicate_filter_file_domain' )
+        
+        self._similar_files_maintenance_status = self._controller.Read( 'similar_files_maintenance_status', duplicate_filter_file_domain )
+        
+        self._UpdateStatus()
         
     
     def _UpdateJob( self ):
@@ -1720,16 +1064,9 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
             
         
     
-    def _RefreshAndUpdateStatus( self ):
-        
-        self._similar_files_maintenance_status = self._controller.Read( 'similar_files_maintenance_status' )
-        
-        self._UpdateStatus()
-        
-    
     def _UpdateStatus( self ):
         
-        ( searched_distances_to_count, duplicate_types_to_count, num_phashes_to_regen, num_branches_to_regen ) = self._similar_files_maintenance_status
+        ( num_phashes_to_regen, num_branches_to_regen, searched_distances_to_count, duplicate_types_to_count ) = self._similar_files_maintenance_status
         
         self._cog_button.Enable()
         
@@ -1811,9 +1148,10 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         
         num_unknown = duplicate_types_to_count[ HC.DUPLICATE_UNKNOWN ]
         
-        self._num_unknown_duplicates.SetLabelText( HydrusData.ConvertIntToPrettyString( num_unknown ) + ' potential duplicates found.' )
-        self._num_same_file_duplicates.SetLabelText( HydrusData.ConvertIntToPrettyString( duplicate_types_to_count[ HC.DUPLICATE_SAME_FILE ] ) + ' same file pairs filtered.' )
-        self._num_alternate_duplicates.SetLabelText( HydrusData.ConvertIntToPrettyString( duplicate_types_to_count[ HC.DUPLICATE_ALTERNATE ] ) + ' alternate file pairs filtered.' )
+        self._num_unknown_duplicates.SetLabelText( HydrusData.ConvertIntToPrettyString( num_unknown ) + ' potential matches found.' )
+        self._num_better_duplicates.SetLabelText( HydrusData.ConvertIntToPrettyString( duplicate_types_to_count[ HC.DUPLICATE_BETTER ] ) + ' better/worse pairs filtered.' )
+        self._num_same_file_duplicates.SetLabelText( HydrusData.ConvertIntToPrettyString( duplicate_types_to_count[ HC.DUPLICATE_SAME_FILE ] ) + ' exactly similar pairs filtered.' )
+        self._num_alternate_duplicates.SetLabelText( HydrusData.ConvertIntToPrettyString( duplicate_types_to_count[ HC.DUPLICATE_ALTERNATE ] ) + ' alternate pairs filtered.' )
         
         if num_unknown > 0:
             
@@ -1843,6 +1181,8 @@ class ManagementPanelGalleryImport( ManagementPanel ):
         
         ManagementPanel.__init__( self, parent, page, controller, management_controller )
         
+        self._gallery_import = self._management_controller.GetVariable( 'gallery_import' )
+        
         self._gallery_downloader_panel = ClientGUICommon.StaticBox( self, 'gallery downloader' )
         
         self._import_queue_panel = ClientGUICommon.StaticBox( self._gallery_downloader_panel, 'imports' )
@@ -1854,8 +1194,7 @@ class ManagementPanelGalleryImport( ManagementPanel ):
         
         self._waiting_politely_indicator = ClientGUICommon.GetWaitingPolitelyControl( self._import_queue_panel, self._page_key )
         
-        self._seed_cache_button = wx.BitmapButton( self._import_queue_panel, bitmap = CC.GlobalBMPs.seed_cache )
-        self._seed_cache_button.Bind( wx.EVT_BUTTON, self.EventSeedCache )
+        self._seed_cache_button = ClientGUICommon.BetterBitmapButton( self._import_queue_panel, CC.GlobalBMPs.seed_cache, self._SeedCache )
         self._seed_cache_button.SetToolTipString( 'open detailed file import status' )
         
         self._files_pause_button = wx.BitmapButton( self._import_queue_panel, bitmap = CC.GlobalBMPs.pause )
@@ -1890,9 +1229,22 @@ class ManagementPanelGalleryImport( ManagementPanel ):
         self._query_paste = wx.Button( self._pending_queries_panel, label = 'paste queries' )
         self._query_paste.Bind( wx.EVT_BUTTON, self.EventPaste )
         
-        self._get_tags_if_redundant = wx.CheckBox( self._gallery_downloader_panel, label = 'get tags even if file is already in db' )
-        self._get_tags_if_redundant.Bind( wx.EVT_CHECKBOX, self.EventGetTagsIfRedundant )
-        self._get_tags_if_redundant.SetToolTipString( 'if off, the downloader will only fetch tags from the gallery if the file is new' )
+        menu_items = []
+        
+        invert_call = self._gallery_import.InvertGetTagsIfURLKnownAndFileRedundant
+        value_call = self._gallery_import.GetTagsIfURLKnownAndFileRedundant
+        
+        check_manager = ClientGUICommon.CheckboxManagerCalls( invert_call, value_call )
+        
+        menu_items.append( ( 'check', 'get tags even if url is known and file is already in db (this downloader)', 'If this is selected, the client will fetch the tags from a file\'s page even if it has the file and already previously downloaded it from that location.', check_manager ) )
+        
+        menu_items.append( ( 'separator', 0, 0, 0 ) )
+        
+        check_manager = ClientGUICommon.CheckboxManagerOptions( 'get_tags_if_url_known_and_file_redundant' )
+        
+        menu_items.append( ( 'check', 'get tags even if url is known and file is already in db (default)', 'Set the default for this value.', check_manager ) )
+        
+        self._cog_button = ClientGUICommon.MenuBitmapButton( self._gallery_downloader_panel, CC.GlobalBMPs.cog, menu_items )
         
         self._file_limit = ClientGUICommon.NoneableSpinCtrl( self._gallery_downloader_panel, 'stop after this many files', min = 1, none_phrase = 'no limit' )
         self._file_limit.Bind( wx.EVT_SPINCTRL, self.EventFileLimit )
@@ -1949,7 +1301,7 @@ class ManagementPanelGalleryImport( ManagementPanel ):
         self._gallery_downloader_panel.AddF( self._import_queue_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
         self._gallery_downloader_panel.AddF( self._gallery_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
         self._gallery_downloader_panel.AddF( self._pending_queries_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._gallery_downloader_panel.AddF( self._get_tags_if_redundant, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._gallery_downloader_panel.AddF( self._cog_button, CC.FLAGS_LONE_BUTTON )
         self._gallery_downloader_panel.AddF( self._file_limit, CC.FLAGS_EXPAND_PERPENDICULAR )
         self._gallery_downloader_panel.AddF( self._import_file_options, CC.FLAGS_EXPAND_PERPENDICULAR )
         self._gallery_downloader_panel.AddF( self._import_tag_options, CC.FLAGS_EXPAND_PERPENDICULAR )
@@ -1972,8 +1324,6 @@ class ManagementPanelGalleryImport( ManagementPanel ):
         
         self._controller.sub( self, 'UpdateStatus', 'update_status' )
         
-        self._gallery_import = self._management_controller.GetVariable( 'gallery_import' )
-        
         gallery_identifier = self._gallery_import.GetGalleryIdentifier()
         
         ( namespaces, search_value ) = ClientDefaults.GetDefaultNamespacesAndSearchValue( gallery_identifier )
@@ -1983,23 +1333,43 @@ class ManagementPanelGalleryImport( ManagementPanel ):
         
         def file_download_hook( gauge_range, gauge_value ):
             
-            self._file_gauge.SetRange( gauge_range )
-            self._file_gauge.SetValue( gauge_value )
+            try:
+                
+                self._file_gauge.SetRange( gauge_range )
+                self._file_gauge.SetValue( gauge_value )
+                
+            except wx.PyDeadObjectError:
+                
+                pass
+                
             
         
         self._gallery_import.SetDownloadHook( file_download_hook )
         
-        ( import_file_options, import_tag_options, get_tags_if_redundant, file_limit ) = self._gallery_import.GetOptions()
+        ( import_file_options, import_tag_options, file_limit ) = self._gallery_import.GetOptions()
         
         self._import_file_options.SetOptions( import_file_options )
         self._import_tag_options.SetOptions( import_tag_options )
         
-        self._get_tags_if_redundant.SetValue( get_tags_if_redundant )
         self._file_limit.SetValue( file_limit )
         
         self._Update()
         
         self._gallery_import.Start( self._page_key )
+        
+    
+    def _SeedCache( self ):
+        
+        seed_cache = self._gallery_import.GetSeedCache()
+        
+        title = 'file import status'
+        frame_key = 'file_import_status'
+        
+        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
+        
+        panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( frame, self._controller, seed_cache )
+        
+        frame.SetPanel( panel )
         
     
     def _Update( self ):
@@ -2164,14 +1534,11 @@ class ManagementPanelGalleryImport( ManagementPanel ):
         self._Update()
         
     
-    def EventGetTagsIfRedundant( self, event ):
-        
-        self._gallery_import.SetGetTagsIfRedundant( self._get_tags_if_redundant.GetValue() )
-        
-    
     def EventKeyDown( self, event ):
         
-        if event.KeyCode in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+        
+        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
             
             query = self._query_input.GetValue()
             
@@ -2249,20 +1616,6 @@ class ManagementPanelGalleryImport( ManagementPanel ):
             
         
     
-    def EventSeedCache( self, event ):
-        
-        seed_cache = self._gallery_import.GetSeedCache()
-        
-        title = 'file import status'
-        frame_key = 'file_import_status'
-        
-        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
-        
-        panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( frame, self._controller, seed_cache )
-        
-        frame.SetPanel( panel )
-        
-    
     def SetSearchFocus( self, page_key ):
         
         if page_key == self._page_key: self._query_input.SetFocus()
@@ -2290,8 +1643,7 @@ class ManagementPanelHDDImport( ManagementPanel ):
         self._current_action = wx.StaticText( self._import_queue_panel )
         self._overall_gauge = ClientGUICommon.Gauge( self._import_queue_panel )
         
-        self._seed_cache_button = wx.BitmapButton( self._import_queue_panel, bitmap = CC.GlobalBMPs.seed_cache )
-        self._seed_cache_button.Bind( wx.EVT_BUTTON, self.EventSeedCache )
+        self._seed_cache_button = ClientGUICommon.BetterBitmapButton( self._import_queue_panel, CC.GlobalBMPs.seed_cache, self._SeedCache )
         self._seed_cache_button.SetToolTipString( 'open detailed file import status' )
         
         self._pause_button = wx.BitmapButton( self._import_queue_panel, bitmap = CC.GlobalBMPs.pause )
@@ -2328,6 +1680,20 @@ class ManagementPanelHDDImport( ManagementPanel ):
         self._Update()
         
         self._hdd_import.Start( self._page_key )
+        
+    
+    def _SeedCache( self ):
+        
+        seed_cache = self._hdd_import.GetSeedCache()
+        
+        title = 'file import status'
+        frame_key = 'file_import_status'
+        
+        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
+        
+        panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( frame, self._controller, seed_cache )
+        
+        frame.SetPanel( panel )
         
     
     def _Update( self ):
@@ -2397,20 +1763,6 @@ class ManagementPanelHDDImport( ManagementPanel ):
         self._Update()
         
     
-    def EventSeedCache( self, event ):
-        
-        seed_cache = self._hdd_import.GetSeedCache()
-        
-        title = 'file import status'
-        frame_key = 'file_import_status'
-        
-        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
-        
-        panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( frame, self._controller, seed_cache )
-        
-        frame.SetPanel( panel )
-        
-    
     def TestAbleToClose( self ):
         
         ( ( overall_status, ( overall_value, overall_range ) ), paused ) = self._hdd_import.GetStatus()
@@ -2458,8 +1810,7 @@ class ManagementPanelPageOfImagesImport( ManagementPanel ):
         
         self._waiting_politely_indicator = ClientGUICommon.GetWaitingPolitelyControl( self._import_queue_panel, self._page_key )
         
-        self._seed_cache_button = wx.BitmapButton( self._import_queue_panel, bitmap = CC.GlobalBMPs.seed_cache )
-        self._seed_cache_button.Bind( wx.EVT_BUTTON, self.EventSeedCache )
+        self._seed_cache_button = ClientGUICommon.BetterBitmapButton( self._import_queue_panel, CC.GlobalBMPs.seed_cache, self._SeedCache )
         self._seed_cache_button.SetToolTipString( 'open detailed file import status' )
         
         button_sizer = wx.BoxSizer( wx.HORIZONTAL )
@@ -2555,8 +1906,15 @@ class ManagementPanelPageOfImagesImport( ManagementPanel ):
         
         def file_download_hook( gauge_range, gauge_value ):
             
-            self._file_gauge.SetRange( gauge_range )
-            self._file_gauge.SetValue( gauge_value )
+            try:
+                
+                self._file_gauge.SetRange( gauge_range )
+                self._file_gauge.SetValue( gauge_value )
+                
+            except wx.PyDeadObjectError:
+                
+                pass
+                
             
         
         self._page_of_images_import.SetDownloadHook( file_download_hook )
@@ -2571,6 +1929,20 @@ class ManagementPanelPageOfImagesImport( ManagementPanel ):
         self._Update()
         
         self._page_of_images_import.Start( self._page_key )
+        
+    
+    def _SeedCache( self ):
+        
+        seed_cache = self._page_of_images_import.GetSeedCache()
+        
+        title = 'file import status'
+        frame_key = 'file_import_status'
+        
+        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
+        
+        panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( frame, self._controller, seed_cache )
+        
+        frame.SetPanel( panel )
         
     
     def _Update( self ):
@@ -2695,7 +2067,9 @@ class ManagementPanelPageOfImagesImport( ManagementPanel ):
     
     def EventKeyDown( self, event ):
         
-        if event.KeyCode in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+        
+        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
             
             page_url = self._page_url_input.GetValue()
             
@@ -2774,20 +2148,6 @@ class ManagementPanelPageOfImagesImport( ManagementPanel ):
         self._Update()
         
     
-    def EventSeedCache( self, event ):
-        
-        seed_cache = self._page_of_images_import.GetSeedCache()
-        
-        title = 'file import status'
-        frame_key = 'file_import_status'
-        
-        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
-        
-        panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( frame, self._controller, seed_cache )
-        
-        frame.SetPanel( panel )
-        
-    
     def SetSearchFocus( self, page_key ):
         
         if page_key == self._page_key: self._page_url_input.SetFocus()
@@ -2812,23 +2172,56 @@ class ManagementPanelPetitions( ManagementPanel ):
         ManagementPanel.__init__( self, parent, page, controller, management_controller )
         
         self._service = self._controller.GetServicesManager().GetService( self._petition_service_key )
-        self._can_ban = self._service.GetInfo( 'account' ).HasPermission( HC.MANAGE_USERS )
+        self._can_ban = self._service.HasPermission( HC.CONTENT_TYPE_ACCOUNTS, HC.PERMISSION_ACTION_OVERRULE )
         
-        self._num_petitions = None
+        service_type = self._service.GetServiceType()
+        
+        self._num_petition_info = None
         self._current_petition = None
         
         #
         
         self._petitions_info_panel = ClientGUICommon.StaticBox( self, 'petitions info' )
         
-        self._num_petitions_text = wx.StaticText( self._petitions_info_panel )
+        self._refresh_num_petitions_button = ClientGUICommon.BetterButton( self._petitions_info_panel, 'refresh counts', self._FetchNumPetitions )
         
-        refresh_num_petitions = wx.Button( self._petitions_info_panel, label = 'refresh' )
-        refresh_num_petitions.Bind( wx.EVT_BUTTON, self.EventRefreshNumPetitions )
+        self._petition_types_to_controls = {}
         
-        self._get_petition = wx.Button( self._petitions_info_panel, label = 'get petition' )
-        self._get_petition.Bind( wx.EVT_BUTTON, self.EventGetPetition )
-        self._get_petition.Disable()
+        content_type_hboxes = []
+        
+        petition_types = []
+        
+        if service_type == HC.FILE_REPOSITORY:
+            
+            petition_types.append( ( HC.CONTENT_TYPE_FILES, HC.CONTENT_STATUS_PETITIONED ) )
+            
+        elif service_type == HC.TAG_REPOSITORY:
+            
+            petition_types.append( ( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_STATUS_PETITIONED ) )
+            petition_types.append( ( HC.CONTENT_TYPE_TAG_PARENTS, HC.CONTENT_STATUS_PENDING ) )
+            petition_types.append( ( HC.CONTENT_TYPE_TAG_PARENTS, HC.CONTENT_STATUS_PETITIONED ) )
+            petition_types.append( ( HC.CONTENT_TYPE_TAG_SIBLINGS, HC.CONTENT_STATUS_PENDING ) )
+            petition_types.append( ( HC.CONTENT_TYPE_TAG_SIBLINGS, HC.CONTENT_STATUS_PETITIONED ) )
+            
+        
+        for ( content_type, status ) in petition_types:
+            
+            func = HydrusData.Call( self._FetchPetition, content_type, status )
+            
+            st = wx.StaticText( self._petitions_info_panel )
+            button = ClientGUICommon.BetterButton( self._petitions_info_panel, 'fetch ' + HC.content_status_string_lookup[ status ] + ' ' + HC.content_type_string_lookup[ content_type ] + ' petition', func )
+            
+            button.Disable()
+            
+            self._petition_types_to_controls[ ( content_type, status ) ] = ( st, button )
+            
+            hbox = wx.BoxSizer( wx.HORIZONTAL )
+            
+            hbox.AddF( st, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
+            hbox.AddF( button, CC.FLAGS_VCENTER )
+            
+            content_type_hboxes.append( hbox )
+            
         
         #
         
@@ -2838,6 +2231,9 @@ class ManagementPanelPetitions( ManagementPanel ):
         
         self._reason_text = ClientGUICommon.SaneMultilineTextCtrl( self._petition_panel, style = wx.TE_READONLY )
         self._reason_text.SetMinSize( ( -1, 80 ) )
+        
+        check_all = ClientGUICommon.BetterButton( self._petition_panel, 'check all', self._CheckAll )
+        check_none = ClientGUICommon.BetterButton( self._petition_panel, 'check none', self._CheckNone )
         
         self._contents = wx.CheckListBox( self._petition_panel, size = ( -1, 300 ) )
         self._contents.Bind( wx.EVT_LISTBOX_DCLICK, self.EventContentDoubleClick )
@@ -2854,17 +2250,22 @@ class ManagementPanelPetitions( ManagementPanel ):
         
         #
         
-        num_petitions_hbox = wx.BoxSizer( wx.HORIZONTAL )
+        self._petitions_info_panel.AddF( self._refresh_num_petitions_button, CC.FLAGS_EXPAND_PERPENDICULAR )
         
-        num_petitions_hbox.AddF( self._num_petitions_text, CC.FLAGS_EXPAND_BOTH_WAYS )
-        num_petitions_hbox.AddF( refresh_num_petitions, CC.FLAGS_VCENTER )
+        for hbox in content_type_hboxes:
+            
+            self._petitions_info_panel.AddF( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            
         
-        self._petitions_info_panel.AddF( num_petitions_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        self._petitions_info_panel.AddF( self._get_petition, CC.FLAGS_EXPAND_PERPENDICULAR )
+        check_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        self._petition_panel.AddF( wx.StaticText( self._petition_panel, label = 'Double click a petition to see its files, if it has them.' ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        check_hbox.AddF( check_all, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
+        check_hbox.AddF( check_none, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
+        
+        self._petition_panel.AddF( wx.StaticText( self._petition_panel, label = 'Double-click a petition to see its files, if it has them.' ), CC.FLAGS_EXPAND_PERPENDICULAR )
         self._petition_panel.AddF( self._action_text, CC.FLAGS_EXPAND_PERPENDICULAR )
         self._petition_panel.AddF( self._reason_text, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._petition_panel.AddF( check_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         self._petition_panel.AddF( self._contents, CC.FLAGS_EXPAND_BOTH_WAYS )
         self._petition_panel.AddF( self._process, CC.FLAGS_EXPAND_PERPENDICULAR )
         self._petition_panel.AddF( self._modify_petitioner, CC.FLAGS_EXPAND_PERPENDICULAR )
@@ -2881,19 +2282,62 @@ class ManagementPanelPetitions( ManagementPanel ):
         
         self.SetSizer( vbox )
         
-        wx.CallAfter( self.EventRefreshNumPetitions, None )
+        wx.CallAfter( self._FetchNumPetitions )
         
         self._controller.sub( self, 'RefreshQuery', 'refresh_query' )
         
     
-    def _DrawCurrentPetition( self ):
+    def _BreakApprovedContentsIntoChunks( self, approved_contents ):
         
-        hashes = []
+        chunks_of_approved_contents = []
+        chunk_of_approved_contents = []
+        weight = 0
+        
+        for content in approved_contents:
+            
+            chunk_of_approved_contents.append( content )
+            
+            weight += content.GetVirtualWeight()
+            
+            if weight > 200:
+                
+                chunks_of_approved_contents.append( chunk_of_approved_contents )
+                
+                weight = 0
+                
+            
+        
+        if len( chunk_of_approved_contents ) > 0:
+            
+            chunks_of_approved_contents.append( chunk_of_approved_contents )
+            
+        
+        return chunks_of_approved_contents
+        
+
+    def _CheckAll( self ):
+        
+        for i in range( self._contents.GetCount() ):
+            
+            self._contents.Check( i )
+            
+        
+    
+    def _CheckNone( self ):
+        
+        for i in range( self._contents.GetCount() ):
+            
+            self._contents.Check( i, False )
+            
+        
+    
+    def _DrawCurrentPetition( self ):
         
         if self._current_petition is None:
             
             self._action_text.SetLabelText( '' )
             self._reason_text.SetValue( '' )
+            self._reason_text.SetBackgroundColour( wx.SystemSettings.GetColour( wx.SYS_COLOUR_WINDOW ) )
             self._contents.Clear()
             self._process.Disable()
             
@@ -2912,6 +2356,8 @@ class ManagementPanelPetitions( ManagementPanel ):
             reason = self._current_petition.GetReason()
             
             self._reason_text.SetValue( reason )
+            
+            self._reason_text.SetBackgroundColour( action_colour )
             
             contents = self._current_petition.GetContents()
             
@@ -2935,6 +2381,96 @@ class ManagementPanelPetitions( ManagementPanel ):
         self._ShowHashes( [] )
         
     
+    def _DrawNumPetitions( self ):
+        
+        new_petition_fetched = False
+        
+        for ( content_type, status, count ) in self._num_petition_info:
+            
+            petition_type = ( content_type, status )
+            
+            if petition_type in self._petition_types_to_controls:
+                
+                ( st, button ) = self._petition_types_to_controls[ petition_type ]
+                
+                st.SetLabelText( HydrusData.ConvertIntToPrettyString( count ) + ' petitions' )
+                
+                if count > 0:
+                    
+                    button.Enable()
+                    
+                    if self._current_petition is None and not new_petition_fetched:
+                        
+                        self._FetchPetition( content_type, status )
+                        
+                        new_petition_fetched = True
+                        
+                    
+                else:
+                    
+                    button.Disable()
+                    
+                
+            
+        
+    
+    def _FetchNumPetitions( self ):
+        
+        def do_it():
+            
+            try:
+                
+                response = self._service.Request( HC.GET, 'num_petitions' )
+                
+                self._num_petition_info = response[ 'num_petitions' ]
+                
+                wx.CallAfter( self._DrawNumPetitions )
+                
+            finally:
+                
+                self._refresh_num_petitions_button.SetLabelText( 'refresh counts' )
+                
+            
+        
+        self._refresh_num_petitions_button.SetLabelText( u'Fetching\u2026' )
+        
+        self._controller.CallToThread( do_it )
+        
+    
+    def _FetchPetition( self, content_type, status ):
+        
+        ( st, button ) = self._petition_types_to_controls[ ( content_type, status ) ]
+        
+        def do_it():
+            
+            try:
+                
+                response = self._service.Request( HC.GET, 'petition', { 'content_type' : content_type, 'status' : status } )
+                
+                self._current_petition = response[ 'petition' ]
+                
+                wx.CallAfter( self._DrawCurrentPetition )
+                
+            finally:
+                
+                wx.CallAfter( button.Enable )
+                wx.CallAfter( button.SetLabelText, 'fetch ' + HC.content_status_string_lookup[ status ] + ' ' + HC.content_type_string_lookup[ content_type ] + ' petition' )
+                
+            
+        
+        if self._current_petition is not None:
+            
+            self._current_petition = None
+            
+            self._DrawCurrentPetition()
+            
+        
+        button.Disable()
+        button.SetLabelText( u'Fetching\u2026' )
+        
+        self._controller.CallToThread( do_it )
+        
+    
     def _ShowHashes( self, hashes ):
         
         file_service_key = self._management_controller.GetKey( 'file_service' )
@@ -2948,14 +2484,6 @@ class ManagementPanelPetitions( ManagementPanel ):
         panel.Sort( self._page_key, self._sort_by.GetChoice() )
         
         self._controller.pub( 'swap_media_panel', self._page_key, panel )
-        
-    
-    def _DrawNumPetitions( self ):
-        
-        self._num_petitions_text.SetLabelText( HydrusData.ConvertIntToPrettyString( self._num_petitions ) + ' petitions' )
-        
-        if self._num_petitions > 0: self._get_petition.Enable()
-        else: self._get_petition.Disable()
         
     
     def EventContentDoubleClick( self, event ):
@@ -2975,6 +2503,84 @@ class ManagementPanelPetitions( ManagementPanel ):
     
     def EventProcess( self, event ):
         
+        def do_it( approved_contents, denied_contents, petition ):
+            
+            try:
+                
+                num_done = 0
+                num_to_do = len( approved_contents )
+                
+                if len( denied_contents ) > 0:
+                    
+                    num_to_do += 1
+                    
+                
+                if num_to_do > 1:
+                    
+                    job_key = ClientThreading.JobKey( cancellable = True )
+                    
+                    job_key.SetVariable( 'popup_title', 'comitting petitions' )
+                    
+                    HydrusGlobals.client_controller.pub( 'message', job_key )
+                    
+                else:
+                    
+                    job_key = None
+                    
+                
+                chunks_of_approved_contents = self._BreakApprovedContentsIntoChunks( approved_contents )
+                
+                for chunk_of_approved_contents in chunks_of_approved_contents:
+                    
+                    if job_key is not None:
+                        
+                        ( i_paused, should_quit ) = job_key.WaitIfNeeded()
+                        
+                        if should_quit:
+                            
+                            return
+                            
+                        
+                        job_key.SetVariable( 'popup_gauge_1', ( num_done, num_to_do ) )
+                        
+                    
+                    ( update, content_updates ) = petition.GetApproval( chunk_of_approved_contents )
+                    
+                    self._service.Request( HC.POST, 'update', { 'client_to_server_update' : update } )
+                    
+                    self._controller.Write( 'content_updates', { self._petition_service_key : content_updates } )
+                    
+                    num_done += len( chunk_of_approved_contents )
+                    
+                
+                if len( denied_contents ) > 0:
+                    
+                    if job_key is not None:
+                        
+                        ( i_paused, should_quit ) = job_key.WaitIfNeeded()
+                        
+                        if should_quit:
+                            
+                            return
+                            
+                        
+                    
+                    update = petition.GetDenial( denied_contents )
+                    
+                    self._service.Request( HC.POST, 'update', { 'client_to_server_update' : update } )
+                    
+                
+            finally:
+                
+                if job_key is not None:
+                    
+                    job_key.Delete()
+                    
+                
+                wx.CallAfter( self._FetchNumPetitions )
+                
+            
+        
         approved_contents = []
         denied_contents = []
         
@@ -2992,86 +2598,21 @@ class ManagementPanelPetitions( ManagementPanel ):
                 
             
         
-        if len( approved_contents ) > 0:
-            
-            for chunk_of_approved_contents in HydrusData.SplitListIntoChunks( approved_contents, 10 ):
-                
-                update = self._current_petition.GetApproval( chunk_of_approved_contents )
-                
-                self._service.Request( HC.POST, 'content_update_package', { 'update' : update } )
-                
-                self._controller.Write( 'content_updates', { self._petition_service_key : update.GetContentUpdates( for_client = True ) } )
-                
-            
-        
-        if len( denied_contents ) > 0:
-            
-            for chunk_of_denied_contents in HydrusData.SplitListIntoChunks( denied_contents, 10 ):
-                
-                update = self._current_petition.GetDenial( chunk_of_denied_contents )
-                
-                self._service.Request( HC.POST, 'content_update_package', { 'update' : update } )
-                
-                self._controller.Write( 'content_updates', { self._petition_service_key : update.GetContentUpdates( for_client = True ) } )
-                
-            
+        HydrusGlobals.client_controller.CallToThread( do_it, approved_contents, denied_contents, self._current_petition )
         
         self._current_petition = None
         
         self._DrawCurrentPetition()
-        
-        self.EventRefreshNumPetitions( event )
-        
-    
-    def EventGetPetition( self, event ):
-        
-        def do_it():
-            
-            self._current_petition = self._service.Request( HC.GET, 'petition' )
-            
-            wx.CallAfter( self._DrawCurrentPetition )
-            
-        
-        self._current_petition = None
-        
-        self._DrawCurrentPetition()
-        
-        self._controller.CallToThread( do_it )
         
     
     def EventModifyPetitioner( self, event ):
         
-        with ClientGUIDialogs.DialogModifyAccounts( self, self._petition_service_key, ( self._current_petition.GetPetitionerIdentifier(), ) ) as dlg: dlg.ShowModal()
+        wx.MessageBox( 'modify users does not work yet!' )
         
-    
-    def EventRefreshNumPetitions( self, event ):
-        
-        def do_it():
+        with ClientGUIDialogs.DialogModifyAccounts( self, self._petition_service_key, ( self._current_petition.GetPetitionerAccount(), ) ) as dlg:
             
-            try:
-                
-                response = self._service.Request( HC.GET, 'num_petitions' )
-                
-                self._num_petitions = response[ 'num_petitions' ]
-                
-                wx.CallAfter( self._DrawNumPetitions )
-                
-                if self._num_petitions > 0 and self._current_petition is None:
-                    
-                    wx.CallAfter( self.EventGetPetition, None )
-                    
-                
-            except Exception as e:
-                
-                wx.CallAfter( self._num_petitions_text.SetLabel, 'Error' )
-                
-                raise
-                
+            dlg.ShowModal()
             
-        
-        self._num_petitions_text.SetLabelText( u'Fetching\u2026' )
-        
-        self._controller.CallToThread( do_it )
         
     
     def RefreshQuery( self, page_key ):
@@ -3099,7 +2640,7 @@ class ManagementPanelQuery( ManagementPanel ):
             
             self._search_panel = ClientGUICommon.StaticBox( self, 'search' )
             
-            self._current_predicates_box = ClientGUICommon.ListBoxTagsPredicates( self._search_panel, self._page_key, initial_predicates )
+            self._current_predicates_box = ClientGUIListBoxes.ListBoxTagsActiveSearchPredicates( self._search_panel, self._page_key, initial_predicates )
             
             synchronised = self._management_controller.GetVariable( 'synchronised' )
             
@@ -3176,7 +2717,7 @@ class ManagementPanelQuery( ManagementPanel ):
         
         if self._search_enabled:
             
-            t = ClientGUICommon.ListBoxTagsSelectionManagementPanel( tags_box, self._page_key, predicates_callable = self._current_predicates_box.GetPredicates )
+            t = ClientGUIListBoxes.ListBoxTagsSelectionManagementPanel( tags_box, self._page_key, predicates_callable = self._current_predicates_box.GetPredicates )
             
             file_search_context = self._management_controller.GetVariable( 'file_search_context' )
             
@@ -3186,7 +2727,7 @@ class ManagementPanelQuery( ManagementPanel ):
             
         else:
             
-            t = ClientGUICommon.ListBoxTagsSelectionManagementPanel( tags_box, self._page_key )
+            t = ClientGUIListBoxes.ListBoxTagsSelectionManagementPanel( tags_box, self._page_key )
             
         
         tags_box.SetTagsBox( t )
@@ -3294,7 +2835,7 @@ class ManagementPanelThreadWatcherImport( ManagementPanel ):
         
         ( times_to_check, check_period ) = HC.options[ 'thread_checker_timings' ]
         
-        self._thread_times_to_check = wx.SpinCtrl( self._options_panel, size = ( 60, -1 ), min = 0, max = 100 )
+        self._thread_times_to_check = wx.SpinCtrl( self._options_panel, size = ( 80, -1 ), min = 0, max = 65536 )
         self._thread_times_to_check.SetValue( times_to_check )
         self._thread_times_to_check.Bind( wx.EVT_SPINCTRL, self.EventTimesToCheck )
         
@@ -3307,8 +2848,7 @@ class ManagementPanelThreadWatcherImport( ManagementPanel ):
         
         self._waiting_politely_indicator = ClientGUICommon.GetWaitingPolitelyControl( self._options_panel, self._page_key )
         
-        self._seed_cache_button = wx.BitmapButton( self._options_panel, bitmap = CC.GlobalBMPs.seed_cache )
-        self._seed_cache_button.Bind( wx.EVT_BUTTON, self.EventSeedCache )
+        self._seed_cache_button = ClientGUICommon.BetterBitmapButton( self._options_panel, CC.GlobalBMPs.seed_cache, self._SeedCache )
         self._seed_cache_button.SetToolTipString( 'open detailed file import status' )
         
         self._pause_button = wx.BitmapButton( self._options_panel, bitmap = CC.GlobalBMPs.pause )
@@ -3378,8 +2918,15 @@ class ManagementPanelThreadWatcherImport( ManagementPanel ):
         
         def file_download_hook( gauge_range, gauge_value ):
             
-            self._file_gauge.SetRange( gauge_range )
-            self._file_gauge.SetValue( gauge_value )
+            try:
+                
+                self._file_gauge.SetRange( gauge_range )
+                self._file_gauge.SetValue( gauge_value )
+                
+            except wx.PyDeadObjectError:
+                
+                pass
+                
             
         
         self._thread_watcher_import.SetDownloadHook( file_download_hook )
@@ -3401,6 +2948,20 @@ class ManagementPanelThreadWatcherImport( ManagementPanel ):
             
         
         self._Update()
+        
+    
+    def _SeedCache( self ):
+        
+        seed_cache = self._thread_watcher_import.GetSeedCache()
+        
+        title = 'file import status'
+        frame_key = 'file_import_status'
+        
+        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
+        
+        panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( frame, self._controller, seed_cache )
+        
+        frame.SetPanel( panel )
         
     
     def _Update( self ):
@@ -3518,7 +3079,9 @@ class ManagementPanelThreadWatcherImport( ManagementPanel ):
     
     def EventKeyDown( self, event ):
         
-        if event.KeyCode in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+        
+        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
             
             thread_url = self._thread_input.GetValue()
             
@@ -3541,7 +3104,10 @@ class ManagementPanelThreadWatcherImport( ManagementPanel ):
             
             self._thread_watcher_import.Start( self._page_key )
             
-        else: event.Skip()
+        else:
+            
+            event.Skip()
+            
         
     
     def EventMenu( self, event ):
@@ -3573,20 +3139,6 @@ class ManagementPanelThreadWatcherImport( ManagementPanel ):
         self._thread_watcher_import.PausePlay()
         
         self._Update()
-        
-    
-    def EventSeedCache( self, event ):
-        
-        seed_cache = self._thread_watcher_import.GetSeedCache()
-        
-        title = 'file import status'
-        frame_key = 'file_import_status'
-        
-        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
-        
-        panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( frame, self._controller, seed_cache )
-        
-        frame.SetPanel( panel )
         
     
     def EventTimesToCheck( self, event ):
@@ -3651,8 +3203,7 @@ class ManagementPanelURLsImport( ManagementPanel ):
         
         self._waiting_politely_indicator = ClientGUICommon.GetWaitingPolitelyControl( self._url_panel, self._page_key )
         
-        self._seed_cache_button = wx.BitmapButton( self._url_panel, bitmap = CC.GlobalBMPs.seed_cache )
-        self._seed_cache_button.Bind( wx.EVT_BUTTON, self.EventSeedCache )
+        self._seed_cache_button = ClientGUICommon.BetterBitmapButton( self._url_panel, CC.GlobalBMPs.seed_cache, self._SeedCache )
         self._seed_cache_button.SetToolTipString( 'open detailed file import status' )
         
         self._url_input = wx.TextCtrl( self._url_panel, style = wx.TE_PROCESS_ENTER )
@@ -3706,8 +3257,15 @@ class ManagementPanelURLsImport( ManagementPanel ):
         
         def file_download_hook( gauge_range, gauge_value ):
             
-            self._file_gauge.SetRange( gauge_range )
-            self._file_gauge.SetValue( gauge_value )
+            try:
+                
+                self._file_gauge.SetRange( gauge_range )
+                self._file_gauge.SetValue( gauge_value )
+                
+            except wx.PyDeadObjectError:
+                
+                pass
+                
             
         
         self._urls_import.SetDownloadHook( file_download_hook )
@@ -3719,6 +3277,20 @@ class ManagementPanelURLsImport( ManagementPanel ):
         self._Update()
         
         self._urls_import.Start( self._page_key )
+        
+    
+    def _SeedCache( self ):
+        
+        seed_cache = self._urls_import.GetSeedCache()
+        
+        title = 'file import status'
+        frame_key = 'file_import_status'
+        
+        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
+        
+        panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( frame, self._controller, seed_cache )
+        
+        frame.SetPanel( panel )
         
     
     def _Update( self ):
@@ -3772,7 +3344,9 @@ class ManagementPanelURLsImport( ManagementPanel ):
     
     def EventKeyDown( self, event ):
         
-        if event.KeyCode in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+        
+        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
             
             url = self._url_input.GetValue()
             
@@ -3851,20 +3425,6 @@ class ManagementPanelURLsImport( ManagementPanel ):
         self._urls_import.PausePlay()
         
         self._Update()
-        
-    
-    def EventSeedCache( self, event ):
-        
-        seed_cache = self._urls_import.GetSeedCache()
-        
-        title = 'file import status'
-        frame_key = 'file_import_status'
-        
-        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
-        
-        panel = ClientGUIScrolledPanelsEdit.EditSeedCachePanel( frame, self._controller, seed_cache )
-        
-        frame.SetPanel( panel )
         
     
     def SetSearchFocus( self, page_key ):
