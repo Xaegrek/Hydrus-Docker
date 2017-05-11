@@ -1,14 +1,23 @@
 FROM armhf/python:2.7-alpine
 
+COPY tmp/qemu-arm-static /usr/bin/qemu-arm-static
+
 WORKDIR /hydrus/
 
-RUN apk add --update build-base libjpeg-turbo jpeg-dev linux-headers zlib-dev libffi libffi-dev openssl-dev \
+RUN apk add --update build-base libjpeg-turbo jpeg-dev linux-headers zlib-dev libffi libffi-dev openssl-dev ffmpeg \
     && ln -s /usr/include/locale.h /usr/include/xlocale.h \
     && pip install pyyaml beautifulsoup4 lz4 psutil Send2Trash twisted hsaudiotag PyPDF2 Pillow numpy pycrypto PyOpenSSL service_identity \
     && apk del build-base jpeg-dev linux-headers zlib-dev libffi-dev openssl-dev \
     && rm -rf ~/.cache
 
-COPY ../ /hydrus/
+COPY ./bin/ /hydrus/bin/
+COPY ./db/ /hydrus/db/
+COPY ./help/ /hydrus/help/
+COPY ./include/ /hydrus/include/
+COPY ./lib/ /hydrus/lib/
+COPY ./static/ /hydrus/static/
+COPY ./client.py /hydrus/client.py
+COPY ./server.py /hydrus/server.py
 
 VOLUME /hydrus/db/
 

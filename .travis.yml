@@ -1,0 +1,18 @@
+sudo: required
+services:
+- docker
+language: bash
+env:
+- SUFFIX=
+- SUFFIX=-arm
+script:
+- if [ -z "$TRAVIS_TAG" ]; then exit 0; fi
+- ./build${suffix}.sh
+- docker build -f Dockerfile${SUFFIX} -t blott/hydrus:build .
+- >
+  if [ "$TRAVIS_BRANCH" == "master" ]; then
+    docker login -u="$DOCKER_USER" -p="$DOCKER_PASS"
+    TAG=${TRAVIS_TAG}${SUFFIX}
+    docker tag blott/hydrus:build blott/hydrus:$TAG
+    docker push blott/hydrus:$TAG
+  fi
