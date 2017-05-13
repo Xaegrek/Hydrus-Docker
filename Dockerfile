@@ -2,9 +2,9 @@ FROM python:2.7-alpine
 
 WORKDIR /hydrus/
 
-RUN apk add --update build-base libjpeg-turbo jpeg-dev linux-headers zlib-dev libffi libffi-dev openssl-dev ffmpeg \
+RUN apk add --update build-base libjpeg-turbo jpeg-dev linux-headers zlib-dev libffi libffi-dev openssl-dev ffmpeg py-numpy \
     && ln -s /usr/include/locale.h /usr/include/xlocale.h \
-    && pip install pyyaml beautifulsoup4 lz4 psutil Send2Trash twisted hsaudiotag PyPDF2 Pillow numpy pycrypto PyOpenSSL service_identity \
+    && pip install pyyaml beautifulsoup4 lz4 psutil Send2Trash twisted hsaudiotag PyPDF2 Pillow pycrypto PyOpenSSL service_identity \
     && apk del build-base jpeg-dev linux-headers zlib-dev libffi-dev openssl-dev \
     && rm -rf ~/.cache
 
