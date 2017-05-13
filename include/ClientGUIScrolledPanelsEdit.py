@@ -1,4 +1,5 @@
 import ClientConstants as CC
+import ClientData
 import ClientDefaults
 import ClientDownloading
 import ClientImporting
@@ -10,7 +11,7 @@ import ClientGUIScrolledPanels
 import ClientGUITopLevelWindows
 import HydrusConstants as HC
 import HydrusData
-import HydrusGlobals
+import HydrusGlobals as HG
 import HydrusNetwork
 import HydrusSerialisable
 import wx
@@ -132,6 +133,221 @@ class EditAccountTypePanel( ClientGUIScrolledPanels.EditPanel ):
         return HydrusNetwork.AccountType.GenerateAccountTypeFromParameters( self._account_type_key, title, permissions, bandwidth_rules )
         
     
+class EditDuplicateActionOptionsPanel( ClientGUIScrolledPanels.EditPanel ):
+    
+    def __init__( self, parent, duplicate_action, duplicate_action_options ):
+        
+        ClientGUIScrolledPanels.EditPanel.__init__( self, parent )
+        
+        self._duplicate_action = duplicate_action
+        
+        self._service_actions = ClientGUICommon.SaneListCtrl( self, 120, [ ( 'service name', -1 ), ( 'action', 240 ) ], delete_key_callback = self._Delete, activation_callback = self._Edit )
+        
+        self._service_actions.SetMinSize( ( 320, 120 ) )
+        
+        add_button = ClientGUICommon.BetterButton( self, 'add', self._Add )
+        edit_button = ClientGUICommon.BetterButton( self, 'edit', self._Edit )
+        delete_button = ClientGUICommon.BetterButton( self, 'delete', self._Delete )
+        
+        self._delete_second_file = wx.CheckBox( self, label = 'delete worse file' )
+        
+        #
+        
+        ( service_actions, delete_second_file ) = duplicate_action_options.ToTuple()
+        
+        services_manager = HG.client_controller.GetServicesManager()
+        
+        for ( service_key, action ) in service_actions:
+            
+            if services_manager.ServiceExists( service_key ):
+                
+                sort_tuple = ( service_key, action )
+                
+                display_tuple = self._GetDisplayTuple( sort_tuple )
+                
+                self._service_actions.Append( display_tuple, sort_tuple )
+                
+            
+        
+        self._delete_second_file.SetValue( delete_second_file )
+        
+        #
+        
+        if self._duplicate_action != HC.DUPLICATE_BETTER:
+            
+            self._delete_second_file.Hide()
+            edit_button.Hide()
+            
+        
+        button_hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        button_hbox.AddF( add_button, CC.FLAGS_VCENTER )
+        button_hbox.AddF( edit_button, CC.FLAGS_VCENTER )
+        button_hbox.AddF( delete_button, CC.FLAGS_VCENTER )
+        
+        vbox = wx.BoxSizer( wx.VERTICAL )
+        
+        vbox.AddF( self._service_actions, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.AddF( button_hbox, CC.FLAGS_BUTTON_SIZER )
+        vbox.AddF( self._delete_second_file, CC.FLAGS_LONE_BUTTON )
+        
+        self.SetSizer( vbox )
+        
+    
+    def _Add( self ):
+        
+        existing_service_keys = set()
+        
+        for ( service_key, action ) in self._service_actions.GetClientData():
+            
+            existing_service_keys.add( service_key )
+            
+        
+        services_manager = HG.client_controller.GetServicesManager()
+        
+        choice_tuples = []
+        
+        for service in services_manager.GetServices( [ HC.LOCAL_TAG, HC.TAG_REPOSITORY, HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ] ):
+            
+            service_key = service.GetServiceKey()
+            
+            if service_key not in existing_service_keys:
+                
+                name = service.GetName()
+                
+                choice_tuples.append( ( name, service_key ) )
+                
+            
+        
+        if len( choice_tuples ) == 0:
+            
+            wx.MessageBox( 'You have no more tag or rating services to add! Try editing the existing ones instead!' )
+            
+        else:
+            
+            with ClientGUIDialogs.DialogSelectFromList( self, 'select service', choice_tuples ) as dlg_1:
+                
+                if dlg_1.ShowModal() == wx.ID_OK:
+                    
+                    service_key = dlg_1.GetChoice()
+                    
+                    if self._duplicate_action == HC.DUPLICATE_BETTER:
+                        
+                        service = services_manager.GetService( service_key )
+                        
+                        if service.GetServiceType() == HC.TAG_REPOSITORY:
+                            
+                            possible_actions = [ HC.CONTENT_MERGE_ACTION_COPY, HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE ]
+                            
+                        else:
+                            
+                            possible_actions = [ HC.CONTENT_MERGE_ACTION_COPY, HC.CONTENT_MERGE_ACTION_MOVE, HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE ]
+                            
+                        
+                        choice_tuples = [ ( HC.content_merge_string_lookup[ action ], action ) for action in possible_actions ]
+                        
+                        with ClientGUIDialogs.DialogSelectFromList( self, 'select action', choice_tuples ) as dlg_2:
+                            
+                            if dlg_2.ShowModal() == wx.ID_OK:
+                                
+                                action = dlg_2.GetChoice()
+                                
+                            else:
+                                
+                                return
+                                
+                            
+                        
+                    else:
+                        
+                        action = HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE
+                        
+                    
+                    sort_tuple = ( service_key, action )
+                    
+                    display_tuple = self._GetDisplayTuple( sort_tuple )
+                    
+                    self._service_actions.Append( display_tuple, sort_tuple )
+                    
+                
+            
+        
+    
+    def _Delete( self ):
+        
+        with ClientGUIDialogs.DialogYesNo( self, 'Remove all selected?' ) as dlg:
+            
+            if dlg.ShowModal() == wx.ID_YES:
+                
+                self._service_actions.RemoveAllSelected()
+                
+            
+        
+    
+    def _Edit( self ):
+        
+        all_selected = self._service_actions.GetAllSelected()
+        
+        for index in all_selected:
+            
+            ( service_key, action ) = self._service_actions.GetClientData( index )
+            
+            if self._duplicate_action == HC.DUPLICATE_BETTER:
+                
+                possible_actions = [ HC.CONTENT_MERGE_ACTION_COPY, HC.CONTENT_MERGE_ACTION_MOVE, HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE ]
+                
+                choice_tuples = [ ( HC.content_merge_string_lookup[ action ], action ) for action in possible_actions ]
+                
+                with ClientGUIDialogs.DialogSelectFromList( self, 'select action', choice_tuples ) as dlg_2:
+                    
+                    if dlg_2.ShowModal() == wx.ID_OK:
+                        
+                        action = dlg_2.GetChoice()
+                        
+                    else:
+                        
+                        break
+                        
+                    
+                
+            else: # This shouldn't get fired because the edit button is hidden, but w/e
+                
+                action = HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE
+                
+            
+            sort_tuple = ( service_key, action )
+            
+            display_tuple = self._GetDisplayTuple( sort_tuple )
+            
+            self._service_actions.UpdateRow( index, display_tuple, sort_tuple )
+            
+        
+    
+    def _GetDisplayTuple( self, sort_tuple ):
+        
+        ( service_key, action ) = sort_tuple
+        
+        services_manager = HG.client_controller.GetServicesManager()
+        
+        service = services_manager.GetService( service_key )
+        
+        name = service.GetName()
+        
+        pretty_action = HC.content_merge_string_lookup[ action ]
+        
+        return ( name, pretty_action )
+        
+    
+    def GetValue( self ):
+        
+        service_actions = self._service_actions.GetClientData()
+        delete_second_file = self._delete_second_file.GetValue()
+        
+        duplicate_action_options = ClientData.DuplicateActionOptions( service_actions, delete_second_file )
+        
+        return duplicate_action_options
+        
+    
 class EditFrameLocationPanel( ClientGUIScrolledPanels.EditPanel ):
     
     def __init__( self, parent, info ):
@@ -190,7 +406,7 @@ class EditFrameLocationPanel( ClientGUIScrolledPanels.EditPanel ):
         
         text = 'Setting frame location info for ' + name + '.'
         
-        vbox.AddF( wx.StaticText( self, label = text ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.AddF( ClientGUICommon.BetterStaticText( self, text ), CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._remember_size, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._remember_position, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._last_size, CC.FLAGS_EXPAND_PERPENDICULAR )
@@ -312,7 +528,7 @@ class EditMediaViewOptionsPanel( ClientGUIScrolledPanels.EditPanel ):
         
         text = 'Setting media view options for ' + HC.mime_string_lookup[ self._mime ] + '.'
         
-        vbox.AddF( wx.StaticText( self, label = text ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.AddF( ClientGUICommon.BetterStaticText( self, text ), CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( ClientGUICommon.WrapInText( self._media_show_action, self, 'media viewer show action:' ), CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         vbox.AddF( ClientGUICommon.WrapInText( self._preview_show_action, self, 'preview show action:' ), CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
@@ -343,7 +559,7 @@ class EditMediaViewOptionsPanel( ClientGUIScrolledPanels.EditPanel ):
             
             vbox.AddF( self._exact_zooms_only, CC.FLAGS_EXPAND_PERPENDICULAR )
             
-            vbox.AddF( wx.StaticText( self, label = 'Nearest neighbour is fast and ugly, 8x8 lanczos and area resampling are slower but beautiful.' ), CC.FLAGS_VCENTER )
+            vbox.AddF( ClientGUICommon.BetterStaticText( self, 'Nearest neighbour is fast and ugly, 8x8 lanczos and area resampling are slower but beautiful.' ), CC.FLAGS_VCENTER )
             
             vbox.AddF( ClientGUICommon.WrapInText( self._scale_up_quality, self, '>100% (interpolation) quality:' ), CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
             vbox.AddF( ClientGUICommon.WrapInText( self._scale_down_quality, self, '<100% (decimation) quality:' ), CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
@@ -419,7 +635,7 @@ class EditSeedCachePanel( ClientGUIScrolledPanels.EditPanel ):
         self._controller = controller
         self._seed_cache = seed_cache
         
-        self._text = wx.StaticText( self, label = 'initialising' )
+        self._text = ClientGUICommon.BetterStaticText( self, 'initialising' )
         self._seed_cache_control = ClientGUIControls.SeedCacheControl( self, self._seed_cache )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
@@ -524,7 +740,7 @@ class EditServersideService( ClientGUIScrolledPanels.EditPanel ):
             self._port = wx.SpinCtrl( self, min = 1, max = 65535 )
             self._upnp_port = ClientGUICommon.NoneableSpinCtrl( self, 'external upnp port', none_phrase = 'do not forward port', min = 1, max = 65535 )
             
-            self._bandwidth_tracker_st = wx.StaticText( self )
+            self._bandwidth_tracker_st = ClientGUICommon.BetterStaticText( self )
             
             #
             
@@ -648,7 +864,7 @@ class EditServersideService( ClientGUIScrolledPanels.EditPanel ):
             
             ClientGUICommon.StaticBox.__init__( self, parent, 'server-wide bandwidth' )
             
-            self._bandwidth_tracker_st = wx.StaticText( self )
+            self._bandwidth_tracker_st = ClientGUICommon.BetterStaticText( self )
             
             bandwidth_rules = dictionary[ 'server_bandwidth_rules' ]
             
@@ -678,6 +894,47 @@ class EditServersideService( ClientGUIScrolledPanels.EditPanel ):
             
             return dictionary_part
             
+        
+    
+class EditChooseMultiple( ClientGUIScrolledPanels.EditPanel ):
+    
+    def __init__( self, parent, choice_tuples ):
+        
+        ClientGUIScrolledPanels.EditPanel.__init__( self, parent )
+        
+        self._checkboxes = wx.CheckListBox( self )
+        
+        self._checkboxes.SetMinSize( ( 320, 420 ) )
+        
+        for ( i, ( label, data, selected ) ) in enumerate( choice_tuples ):
+            
+            self._checkboxes.Append( label, data )
+            
+            if selected:
+                
+                self._checkboxes.Check( i )
+                
+            
+        
+        #
+        
+        vbox = wx.BoxSizer( wx.VERTICAL )
+        
+        vbox.AddF( self._checkboxes, CC.FLAGS_EXPAND_BOTH_WAYS )
+        
+        self.SetSizer( vbox )
+        
+    
+    def GetValue( self ):
+        
+        datas = []
+        
+        for index in self._checkboxes.GetChecked():
+            
+            datas.append( self._checkboxes.GetClientData( index ) )
+            
+        
+        return datas
         
     
 class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
@@ -901,7 +1158,7 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
         
         ( namespaces, search_value ) = ClientDefaults.GetDefaultNamespacesAndSearchValue( gallery_identifier )
         
-        new_options = HydrusGlobals.client_controller.GetNewOptions()
+        new_options = HG.client_controller.GetNewOptions()
         
         import_tag_options = new_options.GetDefaultImportTagOptions( gallery_identifier )
         
@@ -1033,7 +1290,7 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
             
             if self._booru_selector.GetCount() == 0:
                 
-                boorus = HydrusGlobals.client_controller.Read( 'remote_boorus' )
+                boorus = HG.client_controller.Read( 'remote_boorus' )
                 
                 for ( name, booru ) in boorus.items(): self._booru_selector.Append( name, booru )
                 
@@ -1060,7 +1317,7 @@ class EditSubscriptionPanel( ClientGUIScrolledPanels.EditPanel ):
         
         with ClientGUITopLevelWindows.DialogEdit( self, 'file import status' ) as dlg:
             
-            panel = EditSeedCachePanel( dlg, HydrusGlobals.client_controller, dupe_seed_cache )
+            panel = EditSeedCachePanel( dlg, HG.client_controller, dupe_seed_cache )
             
             dlg.SetPanel( panel )
             

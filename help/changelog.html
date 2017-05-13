@@ -8,6 +8,143 @@
 		<div class="content">
 			<h3>changelog</h3>
 			<ul>
+				<li><h3>version 255</h3></li>
+				<ul>
+					<li>the duplicate filter now supports shift+left-click to drag, like the archive/delete filter (this remains hardcoded for now)</li>
+					<li>if a pair in the dupe filter has the same resolution, they will now maintain zoom and pan when switching back and forth (I might increase this to work for same ratio as well, let me know how it works in the real world)</li>
+					<li>the duplicate filter will show a lighter/darker background colour as you scroll the current pair</li>
+					<li>the way lighter/darker and alternate lighter/darker colours are calculated is now centralised and should be more reliable in edge cases</li>
+					<li>improved the dupe filter pair selection algorithm--it now chooses pairs more reliably under edge case conditions and prioritises decision-groups that have high potential decision value. it should also run a little faster</li>
+					<li>increased the dupe filter batch size to 250, let's see if it causes any problems</li>
+					<li>the close button on the dupe filter's top hover window now works</li>
+					<li>fixed the duplicate filter disappearing pairs that were skipped (meaning you could not go back to revisit them)</li>
+					<li>fixed a frequent deadobject error when the dupe filter closes</li>
+					<li>the shutdown 'maintenance due' test is less sensitive to dupe search tree rebalancing, which typically only takes half a second</li>
+					<li>the archive/delete filter now uses the new shortcuts system for both keyboard and mouse input</li>
+					<li>the archive/delete filter now intercepts archive or delete commands from different sources ('media' shortcuts, top hover frame button presses) more reliably and converts them into filter actions (hence moving on to the next file)</li>
+					<li>you can now move pages one to the left or right from their menu!</li>
+					<li>on the top-right hover window (and the background underneath), ratings are now on the top, and hence will always be in the same location as you scroll through your media regardless of known urls, remote location, or inbox status</li>
+					<li>autocomplete searches for tags with apostrophes, quote marks, braces, brackets and paretheses should be more reliable</li>
+					<li>urls are now associated with files through the same 'content' pipeline as tags and ratings and so on</li>
+					<li>gui-level media is now aware of the 'new url content update' event and will update and redraw itself appropriately</li>
+					<li>fixed deviant art nsfw parsing, but it might not hold for long. proper fix here is to wait for the downloader overhaul</li>
+					<li>networking engine now uses the 'requests' module's CA .pem (which the overhaul will be moving to anyway), which should reduce the frequency of ssl verify failures (gelbooru on the relatively new 'Let's Encrypt' CA had this problem for many users)</li>
+					<li>fixed the networking engine redirect parsing for gelbooru's unusual location header. unfortunately, gelbooru is still giving mickey-mouse garbage redirect urls from its main thumbnail pages, for which in this engine there is no immediate fix</li>
+					<li>neighbouring .txt tags will now be properly cleaned and sibling-collapsed in the path tagging dialog</li>
+					<li>neighbouring .txt tags will now be properly sibling-collapsed in the import folder workflow</li>
+					<li>making a media viewer borderless fullscreen and back will now recenter the media (previously, the current drag delta was not reset, so this frequently put media off-screen)</li>
+					<li>fixed a serious issue where the media viewer could lock the client up on opening with a video if its gui options set 'remember size' to false</li>
+					<li>tag import options objects will cleanse themselves of missing services on options save/client shutdown</li>
+					<li>manage tags now defaults to cross-referencing 'my files' on the 'local tags' domain, where 'remote' (i.e. deleted) files' tags are not useful</li>
+					<li>reduced memory use when importing large pngs with transparency</li>
+					<li>improved adminside petition processing gui reporting</li>
+					<li>servers will now cap the size of their mapping petitions so as not to ovewhelm the admin processing them (they now won't be both >20 tags and >1000 total row weight)</li>
+					<li>the media viewer's manage tags frame now listens for content updates from outside, so if you alter an in-view file's tags (such as with a shortcut key), the manage tags dialog will update as it happens</li>
+					<li>moved a number of the buttons on the top hover windows to the new unified internal command engine (which the new shortcut system also uses)</li>
+					<li>disk cache maintenance uses fewer resources but now occurs in the foreground (and should hence more reliably maintain the cache)</li>
+					<li>critical repository service id lookup errors will now automatically reset the repository's processing cache and better inform the user of what has happened. if you see this, please let me know the details and how this error fired in the real world</li>
+					<li>updated and reinstated the ipfs service panel in review services</li>
+					<li>updated some ipfs service code for the new service system</li>
+					<li>misc refactoring and cleanup</li>
+					<li>more cleanup and deletion of redundant old pubsub command code</li>
+					<li>updated ubuntu build machine to 17.04 and opencv 3.2</li>
+				</ul>
+				<li><h3>version 254</h3></li>
+				<ul>
+					<li>the duplicate processing page is now on the new page picker, under the new menu 'special'</li>
+					<li>improved the dupe pair selection algorithm--it should be faster for everyone</li>
+					<li>added help icon to dupe processing page--it can launch of a couple of message boxes with simple help, or you can open some html help</li>
+					<li>wrote some dupe processing html help!</li>
+					<li>the dupe processing page now refreshes its numbers when the dupe filter closes</li>
+					<li>the archive, inbox, delete, and undelete buttons on the duplicate filter's top hover frame now work</li>
+					<li>delete and shift+delete keys now work to delete/undelete a file in the duplicate filter</li>
+					<li>the mouse cursor now hides/shows on halt and new movement on the duplicate filter</li>
+					<li>you can now set 'content' shortcut actions (adding tags or ratings) to shortcuts in the 'media' reserved shortcut set (which are always on in media contexts), although they don't yet work in the thumbnail view yet</li>
+					<li>added a help button to the manage shortcuts panel</li>
+					<li>the edit shortcuts dialog will now now allow you to name a custom shortcut set to one of the reserved names and will explain the problem in a message box</li>
+					<li>import pages update more efficiently during periods of busy cpu</li>
+					<li>import pages will use less idle cpu time generally</li>
+					<li>import pages will adaptively use less cpu time when they are in the undo deletion queue or have no files to import</li>
+					<li>the page of images downloader will spam a little less idle time</li>
+					<li>the canvas background details and the top-right hover window will now only show 10 urls max</li>
+					<li>added a help button to the tag import options panel to better explain the namespace selection and explicit tags</li>
+					<li>added 'gui report mode' to the help menu, which will report key and mouse shortcut events and and matched commands</li>
+					<li>the adminside petition panel now sorts multiple petitions by number of files descending</li>
+					<li>misc improvements</li>
+					<li>misc help cleanup</li>
+					<li>misc fixes</li>
+				</ul>
+				<li><h3>version 253</h3></li>
+				<ul>
+					<li>created a new object to hold tag and rating merging and 'worse file' deletion options</li>
+					<li>wrote a dialog to edit this new object</li>
+					<li>established some simple defaults for this object for different duplicate status actions</li>
+					<li>the cog icon on the duplicates filter now lets you edit these defaults</li>
+					<li>the 'custom' duplicate filter action now works--first by asking you what status you want to set, and then by throwing up the new merge options dialog to tune it to whatever you like</li>
+					<li>wrote comprehensive unit tests for the new object</li>
+					<li>fixed the super slow dupe filter launch time problem</li>
+					<li>added a 'known urls' submenu to thumbnail and browser canvas right-click menu that lists all known urls for a file with an option to launch or copy the url</li>
+					<li>added known urls' hosts to the top-right canvas details background, just below where known file repos are listed</li>
+					<li>added the same known urls' hosts as clickable hyperlinks to the ratings hover window that pops over that top-right area</li>
+					<li>added 'delete from deleted files' action to the local tags's service-wide update panel. it will limit the deletion to mappings that are currently on files that have been previously completely physically deleted from the program</li>
+					<li>fixed namespace filtering on service-wide update panel</li>
+					<li>the hentai foundry downloader broke, so the update code will pause all hf subs. the solution is not trivial (it is part of the downloader overhaul), but I will try to fix it soon</li>
+					<li>debuted a new question-mark help button to better explain .txt tag importing on the manual import tagging dialog and the manage import folders dialog</li>
+					<li>fixed a small potential error due to bad parsing in the 'page of images' downloader</li>
+					<li>fixed a typo bug that stopped the 'delete shortcuts set' action working in the manage shortcuts dialog</li>
+					<li>I may have fixed an issue where the server was sometimes not shutting cleanly with a keyboardinterrupt</li>
+					<li>fixed the media embed button not reliably updating its thumbnail</li>
+					<li>fixed an issue where a dummy animation bar was displaying on embed buttons that showed static images that included transparency</li>
+					<li>the serious db missing tag and hash states will now not throw an error but will inform/spam the user (and hence not prohibit a boot)</li>
+					<li>attempting to open a second manage tags frame from the media viewer will now instead put the focus on the first (previously, multiple manage tags frames could be made)</li>
+					<li>misc db code cleanup that should result in faster result building in certain situations</li>
+					<li>misc improvements</li>
+					<li>misc layout fixes</li>
+				</ul>
+				<li><h3>version 252</h3></li>
+				<ul>
+					<li>the duplicate filter now processes pairs in batches and hence supports 'back' actions to revisit decisions. you will be prompted every fifty or so pairs to commit and checkpoint your progress</li>
+					<li>the duplicate filter now presents related pairs together, rather than picking at random</li>
+					<li>fixed a bug in duplicate filter shortcuts initialisation</li>
+					<li>simplified duplicate filter default shortcuts (these will be overwritten on update) to only use simple left- and right-click for 'this is better' and 'alternates', since those are by far the most common actions. middle-click now goes back, like the archive/delete filter</li>
+					<li>converted old 'main shortcuts' system to the new shortcuts system, also splitting it up into 'media', 'main_gui', 'media_viewer', and 'media_viewer_browser' constituent parts that will be applied in different contexts</li>
+					<li>because the change is so significant, all clients will have their old 'options' shortcuts reset to the new default--I expect to expand shortcuts further in the next few weeks, so this default-overwriting will likely happen again, so you will likely wish to wait before recustomising your basic shortcuts</li>
+					<li>completely eliminated the old main shortcuts system--all references now bodge with the new system to varying neatness</li>
+					<li>as the old main shortcuts system no longer exists, the 'shortcuts' page on file->options is gone--all shortcuts are now managed through file->shortcuts, which is a completely revamped version of the custom filter shortcuts editing dialog</li>
+					<li>selecting shortcut commands is significantly simpler for the reserved shortcut sets</li>
+					<li>all media viewers with hover windows now have a 'keyboard' shortcuts icon button on their top hover window--it links to the manage shortcuts dialog as well as the current active custom shortcut sets and default custom shortcut sets</li>
+					<li>as the above system supercedes the old custom filter system, custom filters are completely removed from the program! your existing custom shortcut sets will survive, but you probably want to purge them of all the redundant junk they still have</li>
+					<li>all the media canvases use the new shortcuts system</li>
+					<li>the canvas frame uses the new shortcuts system</li>
+					<li>the thumbnails canvas uses the new shortcuts system</li>
+					<li>the main gui uses the new shortcuts system</li>
+					<li>some other misc places use the new shortcuts system</li>
+					<li>most simple shortcut command actions have been renamed to be more readable</li>
+					<li>some shortcut actions, like zoom stuff, is no longer hardcoded!</li>
+					<li>mouse shortcuts are still not widely supported!</li>
+					<li>the shortcut command edit dialog now throws a veto-driven error message if you try to ok on an invalid command (a blank services choice or action string, that sort of thing)</li>
+					<li>ctrl+r is now 'remove_files_from_view' by default. the old 'show_hide_splitters' is now ctrl+shift+r by default</li>
+					<li>the preview canvas, if focused, now responds to many normal media viewer shortcuts (content stuff like archive/manage tags, and canvas-specific like frame back/forth, zooming and panning)</li>
+					<li>the new shortcut system now interprets double-clicks of any mouse button to be a second single click</li>
+					<li>the new shortcut system correctly 'flips' ratings on and off, rather than always 'setting' to the chosen value. optional 'set only' support will come in the near future</li>
+					<li>more shortcuts will correctly and reliably propagate to canvases when any part of a hover frame has focus</li>
+					<li>fixed a conflict between the new shortcut system and taglists, which were no longer accepting otherwise interesting keys, like enter</li>
+					<li>created a shortcuts manager cache that deals with a bunch of the shortcut workflow centrally</li>
+					<li>completely eliminated the old accelerator table/menu command system for the main gui window</li>
+					<li>lots of misc shortcut-related work</li>
+					<li>fixed wildcard file search predicates that are on a specific file service and have no namespace (like 'mar*')</li>
+					<li>certain routines that can cause mass refreshing of the menubar (like import folders) will now not spam (and often queue this spam up and hang the gui) the menu so much. the menubar will now always collapse multple overlapping refresh calls to reduce cpu load</li>
+					<li>fixed a focus-None issue in the new hover window focus detection code</li>
+					<li>improved some more focus detection and comparison logic--quick rating-scrolling in the media viewer should be less janked</li>
+					<li>improved 'touch' drag event detection and improved media canvas cursor hide/show logic in general</li>
+					<li>fixed '&' display in notebook page names</li>
+					<li>fixed '&' display in some common dialogs' text</li>
+					<li>wrote a new statictext class that deals with '&' better and in future will autowrap and maybe some other stuff and then switched most of the simple instances of wx.statictext over</li>
+					<li>updated some out-of-date server help r.e. admin service initialisation</li>
+					<li>converted a little of the help on custom filter->custom shortcuts. I'll do more in future</li>
+					<li>wrote a simple checkboxlist dialog</li>
+					<li>misc cleanup</li>
+				</ul>
 				<li><h3>version 251</h3></li>
 				<ul>
 					<li>started shortcut overhaul by updating shortcut storage and underlying objects</li>

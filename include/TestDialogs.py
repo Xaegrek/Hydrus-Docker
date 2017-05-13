@@ -9,7 +9,7 @@ import os
 import TestConstants
 import unittest
 import wx
-import HydrusGlobals
+import HydrusGlobals as HG
 
 def HitButton( button ): wx.PostEvent( button, wx.CommandEvent( wx.EVT_BUTTON.typeId, button.GetId() ) )
 
@@ -55,7 +55,7 @@ class TestDBDialogs( unittest.TestCase ):
     
     def test_dialog_select_booru( self ):
         
-        HydrusGlobals.test_controller.SetRead( 'remote_boorus', ClientDefaults.GetDefaultBoorus() )
+        HG.test_controller.SetRead( 'remote_boorus', ClientDefaults.GetDefaultBoorus() )
         
         with ClientGUIDialogs.DialogSelectBooru( None ) as dlg:
             
@@ -69,12 +69,11 @@ class TestDBDialogs( unittest.TestCase ):
     
     def test_dialog_manage_subs( self ):
         
-        HydrusGlobals.test_controller.SetRead( 'serialisable_named', [] )
+        HG.test_controller.SetRead( 'serialisable_named', [] )
         
         title = 'subs test'
-        frame_key = 'regular_dialog'
         
-        with ClientGUITopLevelWindows.DialogManage( None, title, frame_key ) as dlg:
+        with ClientGUITopLevelWindows.DialogManage( None, title ) as dlg:
             
             panel = ClientGUIScrolledPanelsManagement.ManageSubscriptionsPanel( dlg )
             
@@ -134,7 +133,7 @@ class TestNonDBDialogs( unittest.TestCase ):
     
     def test_dialog_finish_filtering( self ):
         
-        with ClientGUIDialogs.DialogFinishFiltering( None, 3, 5 ) as dlg:
+        with ClientGUIDialogs.DialogFinishFiltering( None, 'keep 3 files and delete 5 files?' ) as dlg:
             
             HitButton( dlg._back )
             
@@ -143,7 +142,7 @@ class TestNonDBDialogs( unittest.TestCase ):
             self.assertEqual( result, wx.ID_CANCEL )
             
         
-        with ClientGUIDialogs.DialogFinishFiltering( None, 3, 5 ) as dlg:
+        with ClientGUIDialogs.DialogFinishFiltering( None, 'keep 3 files and delete 5 files?' ) as dlg:
             
             HitButton( dlg._commit )
             
@@ -152,7 +151,7 @@ class TestNonDBDialogs( unittest.TestCase ):
             self.assertEqual( result, wx.ID_YES )
             
         
-        with ClientGUIDialogs.DialogFinishFiltering( None, 3, 5 ) as dlg:
+        with ClientGUIDialogs.DialogFinishFiltering( None, 'keep 3 files and delete 5 files?' ) as dlg:
             
             HitButton( dlg._forget )
             

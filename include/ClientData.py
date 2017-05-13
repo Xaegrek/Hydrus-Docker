@@ -6,7 +6,7 @@ import collections
 import HydrusConstants as HC
 import HydrusData
 import HydrusExceptions
-import HydrusGlobals
+import HydrusGlobals as HG
 import HydrusPaths
 import HydrusSerialisable
 import HydrusTags
@@ -17,6 +17,7 @@ import sqlite3
 import sys
 import time
 import wx
+import wx.lib.colourutils
 import yaml
 
 def AddPaddingToDimensions( dimensions, padding ):
@@ -77,7 +78,7 @@ def CatchExceptionClient( etype, value, tb ):
         
         HydrusData.DebugPrint( text )
         
-        HydrusGlobals.client_controller.pub( 'message', job_key )
+        HG.client_controller.pub( 'message', job_key )
         
     except:
         
@@ -95,6 +96,24 @@ def CatchExceptionClient( etype, value, tb ):
     
     time.sleep( 1 )
     
+def ColourIsBright( colour ):
+    
+    ( r, g, b ) = colour.Get()
+    
+    brightness_estimate = ( r + g + b ) // 3
+    
+    it_is_bright = brightness_estimate > 127
+    
+    return it_is_bright
+    
+def ColourIsGreyish( colour ):
+    
+    ( r, g, b ) = colour.Get()
+    
+    greyish = r // 16 == g // 16 and g // 16 == b // 16
+    
+    return greyish
+    
 def ConvertServiceKeysToContentUpdatesToPrettyString( service_keys_to_content_updates ):
     
     num_files = 0
@@ -107,7 +126,7 @@ def ConvertServiceKeysToContentUpdatesToPrettyString( service_keys_to_content_up
         
         if len( content_updates ) > 0:
             
-            name = HydrusGlobals.client_controller.GetServicesManager().GetName( service_key )
+            name = HG.client_controller.GetServicesManager().GetName( service_key )
             
             locations.add( name )
             
@@ -196,9 +215,42 @@ def DeletePath( path ):
         HydrusPaths.DeletePath( path )
         
     
+def GetDifferentLighterDarkerColour( colour, intensity = 3 ):
+    
+    if ColourIsGreyish( colour ):
+        
+        ( r, g, b ) = colour.Get()
+        
+        if ColourIsBright( colour ):
+            
+            colour = wx.Colour( int( g * ( 1 - 0.05 * intensity ) ), b, r )
+            
+        else:
+            
+            colour = wx.Colour( int( g * ( 1 + 0.05 * intensity ) ) / 2, b, r )
+            
+        
+    else:
+        
+        colour = wx.Colour( g, b, r )
+        
+    
+    return GetLighterDarkerColour( colour, intensity )
+    
+def GetLighterDarkerColour( colour, intensity = 3 ):
+    
+    if ColourIsBright( colour ):
+        
+        return wx.lib.colourutils.AdjustColour( colour, -5 * intensity )
+        
+    else:
+        
+        return wx.lib.colourutils.AdjustColour( colour, 5 * intensity )
+        
+    
 def GetMediasTagCount( pool, tag_service_key = CC.COMBINED_TAG_SERVICE_KEY, collapse_siblings = False ):
     
-    siblings_manager = HydrusGlobals.client_controller.GetManager( 'tag_siblings' )
+    siblings_manager = HG.client_controller.GetManager( 'tag_siblings' )
     
     tags_managers = []
     
@@ -245,7 +297,7 @@ def GetSortChoices( add_namespaces_and_ratings = True ):
         
         sort_choices.extend( HC.options[ 'sort_by' ] )
         
-        ratings_services = HydrusGlobals.client_controller.GetServicesManager().GetServices( ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
+        ratings_services = HG.client_controller.GetServicesManager().GetServices( ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
         
         for ratings_service in ratings_services:
             
@@ -419,7 +471,7 @@ def ShowExceptionClient( e ):
     
     HydrusData.DebugPrint( text )
     
-    HydrusGlobals.client_controller.pub( 'message', job_key )
+    HG.client_controller.pub( 'message', job_key )
     
     time.sleep( 1 )
     
@@ -433,7 +485,7 @@ def ShowTextClient( text ):
     
     HydrusData.Print( text )
     
-    HydrusGlobals.client_controller.pub( 'message', job_key )
+    HG.client_controller.pub( 'message', job_key )
     
 def SortTagsList( tags, sort_type ):
     
@@ -475,14 +527,14 @@ def WaitPolitely( page_key = None ):
     
     if page_key is not None:
         
-        HydrusGlobals.client_controller.pub( 'waiting_politely', page_key, True )
+        HG.client_controller.pub( 'waiting_politely', page_key, True )
         
     
     time.sleep( HC.options[ 'website_download_polite_wait' ] )
     
     if page_key is not None:
         
-        HydrusGlobals.client_controller.pub( 'waiting_politely', page_key, False )
+        HG.client_controller.pub( 'waiting_politely', page_key, False )
         
     
 class ApplicationCommand( HydrusSerialisable.SerialisableBase ):
@@ -499,7 +551,7 @@ class ApplicationCommand( HydrusSerialisable.SerialisableBase ):
         
         if data is None:
             
-            data = 'archive'
+            data = 'archive_file'
             
         
         HydrusSerialisable.SerialisableBase.__init__( self )
@@ -511,6 +563,11 @@ class ApplicationCommand( HydrusSerialisable.SerialisableBase ):
     def __cmp__( self, other ):
         
         return cmp( self.ToString(), other.ToString() )
+        
+    
+    def __repr__( self ):
+        
+        return self.ToString()
         
     
     def _GetSerialisableInfo( self ):
@@ -572,7 +629,7 @@ class ApplicationCommand( HydrusSerialisable.SerialisableBase ):
             components.append( '"' + HydrusData.ToUnicode( value ) + '"' )
             components.append( 'for' )
             
-            services_manager = HydrusGlobals.client_controller.GetServicesManager()
+            services_manager = HG.client_controller.GetServicesManager()
             
             if services_manager.ServiceExists( service_key ):
                 
@@ -684,6 +741,15 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         #
         
+        self._dictionary[ 'duplicate_action_options' ] = HydrusSerialisable.SerialisableDictionary()
+        
+        self._dictionary[ 'duplicate_action_options' ][ HC.DUPLICATE_BETTER ] = DuplicateActionOptions( [ ( CC.LOCAL_TAG_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_MOVE ) ], True )
+        self._dictionary[ 'duplicate_action_options' ][ HC.DUPLICATE_SAME_FILE ] = DuplicateActionOptions( [ ( CC.LOCAL_TAG_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE ) ], False )
+        self._dictionary[ 'duplicate_action_options' ][ HC.DUPLICATE_ALTERNATE ] = DuplicateActionOptions( [], False )
+        self._dictionary[ 'duplicate_action_options' ][ HC.DUPLICATE_NOT_DUPLICATE ] = DuplicateActionOptions( [], False )
+        
+        #
+        
         self._dictionary[ 'integers' ] = {}
         
         self._dictionary[ 'integers' ][ 'video_buffer_size_mb' ] = 96
@@ -727,6 +793,10 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         self._dictionary[ 'strings' ][ 'main_gui_title' ] = 'hydrus client'
         self._dictionary[ 'strings' ][ 'namespace_connector' ] = ':'
         self._dictionary[ 'strings' ][ 'export_phrase' ] = '{hash}'
+        
+        self._dictionary[ 'string_list' ] = {}
+        
+        self._dictionary[ 'string_list' ][ 'default_media_viewer_custom_shortcuts' ] = []
         
         #
         
@@ -886,7 +956,7 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
                 
                 try:
                     
-                    db_dir = HydrusGlobals.controller.GetDBDir()
+                    db_dir = HG.controller.GetDBDir()
                     
                     p = os.path.relpath( a_p, db_dir )
                     
@@ -1064,6 +1134,14 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
     
+    def GetDuplicateActionOptions( self, duplicate_status ):
+        
+        with self._lock:
+            
+            return self._dictionary[ 'duplicate_action_options' ][ duplicate_status ]
+            
+        
+    
     def GetFrameLocation( self, frame_key ):
         
         with self._lock:
@@ -1176,6 +1254,14 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
     
+    def GetStringList( self, name ):
+        
+        with self._lock:
+            
+            return self._dictionary[ 'string_list' ][ name ]
+            
+        
+    
     def GetSuggestedTagsFavourites( self, service_key ):
         
         with self._lock:
@@ -1234,6 +1320,14 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         with self._lock:
             
             self._dictionary[ 'default_import_tag_options' ][ gallery_identifier ] = import_tag_options
+            
+        
+    
+    def SetDuplicateActionOptions( self, duplicate_status, duplicate_action_options ):
+        
+        with self._lock:
+            
+            self._dictionary[ 'duplicate_action_options' ][ duplicate_status ] = duplicate_action_options
             
         
     
@@ -1304,6 +1398,14 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
     
+    def SetStringList( self, name, value ):
+        
+        with self._lock:
+            
+            self._dictionary[ 'string_list' ][ name ] = value
+            
+        
+    
     def SetSuggestedTagsFavourites( self, service_key, tags ):
         
         with self._lock:
@@ -1358,6 +1460,216 @@ class Credentials( HydrusData.HydrusYAMLBase ):
     
     def SetAccessKey( self, access_key ): self._access_key = access_key
     
+class DuplicateActionOptions( HydrusSerialisable.SerialisableBase ):
+    
+    SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_DUPLICATE_ACTION_OPTIONS
+    SERIALISABLE_VERSION = 1
+    
+    def __init__( self, service_actions = None, delete_second_file = None ):
+        
+        if service_actions is None:
+            
+            service_actions = []
+            
+        
+        if delete_second_file is None:
+            
+            delete_second_file = False
+            
+        
+        HydrusSerialisable.SerialisableBase.__init__( self )
+        
+        self._service_actions = service_actions
+        self._delete_second_file = delete_second_file
+        
+    
+    def _GetSerialisableInfo( self ):
+        
+        serialisable_service_actions = [ ( service_key.encode( 'hex' ), action ) for ( service_key, action ) in self._service_actions ]
+        
+        return ( serialisable_service_actions, self._delete_second_file )
+        
+    
+    def _InitialiseFromSerialisableInfo( self, serialisable_info ):
+        
+        ( serialisable_service_actions, self._delete_second_file ) = serialisable_info
+        
+        self._service_actions = [ ( serialisable_service_key.decode( 'hex' ), action ) for ( serialisable_service_key, action ) in serialisable_service_actions ]
+        
+    
+    def SetTuple( self, service_actions, delete_second_file ):
+        
+        self._service_actions = service_actions
+        self._delete_second_file = delete_second_file
+        
+    
+    def ToTuple( self ):
+        
+        return ( self._service_actions, self._delete_second_file )
+        
+    
+    def ProcessPairIntoContentUpdates( self, first_media, second_media ):
+        
+        content_service_keys_to_content_updates = {}
+        file_service_keys_to_content_updates = {}
+        
+        first_hashes = first_media.GetHashes()
+        second_hashes = second_media.GetHashes()
+        
+        services_manager = HG.client_controller.GetServicesManager()
+        
+        for ( service_key, action ) in self._service_actions:
+            
+            content_updates = []
+            
+            try:
+                
+                service = services_manager.GetService( service_key )
+                
+            except HydrusExceptions.DataMissing:
+                
+                continue
+                
+            
+            service_type = service.GetServiceType()
+            
+            if service_type in ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ):
+                
+                first_current_value = first_media.GetRatingsManager().GetRating( service_key )
+                second_current_value = second_media.GetRatingsManager().GetRating( service_key )
+                
+                if action == HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE:
+                    
+                    if first_current_value == second_current_value:
+                        
+                        continue
+                        
+                    
+                    if first_current_value is None and second_current_value is not None:
+                        
+                        content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( second_current_value, first_hashes ) ) )
+                        
+                    elif first_current_value is not None and second_current_value is None:
+                        
+                        content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( first_current_value, second_hashes ) ) )
+                        
+                    
+                elif action == HC.CONTENT_MERGE_ACTION_COPY:
+                    
+                    if first_current_value == second_current_value:
+                        
+                        continue
+                        
+                    
+                    if first_current_value is None and second_current_value is not None:
+                        
+                        content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( second_current_value, first_hashes ) ) )
+                        
+                    
+                elif action == HC.CONTENT_MERGE_ACTION_MOVE:
+                    
+                    if second_current_value is not None:
+                        
+                        if first_current_value is None:
+                            
+                            content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( second_current_value, first_hashes ) ) )
+                            
+                        
+                        content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( None, second_hashes ) ) )
+                        
+                    
+                
+            elif service_type in ( HC.LOCAL_TAG, HC.TAG_REPOSITORY ):
+                
+                if service_type == HC.LOCAL_TAG:
+                    
+                    add_content_action = HC.CONTENT_UPDATE_ADD
+                    
+                elif service_type == HC.TAG_REPOSITORY:
+                    
+                    add_content_action = HC.CONTENT_UPDATE_PEND
+                    
+                
+                first_current_tags = first_media.GetTagsManager().GetCurrent( service_key )
+                second_current_tags = second_media.GetTagsManager().GetCurrent( service_key )
+                
+                if action == HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE:
+                    
+                    first_needs = second_current_tags.difference( first_current_tags )
+                    second_needs = first_current_tags.difference( second_current_tags )
+                    
+                    content_updates.extend( ( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, add_content_action, ( tag, first_hashes ) ) for tag in first_needs ) )
+                    content_updates.extend( ( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, add_content_action, ( tag, second_hashes ) ) for tag in second_needs ) )
+                    
+                elif action == HC.CONTENT_MERGE_ACTION_COPY:
+                    
+                    first_needs = second_current_tags.difference( first_current_tags )
+                    
+                    content_updates.extend( ( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, add_content_action, ( tag, first_hashes ) ) for tag in first_needs ) )
+                    
+                elif service_type == HC.LOCAL_TAG and action == HC.CONTENT_MERGE_ACTION_MOVE:
+                    
+                    first_needs = second_current_tags.difference( first_current_tags )
+                    
+                    content_updates.extend( ( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, add_content_action, ( tag, first_hashes ) ) for tag in first_needs ) )
+                    content_updates.extend( ( HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_UPDATE_DELETE, ( tag, second_hashes ) ) for tag in second_current_tags ) )
+                    
+                
+            
+            if len( content_updates ) > 0:
+                
+                content_service_keys_to_content_updates[ service_key ] = content_updates
+                
+            
+        
+        if self._delete_second_file:
+            
+            current_locations = second_media.GetLocationsManager().GetCurrent()
+            
+            if CC.LOCAL_FILE_SERVICE_KEY in current_locations:
+                
+                deletee_service_key = CC.LOCAL_FILE_SERVICE_KEY
+                
+            elif CC.TRASH_SERVICE_KEY in current_locations:
+                
+                deletee_service_key = CC.TRASH_SERVICE_KEY
+                
+            else:
+                
+                deletee_service_key = None
+                
+            
+            if deletee_service_key is not None:
+                
+                if deletee_service_key not in file_service_keys_to_content_updates:
+                    
+                    file_service_keys_to_content_updates[ deletee_service_key ] = []
+                    
+                
+                content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_DELETE, second_hashes )
+                
+                file_service_keys_to_content_updates[ deletee_service_key ].append( content_update )
+                
+                
+            
+        
+        list_of_service_keys_to_content_updates = []
+        
+        if len( content_service_keys_to_content_updates ) > 0:
+            
+            list_of_service_keys_to_content_updates.append( content_service_keys_to_content_updates )
+            
+        
+        if len( file_service_keys_to_content_updates ) > 0:
+            
+            list_of_service_keys_to_content_updates.append( file_service_keys_to_content_updates )
+            
+        
+        return list_of_service_keys_to_content_updates
+        
+    
+HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_DUPLICATE_ACTION_OPTIONS ] = DuplicateActionOptions
+
 class Imageboard( HydrusData.HydrusYAMLBase ):
     
     yaml_tag = u'!Imageboard'
@@ -1491,8 +1803,22 @@ class ImportTagOptions( HydrusSerialisable.SerialisableBase ):
     
     def _GetSerialisableInfo( self ):
         
-        safe_service_keys_to_namespaces = { service_key.encode( 'hex' ) : list( namespaces ) for ( service_key, namespaces ) in self._service_keys_to_namespaces.items() }
-        safe_service_keys_to_explicit_tags = { service_key.encode( 'hex' ) : list( tags ) for ( service_key, tags ) in self._service_keys_to_explicit_tags.items() }
+        if HG.client_controller.IsBooted():
+            
+            services_manager = HG.client_controller.GetServicesManager()
+            
+            test_func = services_manager.ServiceExists
+            
+        else:
+            
+            def test_func( service_key ):
+                
+                return True
+                
+            
+        
+        safe_service_keys_to_namespaces = { service_key.encode( 'hex' ) : list( namespaces ) for ( service_key, namespaces ) in self._service_keys_to_namespaces.items() if test_func( service_key ) }
+        safe_service_keys_to_explicit_tags = { service_key.encode( 'hex' ) : list( tags ) for ( service_key, tags ) in self._service_keys_to_explicit_tags.items() if test_func( service_key ) }
         
         return ( safe_service_keys_to_namespaces, safe_service_keys_to_explicit_tags )
         
@@ -1535,8 +1861,8 @@ class ImportTagOptions( HydrusSerialisable.SerialisableBase ):
         
         service_keys_to_tags = collections.defaultdict( set )
         
-        siblings_manager = HydrusGlobals.client_controller.GetManager( 'tag_siblings' )
-        parents_manager = HydrusGlobals.client_controller.GetManager( 'tag_parents' )
+        siblings_manager = HG.client_controller.GetManager( 'tag_siblings' )
+        parents_manager = HG.client_controller.GetManager( 'tag_parents' )
         
         for ( service_key, namespaces ) in self._service_keys_to_namespaces.items():
             
@@ -1635,6 +1961,11 @@ class Shortcut( HydrusSerialisable.SerialisableBase ):
         return ( self._shortcut_type, self._shortcut_key, tuple( self._modifiers ) ).__hash__()
         
     
+    def __repr__( self ):
+        
+        return 'Shortcut: ' + self.ToString()
+        
+    
     def _GetSerialisableInfo( self ):
         
         return ( self._shortcut_type, self._shortcut_key, self._modifiers )
@@ -1714,6 +2045,11 @@ class Shortcuts( HydrusSerialisable.SerialisableBaseNamed ):
             
         
     
+    def __len__( self ):
+        
+        return len( self._shortcuts_to_commands )
+        
+    
     def _GetSerialisableInfo( self ):
         
         return [ ( shortcut.GetSerialisableTuple(), command.GetSerialisableTuple() ) for ( shortcut, command ) in self._shortcuts_to_commands.items() ]
@@ -1740,7 +2076,7 @@ class Shortcuts( HydrusSerialisable.SerialisableBaseNamed ):
             
             # this never stored mouse actions, so skip
             
-            services_manager = HydrusGlobals.client_controller.GetServicesManager()
+            services_manager = HG.client_controller.GetServicesManager()
             
             for ( modifier, key, ( serialisable_service_key, data ) ) in serialisable_keyboard_actions:
                 
@@ -1845,6 +2181,11 @@ def ConvertKeyEventToShortcut( event ):
         
         shortcut = Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, key, modifiers )
         
+        if HG.gui_report_mode:
+            
+            HydrusData.ShowText( 'key event caught: ' + repr( shortcut ) )
+            
+        
         return shortcut
         
     
@@ -1866,15 +2207,15 @@ def ConvertMouseEventToShortcut( event ):
     
     key = None
     
-    if event.LeftDown():
+    if event.LeftDown() or event.LeftDClick():
         
         key = CC.SHORTCUT_MOUSE_LEFT
         
-    elif event.MiddleDown():
+    elif event.MiddleDown() or event.MiddleDClick():
         
         key = CC.SHORTCUT_MOUSE_MIDDLE
         
-    elif event.RightDown():
+    elif event.RightDown() or event.RightDClick():
         
         key = CC.SHORTCUT_MOUSE_RIGHT
         
@@ -1907,6 +2248,11 @@ def ConvertMouseEventToShortcut( event ):
             
         
         shortcut = Shortcut( CC.SHORTCUT_TYPE_MOUSE, key, modifiers )
+        
+        if HG.gui_report_mode:
+            
+            HydrusData.ShowText( 'mouse event caught: ' + repr( shortcut ) )
+            
         
         return shortcut
         

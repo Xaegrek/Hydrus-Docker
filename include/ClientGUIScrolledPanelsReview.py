@@ -8,7 +8,7 @@ import ClientTags
 import ClientThreading
 import HydrusConstants as HC
 import HydrusData
-import HydrusGlobals
+import HydrusGlobals as HG
 import HydrusNATPunch
 import os
 import traceback
@@ -19,6 +19,7 @@ class AdvancedContentUpdatePanel( ClientGUIScrolledPanels.ReviewPanel ):
     COPY = 0
     DELETE = 1
     DELETE_DELETED = 2
+    DELETE_FOR_DELETED_FILES = 3
     
     ALL_MAPPINGS = 0
     SPECIFIC_MAPPINGS = 1
@@ -33,7 +34,7 @@ class AdvancedContentUpdatePanel( ClientGUIScrolledPanels.ReviewPanel ):
         self._service_key = service_key
         self._hashes = hashes
         
-        service = HydrusGlobals.client_controller.GetServicesManager().GetService( self._service_key )
+        service = HG.client_controller.GetServicesManager().GetService( self._service_key )
         
         self._service_name = service.GetName()
         
@@ -56,7 +57,7 @@ class AdvancedContentUpdatePanel( ClientGUIScrolledPanels.ReviewPanel ):
         
         #
         
-        services = [ service for service in HydrusGlobals.client_controller.GetServicesManager().GetServices( HC.TAG_SERVICES ) if service.GetServiceKey() != self._service_key ]
+        services = [ service for service in HG.client_controller.GetServicesManager().GetServices( HC.TAG_SERVICES ) if service.GetServiceKey() != self._service_key ]
         
         if len( services ) > 0:
             
@@ -67,6 +68,7 @@ class AdvancedContentUpdatePanel( ClientGUIScrolledPanels.ReviewPanel ):
             
             self._action_dropdown.Append( 'delete', self.DELETE )
             self._action_dropdown.Append( 'clear deleted record', self.DELETE_DELETED )
+            self._action_dropdown.Append( 'delete from deleted files', self.DELETE_FOR_DELETED_FILES )
             
         
         self._action_dropdown.Select( 0 )
@@ -124,7 +126,7 @@ class AdvancedContentUpdatePanel( ClientGUIScrolledPanels.ReviewPanel ):
         
         message += ' files on ' + self._service_name
         
-        title_st = wx.StaticText( self, label = message)
+        title_st = ClientGUICommon.BetterStaticText( self, message )
         
         title_st.Wrap( 540 )
         
@@ -132,7 +134,7 @@ class AdvancedContentUpdatePanel( ClientGUIScrolledPanels.ReviewPanel ):
         message += os.linesep * 2
         message += 'You may need to refresh your existing searches to see their effect.' 
         
-        st = wx.StaticText( self, label = message )
+        st = ClientGUICommon.BetterStaticText( self, message )
         
         st.Wrap( 540 )
         
@@ -150,7 +152,7 @@ class AdvancedContentUpdatePanel( ClientGUIScrolledPanels.ReviewPanel ):
         
         data = self._action_dropdown.GetChoice()
         
-        if data in ( self.DELETE, self.DELETE_DELETED ):
+        if data in ( self.DELETE, self.DELETE_DELETED, self.DELETE_FOR_DELETED_FILES ):
             
             self._action_text.SetLabelText( 'from ' + self._service_name )
             
@@ -246,10 +248,14 @@ class AdvancedContentUpdatePanel( ClientGUIScrolledPanels.ReviewPanel ):
             
             content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_UPDATE_ADVANCED, ( 'delete_deleted', ( tag, self._hashes ) ) )
             
+        elif action == self.DELETE_FOR_DELETED_FILES:
+            
+            content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_UPDATE_ADVANCED, ( 'delete_for_deleted_files', ( tag, self._hashes ) ) )
+            
         
         service_keys_to_content_updates = { self._service_key : [ content_update ] }
         
-        HydrusGlobals.client_controller.Write( 'content_updates', service_keys_to_content_updates )
+        HG.client_controller.Write( 'content_updates', service_keys_to_content_updates )
         
     
     def ImportFromHTA( self ):

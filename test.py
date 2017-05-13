@@ -7,7 +7,7 @@ except: pass
 
 from include import HydrusConstants as HC
 from include import ClientConstants as CC
-from include import HydrusGlobals
+from include import HydrusGlobals as HG
 from include import ClientDefaults
 from include import ClientNetworking
 from include import ClientServices
@@ -64,10 +64,10 @@ class Controller( object ):
         HydrusPaths.MakeSureDirectoryExists( self._updates_dir )
         HydrusPaths.MakeSureDirectoryExists( client_files_default )
         
-        HydrusGlobals.controller = self
-        HydrusGlobals.client_controller = self
-        HydrusGlobals.server_controller = self
-        HydrusGlobals.test_controller = self
+        HG.controller = self
+        HG.client_controller = self
+        HG.server_controller = self
+        HG.test_controller = self
         
         self._pubsub = HydrusPubSub.HydrusPubSub( self )
         
@@ -96,6 +96,8 @@ class Controller( object ):
         services.append( ClientServices.GenerateService( CC.LOCAL_FILE_SERVICE_KEY, HC.LOCAL_FILE_DOMAIN, CC.LOCAL_FILE_SERVICE_KEY ) )
         services.append( ClientServices.GenerateService( CC.TRASH_SERVICE_KEY, HC.LOCAL_FILE_TRASH_DOMAIN, CC.LOCAL_FILE_SERVICE_KEY ) )
         services.append( ClientServices.GenerateService( CC.LOCAL_TAG_SERVICE_KEY, HC.LOCAL_TAG, CC.LOCAL_TAG_SERVICE_KEY ) )
+        services.append( ClientServices.GenerateService( TestConstants.LOCAL_RATING_LIKE_SERVICE_KEY, HC.LOCAL_RATING_LIKE, 'example local rating like service' ) )
+        services.append( ClientServices.GenerateService( TestConstants.LOCAL_RATING_NUMERICAL_SERVICE_KEY, HC.LOCAL_RATING_NUMERICAL, 'example local rating numerical service' ) )
         
         self._reads[ 'services' ] = services
         
@@ -247,7 +249,7 @@ class Controller( object ):
     
     def ModelIsShutdown( self ):
         
-        return HydrusGlobals.model_shutdown
+        return HG.model_shutdown
         
     
     def Read( self, name, *args, **kwargs ):
@@ -309,7 +311,7 @@ class Controller( object ):
     
     def ViewIsShutdown( self ):
         
-        return HydrusGlobals.view_shutdown
+        return HG.view_shutdown
         
     
     def Write( self, name, *args, **kwargs ):
@@ -372,11 +374,11 @@ if __name__ == '__main__':
             
         finally:
             
-            HydrusGlobals.view_shutdown = True
+            HG.view_shutdown = True
             
             controller.pubimmediate( 'wake_daemons' )
             
-            HydrusGlobals.model_shutdown = True
+            HG.model_shutdown = True
             
             controller.pubimmediate( 'wake_daemons' )
             

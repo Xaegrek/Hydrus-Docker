@@ -8,6 +8,7 @@ import HydrusConstants as HC
 import HydrusExceptions
 import HydrusFileHandling
 import HydrusPaths
+import HydrusSerialisable
 import HydrusSessions
 import itertools
 import json
@@ -21,7 +22,7 @@ import wx
 import HydrusData
 import ClientData
 import ClientConstants as CC
-import HydrusGlobals
+import HydrusGlobals as HG
 import collections
 import HydrusTags
 import itertools
@@ -79,7 +80,10 @@ def BuildSimpleChildrenToParents( pairs ):
     
     for ( child, parent ) in pairs:
         
-        if child == parent: continue
+        if child == parent:
+            
+            continue
+            
         
         if LoopInSimpleChildrenToParents( simple_children_to_parents, child, parent ): continue
         
@@ -556,7 +560,7 @@ class ClientFilesManager( object ):
         
         self._prefixes_to_locations = self._controller.Read( 'client_files_locations' )
         
-        if HydrusGlobals.client_controller.IsFirstStart():
+        if HG.client_controller.IsFirstStart():
             
             try:
                 
@@ -749,7 +753,7 @@ class ClientFilesManager( object ):
                     
                     hash = should_be_a_hex_hash.decode( 'hex' )
                     
-                    is_an_orphan = HydrusGlobals.client_controller.Read( 'is_an_orphan', 'file', hash )
+                    is_an_orphan = HG.client_controller.Read( 'is_an_orphan', 'file', hash )
                     
                 except:
                     
@@ -790,7 +794,7 @@ class ClientFilesManager( object ):
                     
                     hash = should_be_a_hex_hash.decode( 'hex' )
                     
-                    is_an_orphan = HydrusGlobals.client_controller.Read( 'is_an_orphan', 'thumbnail', hash )
+                    is_an_orphan = HG.client_controller.Read( 'is_an_orphan', 'thumbnail', hash )
                     
                 except:
                     
@@ -1832,7 +1836,7 @@ class ThumbnailCache( object ):
                 
             
         
-        options = HydrusGlobals.client_controller.GetOptions()
+        options = HG.client_controller.GetOptions()
         
         ( media_x, media_y ) = display_media.GetResolution()
         ( actual_x, actual_y ) = hydrus_bitmap.GetSize()
@@ -1980,7 +1984,7 @@ class ThumbnailCache( object ):
         
         last_paused = HydrusData.GetNowPrecise()
         
-        while not HydrusGlobals.view_shutdown:
+        while not HG.view_shutdown:
             
             with self._lock:
                 
@@ -2164,6 +2168,54 @@ class ServicesManager( object ):
         with self._lock:
             
             return service_key in self._keys_to_services
+            
+        
+    
+class ShortcutsManager( object ):
+    
+    def __init__( self, controller ):
+        
+        self._controller = controller
+        
+        self._shortcuts = {}
+        
+        self.RefreshShortcuts()
+        
+        self._controller.sub( self, 'RefreshShortcuts', 'new_shortcuts' )
+        
+    
+    def GetCommand( self, shortcuts_names, shortcut ):
+        
+        for name in shortcuts_names:
+            
+            if name in self._shortcuts:
+                
+                command = self._shortcuts[ name ].GetCommand( shortcut )
+                
+                if command is not None:
+                    
+                    if HG.gui_report_mode:
+                        
+                        HydrusData.ShowText( 'command matched: ' + repr( command ) )
+                        
+                    
+                    return command
+                    
+                
+            
+        
+        return None
+        
+    
+    def RefreshShortcuts( self ):
+        
+        self._shortcuts = {}
+        
+        all_shortcuts = HG.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS )
+        
+        for shortcuts in all_shortcuts:
+            
+            self._shortcuts[ shortcuts.GetName() ] = shortcuts
             
         
     

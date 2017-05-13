@@ -7,7 +7,7 @@ import ClientThreading
 import HydrusConstants as HC
 import HydrusData
 import HydrusExceptions
-import HydrusGlobals
+import HydrusGlobals as HG
 import os
 import sys
 import threading
@@ -29,58 +29,69 @@ ID_TIMER_SLIDESHOW = wx.NewId()
 ID_TIMER_MEDIA_INFO_DISPLAY = wx.NewId()
 ID_TIMER_POPUP = wx.NewId()
 
-def ChildHasFocus( window ):
+def WindowOrAnyTLPChildHasFocus( window ):
     
     focus = wx.Window.FindFocus()
     
-    if focus is None:
-        
-        return False
-        
-    
-    while not isinstance( focus, wx.TopLevelWindow ):
-        
-        focus = focus.GetParent()
-        
-        if focus is None:
-            
-            return False
-            
+    while focus is not None:
         
         if focus == window:
             
             return True
             
         
+        focus = focus.GetParent()
+        
     
     return False
     
-def TLPHasFocus( window ):
+def WindowOrSameTLPChildHasFocus( window ):
     
     focus = wx.Window.FindFocus()
     
-    if focus is None:
+    while focus is not None:
         
-        return False
+        if focus == window:
+            
+            return True
+            
+        
+        if isinstance( focus, wx.TopLevelWindow ):
+            
+            return False
+            
+        
+        focus = focus.GetParent()
         
     
-    if isinstance( focus, wx.TopLevelWindow ):
+    return False
+    
+def GetFocusTLP():
+    
+    focus = wx.Window.FindFocus()
+    
+    return GetTLP( focus )
+    
+def GetTLP( window ):
+    
+    if window is None:
         
-        focus_tlp = focus
+        return None
+        
+    elif isinstance( window, wx.TopLevelWindow ):
+        
+        return window
         
     else:
         
-        focus_tlp = wx.GetTopLevelParent( focus )
+        return window.GetTopLevelParent()
         
     
-    if isinstance( window, wx.TopLevelWindow ):
-        
-        window_tlp = window
-        
-    else:
-        
-        window_tlp = wx.GetTopLevelParent( window )
-        
+def TLPHasFocus( window ):
+    
+    focus_tlp = GetFocusTLP()
+    
+    window_tlp = GetTLP( window )
     
     return window_tlp == focus_tlp
     
@@ -143,7 +154,9 @@ def WrapInGrid( parent, rows, expand_text = False ):
             cflags = control_flags
             
         
-        gridbox.AddF( wx.StaticText( parent, label = text ), text_flags )
+        st = BetterStaticText( parent, text )
+        
+        gridbox.AddF( st, text_flags )
         gridbox.AddF( control, cflags )
         
     
@@ -153,7 +166,9 @@ def WrapInText( control, parent, text ):
     
     hbox = wx.BoxSizer( wx.HORIZONTAL )
     
-    hbox.AddF( wx.StaticText( parent, label = text ), CC.FLAGS_VCENTER )
+    st = BetterStaticText( parent, text )
+    
+    hbox.AddF( st, CC.FLAGS_VCENTER )
     hbox.AddF( control, CC.FLAGS_EXPAND_BOTH_WAYS )
     
     return hbox
@@ -231,7 +246,9 @@ class BetterButton( wx.Button ):
     
     def __init__( self, parent, label, func, *args, **kwargs ):
         
-        wx.Button.__init__( self, parent, label = label, style = wx.BU_EXACTFIT )
+        wx.Button.__init__( self, parent, style = wx.BU_EXACTFIT )
+        
+        self.SetLabelText( label )
         
         self._func = func
         self._args = args
@@ -289,6 +306,22 @@ class BetterRadioBox( wx.RadioBox ):
         index = self.GetSelection()
         
         return self._indices_to_data[ index ]
+        
+    
+class BetterStaticText( wx.StaticText ):
+    
+    def __init__( self, parent, label = None, **kwargs ):
+        
+        wx.StaticText.__init__( self, parent, **kwargs )
+        
+        if label is not None:
+            
+            # to escape mnemonic '&' swallowing
+            self.SetLabelText( label )
+            
+        
+        # at some point, rewrite this to be a control that'll produce a custom geteffectiveminsize and use wx.lib.wordwrap to dc draw the text
+        # st.Wrap is a pain to deal with here, seems to sometimes/always not be able to increase after an initial non-zero call
         
     
 class BufferedWindow( wx.Window ):
@@ -387,7 +420,7 @@ class CheckboxCollect( wx.combo.ComboCtrl ):
         collect_types = list( [ ( namespace, ( 'namespace', namespace ) ) for namespace in collect_types ] )
         collect_types.sort()
         
-        ratings_services = HydrusGlobals.client_controller.GetServicesManager().GetServices( ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
+        ratings_services = HG.client_controller.GetServicesManager().GetServices( ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
         
         for ratings_service in ratings_services: collect_types.append( ( ratings_service.GetName(), ( 'rating', ratings_service.GetServiceKey() ) ) )
         
@@ -419,7 +452,7 @@ class CheckboxCollect( wx.combo.ComboCtrl ):
             self._collect_by = None
             
         
-        HydrusGlobals.client_controller.pub( 'collect_media', self._page_key, self._collect_by )
+        HG.client_controller.pub( 'collect_media', self._page_key, self._collect_by )
         
     
     class _Popup( wx.combo.ComboPopup ):
@@ -544,7 +577,7 @@ class ChoiceSort( BetterChoice ):
         
         self.Bind( wx.EVT_CHOICE, self.EventChoice )
         
-        HydrusGlobals.client_controller.sub( self, 'ACollectHappened', 'collect_media' )
+        HG.client_controller.sub( self, 'ACollectHappened', 'collect_media' )
         
     
     def _BroadcastSort( self ):
@@ -555,7 +588,7 @@ class ChoiceSort( BetterChoice ):
             
             sort_by = self.GetClientData( selection )
             
-            HydrusGlobals.client_controller.pub( 'sort_media', self._page_key, sort_by )
+            HG.client_controller.pub( 'sort_media', self._page_key, sort_by )
             
         
     
@@ -600,7 +633,7 @@ class ExportPatternButton( wx.Button ):
         if id == self.ID_TAG: phrase = u'(\u2026)'
         else: event.Skip()
         
-        if phrase is not None: HydrusGlobals.client_controller.pub( 'clipboard', 'text', phrase )
+        if phrase is not None: HG.client_controller.pub( 'clipboard', 'text', phrase )
         
     
     def EventButton( self, event ):
@@ -624,7 +657,7 @@ class ExportPatternButton( wx.Button ):
         
         menu.Append( self.ID_TAG, u'a particular tag, if the file has it - (\u2026)' )
         
-        HydrusGlobals.client_controller.PopupMenu( self, menu )
+        HG.client_controller.PopupMenu( self, menu )
         
     
 class FitResistantStaticText( wx.StaticText ):
@@ -1210,14 +1243,14 @@ class CheckboxManagerOptions( CheckboxManager ):
     
     def GetCurrentValue( self ):
         
-        new_options = HydrusGlobals.client_controller.GetNewOptions()
+        new_options = HG.client_controller.GetNewOptions()
         
         return new_options.GetBoolean( self._boolean_name )
         
     
     def Invert( self ):
         
-        new_options = HydrusGlobals.client_controller.GetNewOptions()
+        new_options = HG.client_controller.GetNewOptions()
         
         new_options.InvertBoolean( self._boolean_name )
         
@@ -1258,7 +1291,7 @@ class MenuBitmapButton( BetterBitmapButton ):
                 
             
         
-        HydrusGlobals.client_controller.PopupMenu( self, menu )
+        HG.client_controller.PopupMenu( self, menu )
         
     
 class MenuButton( BetterButton ):
@@ -1300,7 +1333,7 @@ class MenuButton( BetterButton ):
                 
             
         
-        HydrusGlobals.client_controller.PopupMenu( self, menu )
+        HG.client_controller.PopupMenu( self, menu )
         
     
     def SetMenuItems( self, menu_items ):
@@ -1318,8 +1351,9 @@ class NoneableSpinCtrl( wx.Panel ):
         self._multiplier = multiplier
         self._num_dimensions = num_dimensions
         
-        self._checkbox = wx.CheckBox( self, label = none_phrase )
+        self._checkbox = wx.CheckBox( self )
         self._checkbox.Bind( wx.EVT_CHECKBOX, self.EventCheckBox )
+        self._checkbox.SetLabelText( none_phrase )
         
         self._one = wx.SpinCtrl( self, min = min, max = max, size = ( 60, -1 ) )
         
@@ -1332,20 +1366,20 @@ class NoneableSpinCtrl( wx.Panel ):
         
         if len( message ) > 0:
             
-            hbox.AddF( wx.StaticText( self, label = message + ': ' ), CC.FLAGS_VCENTER )
+            hbox.AddF( BetterStaticText( self, message + ': ' ), CC.FLAGS_VCENTER )
             
         
         hbox.AddF( self._one, CC.FLAGS_VCENTER )
         
         if self._num_dimensions == 2:
             
-            hbox.AddF( wx.StaticText( self, label = 'x' ), CC.FLAGS_VCENTER )
+            hbox.AddF( BetterStaticText( self, 'x' ), CC.FLAGS_VCENTER )
             hbox.AddF( self._two, CC.FLAGS_VCENTER )
             
         
         if self._unit is not None:
             
-            hbox.AddF( wx.StaticText( self, label = unit ), CC.FLAGS_VCENTER )
+            hbox.AddF( BetterStaticText( self, self._unit ), CC.FLAGS_VCENTER )
             
         
         hbox.AddF( self._checkbox, CC.FLAGS_VCENTER )
@@ -1445,7 +1479,7 @@ class OnOffButton( wx.Button ):
         
         self.Bind( wx.EVT_BUTTON, self.EventButton )
         
-        HydrusGlobals.client_controller.sub( self, 'HitButton', 'hit_on_off_button' )
+        HG.client_controller.sub( self, 'HitButton', 'hit_on_off_button' )
         
     
     def EventButton( self, event ):
@@ -1458,7 +1492,7 @@ class OnOffButton( wx.Button ):
             
             self.SetForegroundColour( ( 128, 0, 0 ) )
             
-            HydrusGlobals.client_controller.pub( self._topic, self._page_key, False )
+            HG.client_controller.pub( self._topic, self._page_key, False )
             
         else:
             
@@ -1468,7 +1502,7 @@ class OnOffButton( wx.Button ):
             
             self.SetForegroundColour( ( 0, 128, 0 ) )
             
-            HydrusGlobals.client_controller.pub( self._topic, self._page_key, True )
+            HG.client_controller.pub( self._topic, self._page_key, True )
             
         
     
@@ -1501,7 +1535,7 @@ class PopupDismissAll( PopupWindow ):
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        self._text = wx.StaticText( self )
+        self._text = BetterStaticText( self )
         self._text.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
         
         button = wx.Button( self, label = 'dismiss all' )
@@ -1644,7 +1678,7 @@ class PopupMessage( PopupWindow ):
     
     def CopyTB( self ):
         
-        HydrusGlobals.client_controller.pub( 'clipboard', 'text', self._job_key.ToString() )
+        HG.client_controller.pub( 'clipboard', 'text', self._job_key.ToString() )
         
     
     def CopyToClipboard( self ):
@@ -1655,7 +1689,7 @@ class PopupMessage( PopupWindow ):
             
             ( title, text ) = result
             
-            HydrusGlobals.client_controller.pub( 'clipboard', 'text', text )
+            HG.client_controller.pub( 'clipboard', 'text', text )
             
         
     
@@ -1681,9 +1715,9 @@ class PopupMessage( PopupWindow ):
             
             hashes = result
             
-            media_results = HydrusGlobals.client_controller.Read( 'media_results', hashes )
+            media_results = HG.client_controller.Read( 'media_results', hashes )
             
-            HydrusGlobals.client_controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_media_results = media_results )
+            HG.client_controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_media_results = media_results )
             
         
     
@@ -1962,7 +1996,7 @@ class PopupMessageManager( wx.Frame ):
         parent.Bind( wx.EVT_SIZE, self.EventMove )
         parent.Bind( wx.EVT_MOVE, self.EventMove )
         
-        HydrusGlobals.client_controller.sub( self, 'AddMessage', 'message' )
+        HG.client_controller.sub( self, 'AddMessage', 'message' )
         
         self._old_excepthook = sys.excepthook
         self._old_show_exception = HydrusData.ShowException
@@ -2065,7 +2099,7 @@ class PopupMessageManager( wx.Frame ):
             # changing show status while parent iconised in Windows leads to grey window syndrome
             going_to_bug_out_at_hide_or_show = HC.PLATFORM_WINDOWS and parent.IsIconized()
             
-            new_options = HydrusGlobals.client_controller.GetNewOptions()
+            new_options = HG.client_controller.GetNewOptions()
             
             if new_options.GetBoolean( 'hide_message_manager_on_gui_iconise' ):
                 
@@ -2187,7 +2221,7 @@ class PopupMessageManager( wx.Frame ):
     
     def _Update( self ):
         
-        if HydrusGlobals.view_shutdown:
+        if HG.view_shutdown:
             
             self._timer.Stop()
             
@@ -2439,14 +2473,14 @@ class RatingLikeCanvas( RatingLike ):
         self._current_media = None
         self._rating_state = None
         
-        service = HydrusGlobals.client_controller.GetServicesManager().GetService( service_key )
+        service = HG.client_controller.GetServicesManager().GetService( service_key )
         
         name = service.GetName()
         
         self.SetToolTipString( name )
         
-        HydrusGlobals.client_controller.sub( self, 'ProcessContentUpdates', 'content_updates_gui' )
-        HydrusGlobals.client_controller.sub( self, 'SetDisplayMedia', 'canvas_new_display_media' )
+        HG.client_controller.sub( self, 'ProcessContentUpdates', 'content_updates_gui' )
+        HG.client_controller.sub( self, 'SetDisplayMedia', 'canvas_new_display_media' )
         
     
     def _Draw( self, dc ):
@@ -2474,7 +2508,7 @@ class RatingLikeCanvas( RatingLike ):
             
             content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( rating, self._hashes ) )
             
-            HydrusGlobals.client_controller.Write( 'content_updates', { self._service_key : ( content_update, ) } )
+            HG.client_controller.Write( 'content_updates', { self._service_key : ( content_update, ) } )
             
         
     
@@ -2487,7 +2521,7 @@ class RatingLikeCanvas( RatingLike ):
             
             content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( rating, self._hashes ) )
             
-            HydrusGlobals.client_controller.Write( 'content_updates', { self._service_key : ( content_update, ) } )
+            HG.client_controller.Write( 'content_updates', { self._service_key : ( content_update, ) } )
             
         
     
@@ -2548,7 +2582,7 @@ class RatingNumerical( wx.Window ):
         
         self._service_key = service_key
         
-        self._service = HydrusGlobals.client_controller.GetServicesManager().GetService( self._service_key )
+        self._service = HG.client_controller.GetServicesManager().GetService( self._service_key )
         
         self._num_stars = self._service.GetNumStars()
         self._allow_zero = self._service.AllowZero()
@@ -2730,8 +2764,8 @@ class RatingNumericalCanvas( RatingNumerical ):
         
         self.SetToolTipString( name )
         
-        HydrusGlobals.client_controller.sub( self, 'ProcessContentUpdates', 'content_updates_gui' )
-        HydrusGlobals.client_controller.sub( self, 'SetDisplayMedia', 'canvas_new_display_media' )
+        HG.client_controller.sub( self, 'ProcessContentUpdates', 'content_updates_gui' )
+        HG.client_controller.sub( self, 'SetDisplayMedia', 'canvas_new_display_media' )
         
     
     def _Draw( self, dc ):
@@ -2760,7 +2794,7 @@ class RatingNumericalCanvas( RatingNumerical ):
                 
                 content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( rating, self._hashes ) )
                 
-                HydrusGlobals.client_controller.Write( 'content_updates', { self._service_key : ( content_update, ) } )
+                HG.client_controller.Write( 'content_updates', { self._service_key : ( content_update, ) } )
                 
             
         
@@ -2773,7 +2807,7 @@ class RatingNumericalCanvas( RatingNumerical ):
             
             content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, ( rating, self._hashes ) )
             
-            HydrusGlobals.client_controller.Write( 'content_updates', { self._service_key : ( content_update, ) } )
+            HG.client_controller.Write( 'content_updates', { self._service_key : ( content_update, ) } )
             
         
     
@@ -2924,7 +2958,7 @@ class RegexButton( wx.Button ):
         
         menu.AppendMenu( -1, 'favourites', submenu )
         
-        HydrusGlobals.client_controller.PopupMenu( self, menu )
+        HG.client_controller.PopupMenu( self, menu )
         
     
     def EventMenu( self, event ):
@@ -2974,7 +3008,7 @@ class RegexButton( wx.Button ):
             
         else: event.Skip()
         
-        if phrase is not None: HydrusGlobals.client_controller.pub( 'clipboard', 'text', phrase )
+        if phrase is not None: HG.client_controller.pub( 'clipboard', 'text', phrase )
         
     
 class SaneMultilineTextCtrl( wx.TextCtrl ):
@@ -3426,7 +3460,7 @@ class Shortcut( wx.Panel ):
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( wx.StaticText( self, label = 'Mouse events only work for the duplicate filter atm!' ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.AddF( BetterStaticText( self, 'Mouse events only work for the duplicate and archive/delete filters atm!' ), CC.FLAGS_EXPAND_PERPENDICULAR )
         
         gridbox = wx.FlexGridSizer( 0, 2 )
         
@@ -3660,7 +3694,7 @@ class TextAndGauge( wx.Panel ):
         
         wx.Panel.__init__( self, parent )
         
-        self._st = wx.StaticText( self )
+        self._st = BetterStaticText( self )
         self._gauge = Gauge( self )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
@@ -3902,7 +3936,7 @@ class TimeDeltaCtrl( wx.Panel ):
             self._days.Bind( wx.EVT_SPINCTRL, self.EventChange )
             
             hbox.AddF( self._days, CC.FLAGS_VCENTER )
-            hbox.AddF( wx.StaticText( self, label = 'days' ), CC.FLAGS_VCENTER )
+            hbox.AddF( BetterStaticText( self, 'days' ), CC.FLAGS_VCENTER )
             
         
         if self._show_hours:
@@ -3911,7 +3945,7 @@ class TimeDeltaCtrl( wx.Panel ):
             self._hours.Bind( wx.EVT_SPINCTRL, self.EventChange )
             
             hbox.AddF( self._hours, CC.FLAGS_VCENTER )
-            hbox.AddF( wx.StaticText( self, label = 'hours' ), CC.FLAGS_VCENTER )
+            hbox.AddF( BetterStaticText( self, 'hours' ), CC.FLAGS_VCENTER )
             
         
         if self._show_minutes:
@@ -3920,7 +3954,7 @@ class TimeDeltaCtrl( wx.Panel ):
             self._minutes.Bind( wx.EVT_SPINCTRL, self.EventChange )
             
             hbox.AddF( self._minutes, CC.FLAGS_VCENTER )
-            hbox.AddF( wx.StaticText( self, label = 'minutes' ), CC.FLAGS_VCENTER )
+            hbox.AddF( BetterStaticText( self, 'minutes' ), CC.FLAGS_VCENTER )
             
         
         if self._show_seconds:
@@ -3929,7 +3963,7 @@ class TimeDeltaCtrl( wx.Panel ):
             self._seconds.Bind( wx.EVT_SPINCTRL, self.EventChange )
             
             hbox.AddF( self._seconds, CC.FLAGS_VCENTER )
-            hbox.AddF( wx.StaticText( self, label = 'seconds' ), CC.FLAGS_VCENTER )
+            hbox.AddF( BetterStaticText( self, 'seconds' ), CC.FLAGS_VCENTER )
             
         
         if self._monthly_allowed:
@@ -3938,7 +3972,7 @@ class TimeDeltaCtrl( wx.Panel ):
             self._monthly.Bind( wx.EVT_CHECKBOX, self.EventChange )
             
             hbox.AddF( self._monthly, CC.FLAGS_VCENTER )
-            hbox.AddF( wx.StaticText( self, label = 'monthly' ), CC.FLAGS_VCENTER )
+            hbox.AddF( BetterStaticText( self, 'monthly' ), CC.FLAGS_VCENTER )
             
         
         self.SetSizer( hbox )
@@ -4146,7 +4180,7 @@ class WaitingPolitelyStaticText( wx.StaticText ):
         self._page_key = page_key
         self._waiting = False
         
-        HydrusGlobals.client_controller.sub( self, 'SetWaitingPolitely', 'waiting_politely' )
+        HG.client_controller.sub( self, 'SetWaitingPolitely', 'waiting_politely' )
         
         self.SetWaitingPolitely( self._page_key, False )
         
@@ -4179,7 +4213,7 @@ class WaitingPolitelyTrafficLight( BufferedWindow ):
         self._page_key = page_key
         self._waiting = False
         
-        HydrusGlobals.client_controller.sub( self, 'SetWaitingPolitely', 'waiting_politely' )
+        HG.client_controller.sub( self, 'SetWaitingPolitely', 'waiting_politely' )
         
         self.SetWaitingPolitely( self._page_key, False )
         
@@ -4227,7 +4261,7 @@ class WaitingPolitelyTrafficLight( BufferedWindow ):
     
 def GetWaitingPolitelyControl( parent, page_key ):
     
-    new_options = HydrusGlobals.client_controller.GetNewOptions()
+    new_options = HG.client_controller.GetNewOptions()
     
     if new_options.GetBoolean( 'waiting_politely_text' ):
         

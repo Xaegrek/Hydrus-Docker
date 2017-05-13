@@ -1,6 +1,7 @@
 import HydrusConstants as HC
 import ClientConstants as CC
 import ClientCaches
+import ClientData
 import ClientDragDrop
 import ClientExporting
 import ClientGUICommon
@@ -13,6 +14,7 @@ import ClientGUIPages
 import ClientGUIParsing
 import ClientGUIScrolledPanelsManagement
 import ClientGUIScrolledPanelsReview
+import ClientGUIShortcuts
 import ClientGUITopLevelWindows
 import ClientDownloading
 import ClientMedia
@@ -26,7 +28,7 @@ import hashlib
 import HydrusData
 import HydrusExceptions
 import HydrusPaths
-import HydrusGlobals
+import HydrusGlobals as HG
 import HydrusNetwork
 import HydrusNetworking
 import HydrusSerialisable
@@ -86,18 +88,17 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         wx.GetApp().SetTopWindow( self )
         
-        self.RefreshAcceleratorTable()
-        
         self._message_manager = ClientGUICommon.PopupMessageManager( self )
         
         self.Bind( wx.EVT_LEFT_DCLICK, self.EventFrameNewPage )
         self.Bind( wx.EVT_MIDDLE_DOWN, self.EventFrameNewPage )
         self.Bind( wx.EVT_CLOSE, self.EventClose )
-        self.Bind( wx.EVT_MENU, self.EventMenu )
         self.Bind( wx.EVT_SET_FOCUS, self.EventFocus )
+        self.Bind( wx.EVT_CHAR_HOOK, self.EventCharHook )
         
         self._controller.sub( self, 'ClearClosedPages', 'clear_closed_pages' )
         self._controller.sub( self, 'NewCompose', 'new_compose_frame' )
+        self._controller.sub( self, 'NewPageDuplicateFilter', 'new_duplicate_filter' )
         self._controller.sub( self, 'NewPageImportBooru', 'new_import_booru' )
         self._controller.sub( self, 'NewPageImportGallery', 'new_import_gallery' )
         self._controller.sub( self, 'NewPageImportHDD', 'new_hdd_import' )
@@ -483,7 +484,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             deletee_service_keys = []
             
-            with HydrusGlobals.dirty_object_lock:
+            with HG.dirty_object_lock:
                 
                 self._controller.WriteSynchronous( 'update_server_services', admin_service_key, serverside_services, service_keys_to_access_keys, deletee_service_keys )
                 
@@ -913,6 +914,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             ClientGUIMenus.AppendSeparator( menu )
             
             ClientGUIMenus.AppendMenuItem( self, menu, 'options', 'Change how the client operates.', self._ManageOptions )
+            ClientGUIMenus.AppendMenuItem( self, menu, 'shortcuts', 'Edit the shortcuts your client responds to.', self._ManageShortcuts )
             
             ClientGUIMenus.AppendSeparator( menu )
             
@@ -1061,10 +1063,6 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 ClientGUIMenus.AppendMenuItem( self, search_menu, service.GetName(), 'Open a new search tab for ' + service.GetName() + '.', self._NewPageQuery, service.GetServiceKey() )
                 
             
-            ClientGUIMenus.AppendSeparator( search_menu )
-            
-            ClientGUIMenus.AppendMenuItem( self, search_menu, 'duplicates (under construction!)', 'Open a new tab to discover and filter duplicate files.', self._NewPageDuplicateFilter )
-            
             ClientGUIMenus.AppendMenu( menu, search_menu, 'new search page' )
             
             #
@@ -1120,6 +1118,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             ClientGUIMenus.AppendMenu( download_menu, gallery_menu, 'gallery' )
             ClientGUIMenus.AppendMenu( menu, download_menu, 'new download page' )
             
+            #
+            
             download_popup_menu = wx.Menu()
             
             ClientGUIMenus.AppendMenuItem( self, download_popup_menu, 'a youtube video', 'Enter a YouTube URL and choose which formats you would like to download', self._StartYoutubeDownload )
@@ -1132,6 +1132,14 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 
             
             ClientGUIMenus.AppendMenu( menu, download_popup_menu, 'new download popup' )
+            
+            #
+            
+            special_menu = wx.Menu()
+            
+            ClientGUIMenus.AppendMenuItem( self, special_menu, 'duplicates processing', 'Open a new tab to discover and filter duplicate files.', self._NewPageDuplicateFilter )
+            
+            ClientGUIMenus.AppendMenu( menu, special_menu, 'new special page' )
             
             #
             
@@ -1411,10 +1419,11 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             ClientGUIMenus.AppendMenuItem( self, debug, 'make some popups', 'Throw some varied popups at the message manager, just to check it is working.', self._DebugMakeSomePopups )
             ClientGUIMenus.AppendMenuItem( self, debug, 'make a popup in five seconds', 'Throw a delayed popup at the message manager, giving you time to minimise or otherwise alter the client before it arrives.', wx.CallLater, 5000, HydrusData.ShowText, 'This is a delayed popup message.' )
-            ClientGUIMenus.AppendMenuCheckItem( self, debug, 'db report mode', 'Have the db report query information, where supported.', HydrusGlobals.db_report_mode, self._SwitchBoolean, 'db_report_mode' )
-            ClientGUIMenus.AppendMenuCheckItem( self, debug, 'db profile mode', 'Run detailed \'profiles\' on every database query and dump this information to the log (this is very useful for hydrus dev to have, if something is running slow for you!).', HydrusGlobals.db_profile_mode, self._SwitchBoolean, 'db_profile_mode' )
-            ClientGUIMenus.AppendMenuCheckItem( self, debug, 'pubsub profile mode', 'Run detailed \'profiles\' on every internal publisher/subscriber message and dump this information to the log. This can hammer your log with dozens of large dumps every second. Don\'t run it unless you know you need to.', HydrusGlobals.pubsub_profile_mode, self._SwitchBoolean, 'pubsub_profile_mode' )
-            ClientGUIMenus.AppendMenuCheckItem( self, debug, 'force idle mode', 'Make the client consider itself idle and fire all maintenance routines right now. This may hang the gui for a while.', HydrusGlobals.force_idle_mode, self._SwitchBoolean, 'force_idle_mode' )
+            ClientGUIMenus.AppendMenuCheckItem( self, debug, 'db report mode', 'Have the db report query information, where supported.', HG.db_report_mode, self._SwitchBoolean, 'db_report_mode' )
+            ClientGUIMenus.AppendMenuCheckItem( self, debug, 'db profile mode', 'Run detailed \'profiles\' on every database query and dump this information to the log (this is very useful for hydrus dev to have, if something is running slow for you!).', HG.db_profile_mode, self._SwitchBoolean, 'db_profile_mode' )
+            ClientGUIMenus.AppendMenuCheckItem( self, debug, 'gui report mode', 'Have the gui report inside information, where supported.', HG.gui_report_mode, self._SwitchBoolean, 'gui_report_mode' )
+            ClientGUIMenus.AppendMenuCheckItem( self, debug, 'pubsub profile mode', 'Run detailed \'profiles\' on every internal publisher/subscriber message and dump this information to the log. This can hammer your log with dozens of large dumps every second. Don\'t run it unless you know you need to.', HG.pubsub_profile_mode, self._SwitchBoolean, 'pubsub_profile_mode' )
+            ClientGUIMenus.AppendMenuCheckItem( self, debug, 'force idle mode', 'Make the client consider itself idle and fire all maintenance routines right now. This may hang the gui for a while.', HG.force_idle_mode, self._SwitchBoolean, 'force_idle_mode' )
             ClientGUIMenus.AppendMenuItem( self, debug, 'force a gui layout now', 'Tell the gui to relayout--useful to test some gui bootup layout issues.', self.Layout )
             ClientGUIMenus.AppendMenuItem( self, debug, 'print garbage', 'Print some information about the python garbage to the log.', self._DebugPrintGarbage )
             ClientGUIMenus.AppendMenuItem( self, debug, 'clear image rendering cache', 'Tell the image rendering system to forget all current images. This will often free up a bunch of memory immediately.', self._controller.ClearCaches )
@@ -1480,7 +1489,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             try:
                 
                 job_key.SetVariable( 'popup_title', 'importing updates' )
-                HydrusGlobals.client_controller.pub( 'message', job_key )
+                HG.client_controller.pub( 'message', job_key )
                 
                 for ( i, update_path ) in enumerate( update_paths ):
                     
@@ -1576,6 +1585,9 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
     def _InitialiseMenubar( self ):
         
         self._menubar = wx.MenuBar()
+        
+        self._menu_updater = ClientGUICommon.ThreadToGUIUpdater( self._menubar, self.RefreshMenu )
+        self._dirty_menus = set()
         
         self.SetMenuBar( self._menubar )
         
@@ -1695,9 +1707,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
     def _ManageAccountTypes( self, service_key ):
         
         title = 'manage account types'
-        frame_key = 'regular_dialog'
         
-        with ClientGUITopLevelWindows.DialogManage( self, title, frame_key ) as dlg:
+        with ClientGUITopLevelWindows.DialogManage( self, title ) as dlg:
             
             panel = ClientGUIScrolledPanelsManagement.ManageAccountTypesPanel( dlg, service_key )
             
@@ -1743,9 +1754,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
     def _ManageParsingScripts( self ):
         
         title = 'manage parsing scripts'
-        frame_key = 'regular_dialog'
         
-        with ClientGUITopLevelWindows.DialogManage( self, title, frame_key ) as dlg:
+        with ClientGUITopLevelWindows.DialogManage( self, title ) as dlg:
             
             panel = ClientGUIParsing.ManageParsingScriptsPanel( dlg )
             
@@ -1763,9 +1773,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
     def _ManageServer( self, service_key ):
         
         title = 'manage server services'
-        frame_key = 'regular_dialog'
         
-        with ClientGUITopLevelWindows.DialogManage( self, title, frame_key ) as dlg:
+        with ClientGUITopLevelWindows.DialogManage( self, title ) as dlg:
             
             panel = ClientGUIScrolledPanelsManagement.ManageServerServicesPanel( dlg, service_key )
             
@@ -1784,9 +1793,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         try:
             
             title = 'manage services'
-            frame_key = 'regular_dialog'
             
-            with ClientGUITopLevelWindows.DialogManage( self, title, frame_key ) as dlg:
+            with ClientGUITopLevelWindows.DialogManage( self, title ) as dlg:
                 
                 panel = ClientGUIScrolledPanelsManagement.ManageClientServicesPanel( dlg )
                 
@@ -1798,6 +1806,18 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         finally:
             
             HC.options[ 'pause_repo_sync' ] = original_pause_status
+            
+        
+    
+    def _ManageShortcuts( self ):
+        
+        with ClientGUITopLevelWindows.DialogManage( self, 'manage shortcuts' ) as dlg:
+            
+            panel = ClientGUIScrolledPanelsManagement.ManageShortcutsPanel( dlg )
+            
+            dlg.SetPanel( panel )
+            
+            dlg.ShowModal()
             
         
     
@@ -1874,6 +1894,23 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 
                 with ClientGUIDialogs.DialogModifyAccounts( self, service_key, [ subject_account ] ) as dlg2: dlg2.ShowModal()
                 
+            
+        
+    
+    def _MovePage( self, page_index, direction ):
+        
+        new_page_index = page_index + direction
+        
+        if 0 <= new_page_index and new_page_index <= self._notebook.GetPageCount() - 1:
+            
+            page_is_selected = self._notebook.GetSelection() == page_index
+            
+            page = self._notebook.GetPage( page_index )
+            name = self._notebook.GetPageText( page_index )
+            
+            self._notebook.RemovePage( page_index )
+            
+            self._notebook.InsertPage( new_page_index, page, name, page_is_selected )
             
         
     
@@ -2025,6 +2062,89 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
         
         self._controller.Write( 'save_options', HC.options )
+        
+    
+    def _ProcessApplicationCommand( self, command ):
+        
+        command_processed = True
+        
+        command_type = command.GetCommandType()
+        data = command.GetData()
+        
+        if command_type == CC.APPLICATION_COMMAND_TYPE_SIMPLE:
+            
+            action = data
+            
+            if action == 'refresh':
+                
+                self._Refresh()
+                
+            elif action == 'new_page':
+                
+                self._ChooseNewPage()
+                
+            if action == 'close_page':
+                
+                self._CloseCurrentPage()
+                
+            elif action == 'unclose_page':
+                
+                self._UnclosePage()
+                
+            elif action == 'show_hide_splitters':
+                
+                self._ShowHideSplitters()
+                
+            elif action == 'synchronised_wait_switch':
+                
+                self._SetSynchronisedWait()
+                
+            elif action == 'set_media_focus':
+                
+                self._SetMediaFocus()
+                
+            elif action == 'set_search_focus':
+                
+                self._SetSearchFocus()
+                
+            elif action == 'redo':
+                
+                self._controller.pub( 'redo' )
+                
+            elif action == 'undo':
+                
+                self._controller.pub( 'undo' )
+                
+            else:
+                
+                command_processed = False
+                
+            
+        else:
+            
+            command_processed = False
+            
+        
+        return command_processed
+        
+    
+    def _ProcessShortcut( self, shortcut ):
+        
+        shortcut_processed = False
+        
+        command = HG.client_controller.GetCommandFromShortcut( [ 'main_gui' ], shortcut )
+        
+        if command is not None:
+            
+            command_processed = self._ProcessApplicationCommand( command )
+            
+            if command_processed:
+                
+                shortcut_processed = True
+                
+            
+        
+        return shortcut_processed
         
     
     def _RebalanceClientFiles( self ):
@@ -2182,6 +2302,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             if dlg.ShowModal() == wx.ID_OK:
                 
                 new_name = dlg.GetValue()
+                
+                new_name = self._notebook.EscapeMnemonics( new_name )
                 
                 self._notebook.SetPageText( selection, new_name )
                 
@@ -2391,19 +2513,23 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         
         if name == 'db_report_mode':
             
-            HydrusGlobals.db_report_mode = not HydrusGlobals.db_report_mode
+            HG.db_report_mode = not HG.db_report_mode
             
         elif name == 'db_profile_mode':
             
-            HydrusGlobals.db_profile_mode = not HydrusGlobals.db_profile_mode
+            HG.db_profile_mode = not HG.db_profile_mode
+            
+        elif name == 'gui_report_mode':
+            
+            HG.gui_report_mode = not HG.gui_report_mode
             
         elif name == 'pubsub_profile_mode':
             
-            HydrusGlobals.pubsub_profile_mode = not HydrusGlobals.pubsub_profile_mode
+            HG.pubsub_profile_mode = not HG.pubsub_profile_mode
             
         elif name == 'force_idle_mode':
             
-            HydrusGlobals.force_idle_mode = not HydrusGlobals.force_idle_mode
+            HG.force_idle_mode = not HG.force_idle_mode
             
         
     
@@ -2530,7 +2656,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
                 
                 job_key.SetVariable( 'popup_text_1', 'matched ' + HydrusData.ConvertValueRangeToPrettyString( len( hydrus_hashes ), total_num_hta_hashes ) + ' files' )
                 
-                HydrusGlobals.client_controller.WaitUntilPubSubsEmpty()
+                HG.client_controller.WaitUntilPubSubsEmpty()
                 
             
             del hta
@@ -2560,7 +2686,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
                 job_key.SetVariable( 'popup_text_1', 'synced ' + HydrusData.ConvertValueRangeToPrettyString( total_num_processed, len( hydrus_hashes ) ) + ' files' )
                 job_key.SetVariable( 'popup_gauge_1', ( total_num_processed, len( hydrus_hashes ) ) )
                 
-                HydrusGlobals.client_controller.WaitUntilPubSubsEmpty()
+                HG.client_controller.WaitUntilPubSubsEmpty()
                 
             
             job_key.DeleteVariable( 'popup_gauge_1' )
@@ -2755,11 +2881,31 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         return self._loading_session
         
     
+    def EventCharHook( self, event ):
+        
+        if ClientGUIShortcuts.IShouldCatchCharHook( self ):
+            
+            shortcut = ClientData.ConvertKeyEventToShortcut( event )
+            
+            if shortcut is not None:
+                
+                shortcut_processed = self._ProcessShortcut( shortcut )
+                
+                if shortcut_processed:
+                    
+                    return
+                    
+                
+            
+        
+        event.Skip()
+        
+    
     def EventClose( self, event ):
         
         if not event.CanVeto():
             
-            HydrusGlobals.emergency_exit = True
+            HG.emergency_exit = True
             
         
         exit_allowed = self.Exit()
@@ -2790,94 +2936,6 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             
         
     
-    def EventMenu( self, event ):
-        
-        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
-        
-        if action is not None:
-            
-            ( command, data ) = action
-            
-            if command == 'account_info': self._AccountInfo( data )
-            elif command == 'auto_repo_setup': self._AutoRepoSetup()
-            elif command == 'auto_server_setup': self._AutoServerSetup()
-            elif command == 'backup_service': self._BackupService( data )
-            elif command == 'close_page': self._CloseCurrentPage()
-            elif command == 'delete_gui_session':
-                
-                self._controller.Write( 'delete_serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_GUI_SESSION, data )
-                
-                self._controller.pub( 'notify_new_sessions' )
-                
-            elif command == 'fetch_ip': self._FetchIP( data )
-            elif command == 'force_idle_mode':
-                
-                self._controller.ForceIdle()
-                
-            elif command == 'load_gui_session': self._LoadGUISession( data )
-            elif command == 'manage_account_types': self._ManageAccountTypes( data )
-            elif command == 'manage_boorus': self._ManageBoorus()
-            elif command == 'manage_parsing_scripts': self._ManageParsingScripts()
-            elif command == 'manage_pixiv_account': self._ManagePixivAccount()
-            elif command == 'manage_server_services': self._ManageServer( data )
-            elif command == 'manage_services': self._ManageServices()
-            elif command == 'manage_subscriptions': self._ManageSubscriptions()
-            elif command == 'manage_tag_censorship': self._ManageTagCensorship()
-            elif command == 'manage_tag_parents': self._ManageTagParents()
-            elif command == 'manage_tag_siblings': self._ManageTagSiblings()
-            elif command == 'manage_upnp': self._ManageUPnP()
-            elif command == 'modify_account': self._ModifyAccount( data )
-            elif command == 'new_accounts': self._GenerateNewAccounts( data )
-            elif command == 'new_import_booru': self._NewPageImportBooru()
-            elif command == 'new_import_gallery':
-                
-                site_type = data
-                
-                gallery_identifier = ClientDownloading.GalleryIdentifier( site_type )
-                
-                self._NewPageImportGallery( gallery_identifier )
-                
-            elif command == 'new_import_page_of_images': self._NewPageImportPageOfImages()
-            elif command == 'new_import_thread_watcher': self._NewPageImportThreadWatcher()
-            elif command == 'new_import_urls': self._NewPageImportURLs()
-            elif command == 'new_page':
-                
-                self._ChooseNewPage()
-                
-            elif command == 'new_page_query': self._NewPageQuery( data )
-            elif command == 'petitions': self._NewPagePetitions( data )
-            elif command == 'pubsub_profile_mode':
-                
-                HydrusGlobals.pubsub_profile_mode = not HydrusGlobals.pubsub_profile_mode
-                
-            elif command == 'redo':
-                
-                self._controller.pub( 'redo' )
-                
-            elif command == 'refresh':
-                
-                self._Refresh()
-                
-            elif command == 'review_services': self._ReviewServices()
-            elif command == 'save_gui_session': self._SaveGUISession()
-            elif command == 'set_media_focus': self._SetMediaFocus()
-            elif command == 'set_search_focus': self._SetSearchFocus()
-            elif command == 'show_hide_splitters':
-                
-                self._ShowHideSplitters()
-                
-            elif command == 'start_ipfs_download': self._StartIPFSDownload()
-            elif command == 'start_youtube_download': self._StartYoutubeDownload()
-            elif command == 'synchronised_wait_switch': self._SetSynchronisedWait()
-            elif command == 'unclose_page':
-                
-                self._UnclosePage()
-                
-            elif command == 'undo': self._controller.pub( 'undo' )
-            else: event.Skip()
-            
-        
-    
     def EventNotebookLeftDoubleClick( self, event ):
         
         ( tab_index, flags ) = self._notebook.HitTest( ( event.GetX(), event.GetY() ) )
@@ -2898,6 +2956,26 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             
             ClientGUIMenus.AppendMenuItem( self, menu, 'close page', 'Close this page.', self._ClosePage, tab_index )
             ClientGUIMenus.AppendMenuItem( self, menu, 'rename page', 'Rename this page.', self._RenamePage, tab_index )
+            
+            more_than_one_tab = self._notebook.GetPageCount() > 1
+            
+            if more_than_one_tab:
+                
+                ClientGUIMenus.AppendSeparator( menu )
+                
+                can_move_left = tab_index > 0
+                can_move_right = tab_index < self._notebook.GetPageCount() - 1
+                
+                if can_move_left:
+                    
+                    ClientGUIMenus.AppendMenuItem( self, menu, 'move left', 'Move this page one to the left.', self._MovePage, tab_index, -1 )
+                    
+                
+                if can_move_right:
+                    
+                    ClientGUIMenus.AppendMenuItem( self, menu, 'move right', 'Move this page one to the right.', self._MovePage, tab_index, 1 )
+                    
+                
             
             self._controller.PopupMenu( self, menu )
             
@@ -2933,7 +3011,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
     
     def Exit( self, restart = False ):
         
-        if not HydrusGlobals.emergency_exit:
+        if not HG.emergency_exit:
             
             if HC.options[ 'confirm_client_exit' ]:
                 
@@ -2976,7 +3054,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         
         if restart:
             
-            HydrusGlobals.restart = True
+            HG.restart = True
             
         
         try:
@@ -3012,7 +3090,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         
         self.Hide()
         
-        if HydrusGlobals.emergency_exit:
+        if HG.emergency_exit:
             
             self._controller.Exit()
             
@@ -3075,6 +3153,11 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         self._ImportFiles( paths )
         
     
+    def NewPageDuplicateFilter( self ):
+        
+        self._NewPageDuplicateFilter()
+        
+    
     def NewPageImportBooru( self ):
         
         self._NewPageImportBooru()
@@ -3119,30 +3202,49 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
     
     def NotifyNewOptions( self ):
         
-        self.RefreshAcceleratorTable()
+        self._dirty_menus.add( 'services' )
         
-        self.RefreshMenu( 'services' )
+        self._menu_updater.Update()
         
     
-    def NotifyNewPending( self ): self.RefreshMenu( 'pending' )
+    def NotifyNewPending( self ):
+        
+        self._dirty_menus.add( 'pending' )
+        
+        self._menu_updater.Update()
+        
     
     def NotifyNewPermissions( self ):
         
-        self.RefreshMenu( 'pages' )
-        self.RefreshMenu( 'services' )
+        self._dirty_menus.add( 'pages' )
+        self._dirty_menus.add( 'services' )
+        
+        self._menu_updater.Update()
         
     
     def NotifyNewServices( self ):
         
-        self.RefreshMenu( 'pages' )
-        self.RefreshMenu( 'services' )
+        self._dirty_menus.add( 'pages' )
+        self._dirty_menus.add( 'services' )
+        
+        self._menu_updater.Update()
         
     
-    def NotifyNewSessions( self ): self.RefreshMenu( 'pages' )
+    def NotifyNewSessions( self ):
+        
+        self._dirty_menus.add( 'pages' )
+        
+        self._menu_updater.Update()
+        
     
-    def NotifyNewUndo( self ): self.RefreshMenu( 'undo' )
+    def NotifyNewUndo( self ):
+        
+        self._dirty_menus.add( 'undo' )
+        
+        self._menu_updater.Update()
+        
     
-    def PageDeleted( self, page_key ):
+    def PageCompletelyDestroyed( self, page_key ):
         
         with self._lock:
             
@@ -3150,7 +3252,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             
         
     
-    def PageHidden( self, page_key ):
+    def PageClosedButNotDestroyed( self, page_key ):
         
         with self._lock:
             
@@ -3174,75 +3276,69 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         return False
         
     
-    def RefreshAcceleratorTable( self ):
+    def RefreshMenu( self ):
         
-        interested_actions = [ 'archive', 'inbox', 'close_page', 'filter', 'manage_ratings', 'manage_tags', 'new_page', 'unclose_page', 'refresh', 'set_media_focus', 'set_search_focus', 'show_hide_splitters', 'synchronised_wait_switch', 'undo', 'redo' ]
-        
-        entries = []
-        
-        for ( modifier, key_dict ) in HC.options[ 'shortcuts' ].items(): entries.extend( [ ( modifier, key, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( action ) ) for ( key, action ) in key_dict.items() if action in interested_actions ] )
-        
-        self.SetAcceleratorTable( wx.AcceleratorTable( entries ) )
-        
-    
-    def RefreshMenu( self, name ):
-        
-        db_going_to_hang_if_we_hit_it = HydrusGlobals.client_controller.DBCurrentlyDoingJob()
+        db_going_to_hang_if_we_hit_it = HG.client_controller.DBCurrentlyDoingJob()
         
         if db_going_to_hang_if_we_hit_it:
             
-            wx.CallLater( 2500, self.RefreshMenu, name )
+            wx.CallLater( 2500, self.RefreshMenu )
             
             return
             
         
-        ( menu, label, show ) = self._GenerateMenuInfo( name )
-        
-        if HC.PLATFORM_OSX:
+        for name in self._dirty_menus:
             
-            menu.SetTitle( label ) # causes bugs in os x if this is not here
+            ( menu, label, show ) = self._GenerateMenuInfo( name )
             
-        
-        ( old_menu, old_label, old_show ) = self._menus[ name ]
-        
-        if old_show:
-            
-            old_menu_index = self._menubar.FindMenu( old_label )
-            
-            if show:
+            if HC.PLATFORM_OSX:
                 
-                self._menubar.Replace( old_menu_index, menu, label )
+                menu.SetTitle( label ) # causes bugs in os x if this is not here
+                
+            
+            ( old_menu, old_label, old_show ) = self._menus[ name ]
+            
+            if old_show:
+                
+                old_menu_index = self._menubar.FindMenu( old_label )
+                
+                if show:
+                    
+                    self._menubar.Replace( old_menu_index, menu, label )
+                    
+                else:
+                    
+                    self._menubar.Remove( old_menu_index )
+                    
                 
             else:
                 
-                self._menubar.Remove( old_menu_index )
-                
-            
-        else:
-            
-            if show:
-                
-                insert_index = 0
-                
-                for temp_name in MENU_ORDER:
+                if show:
                     
-                    if temp_name == name: break
+                    insert_index = 0
                     
-                    ( temp_menu, temp_label, temp_show ) = self._menus[ temp_name ]
-                    
-                    if temp_show:
+                    for temp_name in MENU_ORDER:
                         
-                        insert_index += 1
+                        if temp_name == name: break
+                        
+                        ( temp_menu, temp_label, temp_show ) = self._menus[ temp_name ]
+                        
+                        if temp_show:
+                            
+                            insert_index += 1
+                            
                         
                     
-                
-                self._menubar.Insert( insert_index, menu, label )
+                    self._menubar.Insert( insert_index, menu, label )
+                    
                 
             
+            self._menus[ name ] = ( menu, label, show )
+            
+            ClientGUIMenus.DestroyMenu( old_menu )
+            
         
-        self._menus[ name ] = ( menu, label, show )
-        
-        ClientGUIMenus.DestroyMenu( old_menu )
+        self._dirty_menus = set()
         
     
     def RefreshStatusBar( self ):

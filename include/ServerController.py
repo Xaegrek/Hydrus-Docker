@@ -3,7 +3,7 @@ import HydrusConstants as HC
 import HydrusController
 import HydrusData
 import HydrusExceptions
-import HydrusGlobals
+import HydrusGlobals as HG
 import HydrusNetworking
 import HydrusSessions
 import HydrusThreading
@@ -162,7 +162,7 @@ class Controller( HydrusController.HydrusController ):
         
         self._name = 'server'
         
-        HydrusGlobals.server_controller = self
+        HG.server_controller = self
         
     
     def _InitDB( self ):
@@ -386,9 +386,9 @@ class Controller( HydrusController.HydrusController ):
                     
                     interrupt_received = True
                     
-                    HydrusData.Print( u'Received a keyboard interrupt\u2026' )
-                    
                     def do_it():
+                        
+                        HydrusData.Print( u'Received a keyboard interrupt\u2026' )
                         
                         self.Exit()
                         
@@ -403,7 +403,7 @@ class Controller( HydrusController.HydrusController ):
     
     def SaveDirtyObjects( self ):
         
-        with HydrusGlobals.dirty_object_lock:
+        with HG.dirty_object_lock:
             
             dirty_services = [ service for service in self._services if service.IsDirty() ]
             
