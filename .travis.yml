@@ -5,6 +5,9 @@ language: bash
 env:
 - SUFFIX=
 - SUFFIX=-arm
+branches:
+  only:
+  - /^v\d+\-blott?.+/
 script:
 - if [ -z "$TRAVIS_TAG" ]; then exit 0; fi
 - docker run --rm --privileged multiarch/qemu-user-static:register --reset
