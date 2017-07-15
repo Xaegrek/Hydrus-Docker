@@ -1,5 +1,5 @@
 import json
-import lz4
+import lz4.block
 import zlib
 
 SERIALISABLE_TYPE_BASE = 0
@@ -46,6 +46,11 @@ SERIALISABLE_TYPE_CLIENT_TO_SERVER_UPDATE = 40
 SERIALISABLE_TYPE_SHORTCUT = 41
 SERIALISABLE_TYPE_APPLICATION_COMMAND = 42
 SERIALISABLE_TYPE_DUPLICATE_ACTION_OPTIONS = 43
+SERIALISABLE_TYPE_TAG_CENSOR = 44
+SERIALISABLE_TYPE_NETWORK_BANDWIDTH_MANAGER = 45
+SERIALISABLE_TYPE_NETWORK_SESSION_MANAGER = 46
+SERIALISABLE_TYPE_NETWORK_CONTEXT = 47
+SERIALISABLE_TYPE_NETWORK_LOGIN_MANAGER = 48
 
 SERIALISABLE_TYPES_TO_OBJECT_TYPES = {}
 
@@ -57,7 +62,7 @@ def CreateFromNetworkString( network_string ):
         
     except zlib.error:
         
-        obj_string = lz4.loads( network_string )
+        obj_string = lz4.block.decompress( network_string )
         
     
     return CreateFromString( obj_string )

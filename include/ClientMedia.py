@@ -36,6 +36,150 @@ def FlattenMedia( media_list ):
     
     return flat_media
     
+def GetDuplicateComparisonStatements( shown_media, comparison_media ):
+    
+    statements = []
+    score = 0
+    
+    # size
+    
+    s_size = shown_media.GetSize()
+    c_size = comparison_media.GetSize()
+    
+    size_ratio = float( s_size ) / float( c_size )
+    
+    if size_ratio > 2.0:
+        
+        statements.append( 'This has a much larger filesize.' )
+        
+        score += 2
+        
+    elif size_ratio > 1.05:
+        
+        statements.append( 'This has a larger filesize.' )
+        
+        score += 0.5
+        
+    elif size_ratio < 0.5:
+        
+        statements.append( 'This has a much smaller filesize.' )
+        
+        score -= 2
+        
+    elif size_ratio < 0.95:
+        
+        statements.append( 'This has a smaller filesize.' )
+        
+        score -= 0.5
+        
+    
+    # higher/same res
+    
+    s_resolution = shown_media.GetResolution()
+    c_resolution = comparison_media.GetResolution()
+    
+    if s_resolution is not None and c_resolution is not None:
+        
+        ( s_w, s_h ) = shown_media.GetResolution()
+        ( c_w, c_h ) = comparison_media.GetResolution()
+        
+        resolution_ratio = float( s_w * s_h ) / float( c_w * c_h )
+        
+        if resolution_ratio == 1.0:
+            
+            if s_resolution != c_resolution:
+                
+                statements.append( 'The files have the same number of pixels but different resolution.' )
+                
+            
+        elif resolution_ratio > 2.0:
+            
+            statements.append( 'This has much higher resolution.' )
+            
+            score += 2
+            
+        elif resolution_ratio > 1.0:
+            
+            statements.append( 'This has higher resolution.' )
+            
+            score += 1
+            
+        elif resolution_ratio < 0.5:
+            
+            statements.append( 'This has much lower resolution.' )
+            
+            score -= 2
+            
+        elif resolution_ratio < 1.0:
+            
+            statements.append( 'This has lower resolution.' )
+            
+            score -= 1
+            
+        
+    
+    # same/diff mime
+    
+    s_mime = shown_media.GetMime()
+    c_mime = comparison_media.GetMime()
+    
+    if s_mime != c_mime:
+        
+        statements.append( 'This is ' + HC.mime_string_lookup[ s_mime ] + ', the other is ' + HC.mime_string_lookup[ c_mime ] + '.' )
+        
+    
+    # more tags
+    
+    s_num_tags = len( shown_media.GetTagsManager().GetCurrent() )
+    c_num_tags = len( comparison_media.GetTagsManager().GetCurrent() )
+    
+    if s_num_tags > 0 and c_num_tags > 0:
+        
+        if s_num_tags > c_num_tags:
+            
+            statements.append( 'This has more tags.' )
+            
+            score += 1
+            
+        elif s_num_tags < c_num_tags:
+            
+            statements.append( 'This has fewer tags.' )
+            
+            score += 1
+            
+        
+    elif s_num_tags > 0:
+        
+        statements.append( 'This has tags, the other does not.' )
+        
+    elif c_num_tags > 0:
+        
+        statements.append( 'This has no tags, the other does.' )
+        
+    
+    # older
+    
+    s_ts = shown_media.GetLocationsManager().GetTimestamp( CC.COMBINED_LOCAL_FILE_SERVICE_KEY )
+    c_ts = comparison_media.GetLocationsManager().GetTimestamp( CC.COMBINED_LOCAL_FILE_SERVICE_KEY )
+    
+    if s_ts is not None and c_ts is not None:
+        
+        if s_ts < c_ts - 86400 * 30:
+            
+            statements.append( 'This is older.' )
+            
+            score += 0.5
+            
+        elif c_ts < s_ts - 86400 * 30:
+            
+            statements.append( 'This is newer.' )
+            
+            score -= 0.5
+            
+        
+    
+    return ( statements, score )
+    
 def MergeTagsManagers( tags_managers ):
     
     def CurrentAndPendingFilter( items ):
@@ -78,16 +222,101 @@ def MergeTagsManagers( tags_managers ):
     
     return TagsManagerSimple( merged_service_keys_to_statuses_to_tags )
     
+class DuplicatesManager( object ):
+    
+    def __init__( self, service_keys_to_dupe_statuses_to_counts ):
+        
+        self._service_keys_to_dupe_statuses_to_counts = service_keys_to_dupe_statuses_to_counts
+        
+    
+    def Duplicate( self ):
+        
+        service_keys_to_dupe_statuses_to_counts = collections.defaultdict( collections.Counter )
+        
+        return DuplicatesManager( service_keys_to_dupe_statuses_to_counts )
+        
+    
+    def GetDupeStatusesToCounts( self, service_key ):
+        
+        return self._service_keys_to_dupe_statuses_to_counts[ service_key ]
+        
+    
+class FileInfoManager( object ):
+    
+    def __init__( self, hash, size = None, mime = None, width = None, height = None, duration = None, num_frames = None, num_words = None ):
+        
+        if mime is None:
+            
+            mime = HC.APPLICATION_UNKNOWN
+            
+        
+        self._hash = hash
+        self._size = size
+        self._mime = mime
+        self._width = width
+        self._height = height
+        self._duration = duration
+        self._num_frames = num_frames
+        self._num_words = num_words
+        
+    
+    def Duplicate( self ):
+        
+        return FileInfoManager( self._hash, self._size, self._mime, self._width, self._height, self._duration, self._num_frames, self._num_words )
+        
+    
+    def GetDuration( self ):
+        
+        return self._duration
+        
+    
+    def GetHash( self ):
+        
+        return self._hash
+        
+    
+    def GetMime( self ):
+        
+        return self._mime
+        
+    
+    def GetNumFrames( self ):
+        
+        return self._num_frames
+        
+    
+    def GetNumWords( self ):
+        
+        return self._num_words
+        
+    
+    def GetResolution( self ):
+        
+        return ( self._width, self._height )
+        
+    
+    def GetSize( self ):
+        
+        return self._size
+        
+    
+    def ToTuple( self ):
+        
+        return ( self._hash, self._size, self._mime, self._width, self._height, self._duration, self._num_frames, self._num_words )
+        
+    
 class LocationsManager( object ):
     
     LOCAL_LOCATIONS = { CC.LOCAL_FILE_SERVICE_KEY, CC.TRASH_SERVICE_KEY, CC.COMBINED_LOCAL_FILE_SERVICE_KEY }
     
-    def __init__( self, current, deleted, pending, petitioned, urls = None, service_keys_to_filenames = None, current_to_timestamps = None ):
+    def __init__( self, current, deleted, pending, petitioned, inbox = False, urls = None, service_keys_to_filenames = None, current_to_timestamps = None ):
         
         self._current = current
         self._deleted = deleted
         self._pending = pending
         self._petitioned = petitioned
+        
+        self._inbox = inbox
         
         if urls is None:
             
@@ -127,7 +356,7 @@ class LocationsManager( object ):
         service_keys_to_filenames = dict( self._service_keys_to_filenames )
         current_to_timestamps = dict( self._current_to_timestamps )
         
-        return LocationsManager( current, deleted, pending, petitioned, urls = urls, service_keys_to_filenames = service_keys_to_filenames, current_to_timestamps = current_to_timestamps )
+        return LocationsManager( current, deleted, pending, petitioned, self._inbox, urls, service_keys_to_filenames, current_to_timestamps )
         
     
     def GetCDPP( self ): return ( self._current, self._deleted, self._pending, self._petitioned )
@@ -142,6 +371,11 @@ class LocationsManager( object ):
     def GetDeletedRemote( self ):
         
         return self._deleted - self.LOCAL_LOCATIONS
+        
+    
+    def GetInbox( self ):
+        
+        return self._inbox
         
     
     def GetPending( self ): return self._pending
@@ -162,7 +396,7 @@ class LocationsManager( object ):
         pending = self.GetPendingRemote()
         petitioned = self.GetPetitionedRemote()
         
-        remote_services = HG.client_controller.GetServicesManager().GetServices( ( HC.FILE_REPOSITORY, HC.IPFS ) )
+        remote_services = HG.client_controller.services_manager.GetServices( ( HC.FILE_REPOSITORY, HC.IPFS ) )
         
         remote_services = list( remote_services )
         
@@ -238,7 +472,15 @@ class LocationsManager( object ):
         
         if data_type == HC.CONTENT_TYPE_FILES:
             
-            if action == HC.CONTENT_UPDATE_ADD:
+            if action == HC.CONTENT_UPDATE_ARCHIVE:
+                
+                self._inbox = False
+                
+            elif action == HC.CONTENT_UPDATE_INBOX:
+                
+                self._inbox = True
+                
+            elif action == HC.CONTENT_UPDATE_ADD:
                 
                 self._current.add( service_key )
                 
@@ -251,6 +493,8 @@ class LocationsManager( object ):
                     self._pending.discard( CC.COMBINED_LOCAL_FILE_SERVICE_KEY )
                     
                     if CC.COMBINED_LOCAL_FILE_SERVICE_KEY not in self._current:
+                        
+                        self._inbox = True
                         
                         self._current.add( CC.COMBINED_LOCAL_FILE_SERVICE_KEY )
                         
@@ -274,6 +518,8 @@ class LocationsManager( object ):
                     self._current_to_timestamps[ CC.TRASH_SERVICE_KEY ] = HydrusData.GetNow()
                     
                 elif service_key == CC.TRASH_SERVICE_KEY:
+                    
+                    self._inbox = False
                     
                     self._current.discard( CC.COMBINED_LOCAL_FILE_SERVICE_KEY )
                     
@@ -356,7 +602,7 @@ class MediaList( object ):
         self._hashes = set()
         
         self._sort_by = CC.SORT_BY_SMALLEST
-        self._collect_by = None
+        self._collect_by = []
         
         self._collect_map_singletons = {}
         self._collect_map_collected = {}
@@ -375,13 +621,13 @@ class MediaList( object ):
         
     
     def _CalculateCollectionKeysToMedias( self, collect_by, medias ):
-    
+        
+        keys_to_medias = collections.defaultdict( list )
+        
         namespaces_to_collect_by = [ data for ( collect_by_type, data ) in collect_by if collect_by_type == 'namespace' ]
         ratings_to_collect_by = [ data for ( collect_by_type, data ) in collect_by if collect_by_type == 'rating' ]
         
-        services_manager = HG.client_controller.GetServicesManager()
-        
-        keys_to_medias = collections.defaultdict( list )
+        services_manager = HG.client_controller.services_manager
         
         for media in medias:
             
@@ -493,7 +739,7 @@ class MediaList( object ):
                 
             elif sort_by_data in ( CC.SORT_BY_OLDEST, CC.SORT_BY_NEWEST ):
                 
-                file_service = HG.client_controller.GetServicesManager().GetService( self._file_service_key )
+                file_service = HG.client_controller.services_manager.GetService( self._file_service_key )
                 
                 file_service_type = file_service.GetServiceType()
                 
@@ -638,7 +884,26 @@ class MediaList( object ):
             
         
     
-    def _RemoveMedia( self, singleton_media, collected_media ):
+    def _RemoveMediaByHashes( self, hashes ):
+        
+        if not isinstance( hashes, set ):
+            
+            hashes = set( hashes )
+            
+        
+        affected_singleton_media = self._GetMedia( hashes, discriminator = 'singletons' )
+        
+        for media in self._collected_media:
+            
+            media._RemoveMediaByHashes( hashes )
+            
+        
+        affected_collected_media = [ media for media in self._collected_media if media.HasNoMedia() ]
+        
+        self._RemoveMediaDirectly( affected_singleton_media, affected_collected_media )
+        
+    
+    def _RemoveMediaDirectly( self, singleton_media, collected_media ):
         
         if not isinstance( singleton_media, set ):
             
@@ -757,20 +1022,26 @@ class MediaList( object ):
         return new_media
         
     
-    def Collect( self, collect_by = -1 ):
+    def Collect( self, collect_by = None ):
         
-        if collect_by == -1: collect_by = self._collect_by
+        if collect_by == None:
+            
+            collect_by = self._collect_by
+            
         
         self._collect_by = collect_by
         
-        for media in self._collected_media: self._singleton_media.update( [ self._GenerateMediaSingleton( media_result ) for media_result in media.GenerateMediaResults() ] )
+        for media in self._collected_media:
+            
+            self._singleton_media.update( [ self._GenerateMediaSingleton( media_result ) for media_result in media.GenerateMediaResults() ] )
+            
         
         self._collected_media = set()
         
         self._collect_map_singletons = {}
         self._collect_map_collected = {}
         
-        if collect_by is not None:
+        if len( collect_by ) > 0:
             
             keys_to_medias = self._CalculateCollectionKeysToMedias( collect_by, self._singleton_media )
             
@@ -891,8 +1162,14 @@ class MediaList( object ):
         
         for media in self._sorted_media:
             
-            if media.IsCollection(): flat_media.extend( media.GetFlatMedia() )
-            else: flat_media.append( media )
+            if media.IsCollection():
+                
+                flat_media.extend( media.GetFlatMedia() )
+                
+            else:
+                
+                flat_media.append( media )
+                
             
         
         return flat_media
@@ -951,7 +1228,7 @@ class MediaList( object ):
             
             if action == HC.CONTENT_UPDATE_DELETE:
                 
-                local_file_domains = HG.client_controller.GetServicesManager().GetServiceKeys( ( HC.LOCAL_FILE_DOMAIN, ) )
+                local_file_domains = HG.client_controller.services_manager.GetServiceKeys( ( HC.LOCAL_FILE_DOMAIN, ) )
                 
                 non_trash_local_file_services = list( local_file_domains ) + [ CC.COMBINED_LOCAL_FILE_SERVICE_KEY ]
                 
@@ -965,10 +1242,7 @@ class MediaList( object ):
                 
                 if deleted_from_trash_and_local_view or trashed_and_non_trash_local_view or deleted_from_repo_and_repo_view:
                     
-                    affected_singleton_media = self._GetMedia( hashes, 'singletons' )
-                    affected_collected_media = [ media for media in self._collected_media if media.HasNoMedia() ]
-                    
-                    self._RemoveMedia( affected_singleton_media, affected_collected_media )
+                    self._RemoveMediaByHashes( hashes )
                     
                 
             
@@ -1009,7 +1283,7 @@ class MediaList( object ):
         
         if service_key == self._file_service_key:
             
-            self._RemoveMedia( self._singleton_media, self._collected_media )
+            self._RemoveMediaDirectly( self._singleton_media, self._collected_media )
             
         else:
             
@@ -1411,7 +1685,10 @@ class MediaSingleton( Media ):
     
     def GetPrettyInfoLines( self ):
         
-        ( hash, inbox, size, mime, width, height, duration, num_frames, num_words, tags_manager, locations_manager, ratings_manager ) = self._media_result.ToTuple()
+        file_info_manager = self._media_result.GetFileInfoManager()
+        locations_manager = self._media_result.GetLocationsManager()
+        
+        ( hash, size, mime, width, height, duration, num_frames, num_words ) = file_info_manager.ToTuple()
         
         info_string = HydrusData.ConvertIntToBytes( size ) + ' ' + HC.mime_string_lookup[ mime ]
         
@@ -1452,7 +1729,7 @@ class MediaSingleton( Media ):
             
             timestamp = locations_manager.GetTimestamp( service_key )
             
-            service = HG.client_controller.GetServicesManager().GetService( service_key )
+            service = HG.client_controller.services_manager.GetService( service_key )
             
             service_type = service.GetServiceType()
             
@@ -1608,139 +1885,133 @@ class MediaSingleton( Media ):
 
 class MediaResult( object ):
     
-    def __init__( self, tuple ):
+    def __init__( self, file_info_manager, tags_manager, locations_manager, ratings_manager ):
         
-        # hash, inbox, size, mime, width, height, duration, num_frames, num_words, tags_manager, locations_manager, ratings_manager
-        
-        self._tuple = tuple
+        self._file_info_manager = file_info_manager
+        self._tags_manager = tags_manager
+        self._locations_manager = locations_manager
+        self._ratings_manager = ratings_manager
         
     
     def DeletePending( self, service_key ):
         
-        ( hash, inbox, size, mime, width, height, duration, num_frames, num_words, tags_manager, locations_manager, ratings_manager ) = self._tuple
-        
-        service = HG.client_controller.GetServicesManager().GetService( service_key )
+        service = HG.client_controller.services_manager.GetService( service_key )
         
         service_type = service.GetServiceType()
         
         if service_type in HC.TAG_SERVICES:
             
-            tags_manager.DeletePending( service_key )
+            self._tags_manager.DeletePending( service_key )
             
         elif service_type in HC.FILE_SERVICES:
             
-            locations_manager.DeletePending( service_key )
+            self._locations_manager.DeletePending( service_key )
             
         
     
     def Duplicate( self ):
         
-        ( hash, inbox, size, mime, width, height, duration, num_frames, num_words, tags_manager, locations_manager, ratings_manager ) = self._tuple
+        file_info_manager = self._file_info_manager.Duplicate()
+        tags_manager = self._tags_manager.Duplicate()
+        locations_manager = self._locations_manager.Duplicate()
+        ratings_manager = self._ratings_manager.Duplicate()
         
-        tags_manager = tags_manager.Duplicate()
-        locations_manager = locations_manager.Duplicate()
-        ratings_manager = ratings_manager.Duplicate()
-        
-        tuple = ( hash, inbox, size, mime, width, height, duration, num_frames, num_words, tags_manager, locations_manager, ratings_manager )
-        
-        return MediaResult( tuple )
+        return MediaResult( file_info_manager, tags_manager, locations_manager, ratings_manager )
         
     
-    def GetHash( self ): return self._tuple[0]
+    def GetDuration( self ):
+        
+        return self._file_info_manager.GetDuration()
+        
     
-    def GetDuration( self ): return self._tuple[6]
+    def GetFileInfoManager( self ):
+        
+        return self._file_info_manager
+        
     
-    def GetInbox( self ): return self._tuple[1]
+    def GetHash( self ):
+        
+        return self._file_info_manager.GetHash()
+        
     
-    def GetLocationsManager( self ): return self._tuple[10]
+    def GetInbox( self ):
+        
+        return self._locations_manager.GetInbox()
+        
     
-    def GetMime( self ): return self._tuple[3]
+    def GetLocationsManager( self ):
+        
+        return self._locations_manager
+        
     
-    def GetNumFrames( self ): return self._tuple[7]
+    def GetMime( self ):
+        
+        return self._file_info_manager.GetMime()
+        
     
-    def GetNumWords( self ): return self._tuple[8]
+    def GetNumFrames( self ):
+        
+        return self._file_info_manager.GetNumFrames()
+        
     
-    def GetRatingsManager( self ): return self._tuple[11]
+    def GetNumWords( self ):
+        
+        return self._file_info_manager.GetNumWords()
+        
     
-    def GetResolution( self ): return ( self._tuple[4], self._tuple[5] )
+    def GetRatingsManager( self ):
+        
+        return self._ratings_manager
+        
     
-    def GetSize( self ): return self._tuple[2]
+    def GetResolution( self ):
+        
+        return self._file_info_manager.GetResolution()
+        
     
-    def GetTagsManager( self ): return self._tuple[9]
+    def GetSize( self ):
+        
+        return self._file_info_manager.GetSize()
+        
+    
+    def GetTagsManager( self ):
+        
+        return self._tags_manager
+        
     
     def ProcessContentUpdate( self, service_key, content_update ):
         
         ( data_type, action, row ) = content_update.ToTuple()
         
-        ( hash, inbox, size, mime, width, height, duration, num_frames, num_words, tags_manager, locations_manager, ratings_manager ) = self._tuple
-        
-        service = HG.client_controller.GetServicesManager().GetService( service_key )
+        service = HG.client_controller.services_manager.GetService( service_key )
         
         service_type = service.GetServiceType()
         
         if service_type in HC.TAG_SERVICES:
             
-            tags_manager.ProcessContentUpdate( service_key, content_update )
+            self._tags_manager.ProcessContentUpdate( service_key, content_update )
             
         elif service_type in HC.FILE_SERVICES:
             
-            previously_local = CC.COMBINED_LOCAL_FILE_SERVICE_KEY in locations_manager.GetCurrent()
-            
-            if service_type in HC.LOCAL_FILE_SERVICES:
-                
-                if action == HC.CONTENT_UPDATE_ARCHIVE:
-                    
-                    inbox = False
-                    
-                elif action == HC.CONTENT_UPDATE_INBOX:
-                    
-                    inbox = True
-                    
-                
-                if service_type == CC.COMBINED_LOCAL_FILE_SERVICE_KEY:
-                    
-                    if action == HC.CONTENT_UPDATE_ADD:
-                        
-                        inbox = True
-                        
-                    elif action == HC.CONTENT_UPDATE_DELETE:
-                        
-                        inbox = False
-                        
-                    
-                
-            
-            locations_manager.ProcessContentUpdate( service_key, content_update )
-            
-            subsequently_local = CC.COMBINED_LOCAL_FILE_SERVICE_KEY in locations_manager.GetCurrent()
-            
-            if not previously_local and subsequently_local:
-                
-                inbox = True
-                
-            if previously_local and not subsequently_local:
-                
-                inbox = False
-                
-            
-            self._tuple = ( hash, inbox, size, mime, width, height, duration, num_frames, num_words, tags_manager, locations_manager, ratings_manager )
+            self._locations_manager.ProcessContentUpdate( service_key, content_update )
             
         elif service_type in HC.RATINGS_SERVICES:
             
-            ratings_manager.ProcessContentUpdate( service_key, content_update )
+            self._ratings_manager.ProcessContentUpdate( service_key, content_update )
             
         
     
     def ResetService( self, service_key ):
         
-        ( hash, inbox, size, mime, width, height, duration, num_frames, num_words, tags_manager, locations_manager, ratings_manager ) = self._tuple
-        
-        tags_manager.ResetService( service_key )
-        locations_manager.ResetService( service_key )
+        self._tags_manager.ResetService( service_key )
+        self._locations_manager.ResetService( service_key )
         
     
-    def ToTuple( self ): return self._tuple
-
+    def ToTuple( self ):
+        
+        return ( self._file_info_manager, self._tags_manager, self._locations_manager, self._ratings_manager )
+        
+    
 class SortedList( object ):
     
     def __init__( self, initial_items = None ):

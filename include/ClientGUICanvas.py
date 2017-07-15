@@ -28,11 +28,10 @@ import urlparse
 import webbrowser
 import wx
 
-if HC.PLATFORM_WINDOWS: import wx.lib.flashwin
-
-ID_TIMER_VIDEO = wx.NewId()
-ID_TIMER_RENDER_WAIT = wx.NewId()
-ID_TIMER_ANIMATION_BAR_UPDATE = wx.NewId()
+if HC.PLATFORM_WINDOWS:
+    
+    import wx.lib.flashwin
+    
 ID_TIMER_SLIDESHOW = wx.NewId()
 ID_TIMER_CURSOR_HIDE = wx.NewId()
 ID_TIMER_HOVER_SHOW = wx.NewId()
@@ -258,11 +257,11 @@ class Animation( wx.Window ):
         self._canvas_bmp = None
         self._frame_bmp = None
         
-        self._timer_video = wx.Timer( self, id = ID_TIMER_VIDEO )
+        self._timer_video = wx.Timer( self )
         
         self.Bind( wx.EVT_PAINT, self.EventPaint )
         self.Bind( wx.EVT_SIZE, self.EventResize )
-        self.Bind( wx.EVT_TIMER, self.TIMEREventVideo, id = ID_TIMER_VIDEO )
+        self.Bind( wx.EVT_TIMER, self.TIMEREventVideo )
         self.Bind( wx.EVT_MOUSE_EVENTS, self.EventPropagateMouse )
         self.Bind( wx.EVT_KEY_UP, self.EventPropagateKey )
         self.Bind( wx.EVT_ERASE_BACKGROUND, self.EventEraseBackground )
@@ -414,11 +413,24 @@ class Animation( wx.Window ):
         
         if self._animation_bar is not None:
             
-            etype = event.GetEventType()
-            
             if not ( event.ShiftDown() or event.CmdDown() or event.AltDown() ):
                 
-                if etype == wx.wxEVT_LEFT_DOWN:
+                if event.LeftDClick():
+                    
+                    hash = self._media.GetHash()
+                    mime = self._media.GetMime()
+                    
+                    client_files_manager = HG.client_controller.client_files_manager
+                    
+                    path = client_files_manager.GetFilePath( hash, mime )
+                    
+                    HydrusPaths.LaunchFile( path )
+                    
+                    self.Pause()
+                    
+                    return
+                    
+                elif event.LeftDown():
                     
                     self.PausePlay()
                     
@@ -429,14 +441,17 @@ class Animation( wx.Window ):
                 
             
         
-        screen_position = self.ClientToScreen( event.GetPosition() )
-        ( x, y ) = self.GetParent().ScreenToClient( screen_position )
-        
-        event.SetX( x )
-        event.SetY( y )
-        
-        event.ResumePropagation( 1 )
-        event.Skip()
+        if self.IsShown(): # Can't ClientToScreen if not shown, like in init
+            
+            screen_position = self.ClientToScreen( event.GetPosition() )
+            ( x, y ) = self.GetParent().ScreenToClient( screen_position )
+            
+            event.SetX( x )
+            event.SetY( y )
+            
+            event.ResumePropagation( 1 )
+            event.Skip()
+            
         
     
     def EventResize( self, event ):
@@ -682,12 +697,12 @@ class AnimationBar( wx.Window ):
         self._it_was_playing = False
         
         self.Bind( wx.EVT_MOUSE_EVENTS, self.EventMouse )
-        self.Bind( wx.EVT_TIMER, self.TIMERFlashIndexUpdate, id = ID_TIMER_ANIMATION_BAR_UPDATE )
+        self.Bind( wx.EVT_TIMER, self.TIMERFlashIndexUpdate )
         self.Bind( wx.EVT_PAINT, self.EventPaint )
         self.Bind( wx.EVT_SIZE, self.EventResize )
         self.Bind( wx.EVT_ERASE_BACKGROUND, self.EventEraseBackground )
         
-        self._flash_index_update_timer = wx.Timer( self, id = ID_TIMER_ANIMATION_BAR_UPDATE )
+        self._flash_index_update_timer = wx.Timer( self )
         
     
     def _GetXFromFrameIndex( self, index, width_offset = 0 ):
@@ -1092,6 +1107,7 @@ class CanvasFrame( ClientGUITopLevelWindows.FrameThatResizes ):
                     
                 
             
+        
         event.Skip()
         
     
@@ -1150,6 +1166,8 @@ class Canvas( wx.Window ):
         
         self._canvas_key = HydrusData.GenerateKey()
         
+        self._maintain_pan_and_zoom = False
+        
         self._dirty = True
         self._closing = False
         
@@ -1189,12 +1207,33 @@ class Canvas( wx.Window ):
     
     def _Archive( self ):
         
-        HG.client_controller.Write( 'content_updates', { CC.COMBINED_LOCAL_FILE_SERVICE_KEY : [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_ARCHIVE, ( self._current_media.GetHash(), ) ) ] } )
+        if self._current_media is not None:
+            
+            HG.client_controller.Write( 'content_updates', { CC.COMBINED_LOCAL_FILE_SERVICE_KEY : [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_ARCHIVE, ( self._current_media.GetHash(), ) ) ] } )
+            
+        
+    
+    def _CanProcessInput( self ):
+        
+        if HG.client_controller.MenuIsOpen():
+            
+            return False
+            
+        
+        if self._MouseIsOverFlash():
+            
+            return False
+            
+        
+        return True
         
     
     def _CopyBMPToClipboard( self ):
         
-        HG.client_controller.pub( 'clipboard', 'bmp', self._current_media )
+        if self._current_media is not None:
+            
+            HG.client_controller.pub( 'clipboard', 'bmp', self._current_media )
+            
         
     
     def _CopyHashToClipboard( self, hash_type ):
@@ -1226,23 +1265,34 @@ class Canvas( wx.Window ):
     
     def _CopyFileToClipboard( self ):
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
-        
-        paths = [ client_files_manager.GetFilePath( self._current_media.GetHash(), self._current_media.GetMime() ) ]
-        
-        HG.client_controller.pub( 'clipboard', 'paths', paths )
+        if self._current_media is not None:
+            
+            client_files_manager = HG.client_controller.client_files_manager
+            
+            paths = [ client_files_manager.GetFilePath( self._current_media.GetHash(), self._current_media.GetMime() ) ]
+            
+            HG.client_controller.pub( 'clipboard', 'paths', paths )
+            
         
     
     def _CopyPathToClipboard( self ):
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
-        
-        path = client_files_manager.GetFilePath( self._current_media.GetHash(), self._current_media.GetMime() )
-        
-        HG.client_controller.pub( 'clipboard', 'text', path )
+        if self._current_media is not None:
+            
+            client_files_manager = HG.client_controller.client_files_manager
+            
+            path = client_files_manager.GetFilePath( self._current_media.GetHash(), self._current_media.GetMime() )
+            
+            HG.client_controller.pub( 'clipboard', 'text', path )
+            
         
     
     def _Delete( self, service_key = None ):
+        
+        if self._current_media is None:
+            
+            return
+            
         
         do_it = False
         
@@ -1301,6 +1351,11 @@ class Canvas( wx.Window ):
     
     def _DoManualPan( self, delta_x_step, delta_y_step ):
         
+        if self._current_media is None:
+            
+            return
+            
+        
         ( my_x, my_y ) = self.GetClientSize()
         ( media_x, media_y ) = self._media_container.GetClientSize()
         
@@ -1330,19 +1385,39 @@ class Canvas( wx.Window ):
         self._dirty = False
         
     
-    def _DrawBackgroundDetails( self, dc ): pass
+    def _DrawBackgroundDetails( self, dc ):
+        
+        pass
+        
     
     def _DrawCurrentMedia( self ):
+        
+        if self._current_media is None:
+            
+            return
+            
         
         ( my_width, my_height ) = self.GetClientSize()
         
         if my_width > 0 and my_height > 0:
             
-            if self._current_media is not None:
-                
-                self._SizeAndPositionMediaContainer()
-                
+            self._SizeAndPositionMediaContainer()
             
+        
+    
+    def _FocusIsElsewhere( self ):
+        
+        i_have_focus = ClientGUICommon.WindowOrSameTLPChildHasFocus( self )
+        my_hover_window_has_focus = ClientGUICommon.WindowOrAnyTLPChildHasFocus( self ) and isinstance( ClientGUICommon.GetFocusTLP(), ClientGUIHoverFrames.FullscreenHoverFrame )
+        
+        focus_is_elsewhere = not ( i_have_focus or my_hover_window_has_focus )
+        
+        if focus_is_elsewhere:
+            
+            return True
+            
+        
+        return False
         
     
     def _GenerateOrderedShortcutNames( self ):
@@ -1409,80 +1484,96 @@ class Canvas( wx.Window ):
         return ( new_size, new_position )
         
     
-    def _HydrusShouldNotProcessInput( self ):
-        
-        if HG.client_controller.MenuIsOpen():
-            
-            return True
-            
-        
-        i_have_focus = ClientGUICommon.WindowOrSameTLPChildHasFocus( self )
-        my_hover_window_has_focus = ClientGUICommon.WindowOrAnyTLPChildHasFocus( self ) and isinstance( ClientGUICommon.GetFocusTLP(), ClientGUIHoverFrames.FullscreenHoverFrame )
-        
-        focus_is_elsewhere = not ( i_have_focus or my_hover_window_has_focus )
-        
-        if focus_is_elsewhere:
-            
-            return True
-            
-        
-        if self._current_media is not None and self._current_media.GetMime() == HC.APPLICATION_FLASH:
-            
-            if self.MouseIsOverMedia():
-                
-                return True
-                
-            
-        
-        return False
-        
-    
     def _Inbox( self ):
+        
+        if self._current_media is None:
+            
+            return
+            
         
         HG.client_controller.Write( 'content_updates', { CC.COMBINED_LOCAL_FILE_SERVICE_KEY : [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_INBOX, ( self._current_media.GetHash(), ) ) ] } )
         
     
     def _IsZoomable( self ):
         
+        if self._current_media is None:
+            
+            return False
+            
+        
         return self._GetShowAction( self._current_media ) not in ( CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW_ON_ACTIVATION_OPEN_EXTERNALLY, CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW )
         
     
     def _MaintainZoom( self, previous_media ):
         
-        if previous_media.GetResolution() == self._current_media.GetResolution():
-            
-            previous_zoom = self._current_zoom
+        if previous_media is None:
             
             self._ReinitZoom()
-            
-            self._current_zoom = previous_zoom
-            
-            HG.client_controller.pub( 'canvas_new_zoom', self._canvas_key, self._current_zoom )
             
         else:
             
-            self._ReinitZoom()
+            if self._current_media is None:
+                
+                return
+                
+            
+            ( previous_width, previous_height ) = previous_media.GetResolution()
+            ( current_width, current_height ) = self._current_media.GetResolution()
+            
+            previous_ratio = float( previous_width ) / float( previous_height )
+            current_ratio = float( current_width ) / float( current_height )
+            
+            if previous_ratio == current_ratio:
+                
+                # if this new one is half the size, the new zoom needs to be twice as much to be the same size
+                
+                zoom_ratio = float( previous_width ) / float( current_width )
+                
+                ultimate_canvas_zoom = self._current_zoom * zoom_ratio
+                
+                self._ReinitZoom()
+                
+                self._current_zoom = ultimate_canvas_zoom
+                
+                HG.client_controller.pub( 'canvas_new_zoom', self._canvas_key, self._current_zoom )
+                
+            else:
+                
+                self._ResetDragDelta()
+                
+                self._ReinitZoom()
+                
             
         
     
     def _ManageRatings( self ):
-    
-        if len( HG.client_controller.GetServicesManager().GetServices( HC.RATINGS_SERVICES ) ) > 0:
+        
+        if self._current_media is None:
             
-            if self._current_media is not None:
+            return
+            
+        
+        if len( HG.client_controller.services_manager.GetServices( HC.RATINGS_SERVICES ) ) > 0:
+            
+            with ClientGUIDialogsManage.DialogManageRatings( self, ( self._current_media, ) ) as dlg:
                 
-                with ClientGUIDialogsManage.DialogManageRatings( self, ( self._current_media, ) ) as dlg: dlg.ShowModal()
+                dlg.ShowModal()
                 
             
         
     
     def _ManageTags( self ):
         
+        if self._current_media is None:
+            
+            return
+            
+        
         if self._manage_tags_panel:
             
             self._manage_tags_panel.SetFocus()
             
-        elif self._current_media is not None:
+        else:
             
             # take any focus away from hover window, which will mess up window order when it hides due to the new frame
             self.SetFocus()
@@ -1500,23 +1591,57 @@ class Canvas( wx.Window ):
             
         
     
+    def _ManageURLs( self ):
+        
+        if self._current_media is None:
+            
+            return
+            
+        
+        title = 'manage known urls'
+        
+        with ClientGUITopLevelWindows.DialogManage( self, title ) as dlg:
+            
+            panel = ClientGUIScrolledPanelsManagement.ManageURLsPanel( dlg, self._current_media )
+            
+            dlg.SetPanel( panel )
+            
+            dlg.ShowModal()
+            
+        
+    
+    def _MouseIsOverFlash( self ):
+        
+        if self._current_media is not None and self._current_media.GetMime() == HC.APPLICATION_FLASH:
+            
+            if self.MouseIsOverMedia():
+                
+                return True
+                
+            
+        
+        return False
+        
+    
     def _OpenExternally( self ):
         
-        if self._current_media is not None:
+        if self._current_media is None:
             
-            hash = self._current_media.GetHash()
-            mime = self._current_media.GetMime()
+            return
             
-            client_files_manager = HG.client_controller.GetClientFilesManager()
+        
+        hash = self._current_media.GetHash()
+        mime = self._current_media.GetMime()
+        
+        client_files_manager = HG.client_controller.client_files_manager
+        
+        path = client_files_manager.GetFilePath( hash, mime )
+        
+        HydrusPaths.LaunchFile( path )
+        
+        if self._current_media.HasDuration() and mime != HC.APPLICATION_FLASH:
             
-            path = client_files_manager.GetFilePath( hash, mime )
-            
-            HydrusPaths.LaunchFile( path )
-            
-            if self._current_media.HasDuration() and mime != HC.APPLICATION_FLASH:
-                
-                self._media_container.Pause()
-                
+            self._media_container.Pause()
             
         
     
@@ -1599,11 +1724,16 @@ class Canvas( wx.Window ):
             
         elif command_type == CC.APPLICATION_COMMAND_TYPE_CONTENT:
             
+            if self._current_media is None:
+                
+                return
+                
+            
             ( service_key, content_type, action, value ) = data
             
             try:
                 
-                service = HG.client_controller.GetServicesManager().GetService( service_key )
+                service = HG.client_controller.services_manager.GetService( service_key )
                 
             except HydrusExceptions.DataMissing:
                 
@@ -1752,6 +1882,11 @@ class Canvas( wx.Window ):
     
     def _ReinitZoom( self ):
         
+        if self._current_media is None:
+            
+            return
+            
+        
         show_action = self._GetShowAction( self._current_media )
         
         ( self._current_zoom, self._canvas_zoom ) = CalculateCanvasZooms( self, self._current_media, show_action )
@@ -1774,6 +1909,11 @@ class Canvas( wx.Window ):
     
     def _SizeAndPositionMediaContainer( self ):
         
+        if self._current_media is None:
+            
+            return
+            
+        
         ( new_size, new_position ) = self._GetMediaContainerSizeAndPosition()
         
         if new_size != self._media_container.GetSize(): self._media_container.SetSize( new_size )
@@ -1784,7 +1924,12 @@ class Canvas( wx.Window ):
         
     
     def _TryToChangeZoom( self, new_zoom ):
-
+        
+        if self._current_media is None:
+            
+            return
+            
+        
         if self._current_media.GetMime() == HC.APPLICATION_FLASH:
             
             # we want to preserve whitespace around flash
@@ -1995,7 +2140,7 @@ class Canvas( wx.Window ):
     
     def EventCharHook( self, event ):
         
-        if not self._HydrusShouldNotProcessInput():
+        if self._CanProcessInput() and not self._FocusIsElsewhere(): # focus is likely on a tag manager frame in this case
             
             shortcut = ClientData.ConvertKeyEventToShortcut( event )
             
@@ -2142,7 +2287,7 @@ class Canvas( wx.Window ):
         self._ResetDragDelta()
         
     
-    def SetMedia( self, media, maintain_pan_and_zoom = False ):
+    def SetMedia( self, media ):
         
         if media is not None:
             
@@ -2168,7 +2313,7 @@ class Canvas( wx.Window ):
             
             self._current_media = media
             
-            if not maintain_pan_and_zoom:
+            if not self._maintain_pan_and_zoom:
                 
                 self._ResetDragDelta()
                 
@@ -2179,7 +2324,7 @@ class Canvas( wx.Window ):
                 
             else:
                 
-                if maintain_pan_and_zoom:
+                if previous_media is not None and self._maintain_pan_and_zoom:
                     
                     self._MaintainZoom( previous_media )
                     
@@ -2259,7 +2404,10 @@ class CanvasPanel( Canvas ):
     def EventMenu( self, event ):
         
         # is None bit means this is prob from a keydown->menu event
-        if event.GetEventObject() is None and self._HydrusShouldNotProcessInput(): event.Skip()
+        if event.GetEventObject() is None:
+            
+            event.Skip()
+            
         else:
             
             action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
@@ -2288,7 +2436,7 @@ class CanvasPanel( Canvas ):
         
         if self._current_media is not None:
             
-            services = HG.client_controller.GetServicesManager().GetServices()
+            services = HG.client_controller.services_manager.GetServices()
             
             locations_manager = self._current_media.GetLocationsManager()
             
@@ -2307,45 +2455,44 @@ class CanvasPanel( Canvas ):
             
             ClientGUIMenus.AppendSeparator( menu )
             
+            manage_menu = wx.Menu()
+            
+            ClientGUIMenus.AppendMenuItem( self, manage_menu, 'tags', 'Manage this file\'s tags.', self._ManageTags )
+            
             if i_can_post_ratings:
                 
-                manage_menu = wx.Menu()
+                ClientGUIMenus.AppendMenuItem( self, manage_menu, 'ratings', 'Manage this file\'s ratings.', self._ManageRatings )
                 
-                ClientGUIMenus.AppendMenuItem( self, manage_menu, 'tags', 'Manage tags for the selected files.', self._ManageTags )
-                ClientGUIMenus.AppendMenuItem( self, manage_menu, 'ratings', 'Manage ratings for the selected files.', self._ManageRatings )
-                
-                ClientGUIMenus.AppendMenu( menu, manage_menu, 'manage' )
-                
-            else:
-                
-                ClientGUIMenus.AppendMenuItem( self, menu, 'manage tags', 'Manage tags for the selected files.', self._ManageTags )
-                
+            
+            ClientGUIMenus.AppendMenuItem( self, manage_menu, 'known urls', 'Manage this file\'s known URLs.', self._ManageURLs )
+            
+            ClientGUIMenus.AppendMenu( menu, manage_menu, 'manage' )
             
             ClientGUIMenus.AppendSeparator( menu )
             
             if self._current_media.HasInbox():
                 
-                ClientGUIMenus.AppendMenuItem( self, menu, 'archive', 'Archive the selected files.', self._Archive )
+                ClientGUIMenus.AppendMenuItem( self, menu, 'archive', 'Archive this file.', self._Archive )
                 
             
             if self._current_media.HasArchive():
                 
-                ClientGUIMenus.AppendMenuItem( self, menu, 'inbox', 'Send the selected files back to the inbox.', self._Inbox )
+                ClientGUIMenus.AppendMenuItem( self, menu, 'inbox', 'Send this files back to the inbox.', self._Inbox )
                 
             
             if CC.LOCAL_FILE_SERVICE_KEY in locations_manager.GetCurrent():
                 
-                ClientGUIMenus.AppendMenuItem( self, menu, 'delete', 'Delete the selected files.', self._Delete, CC.LOCAL_FILE_SERVICE_KEY )
+                ClientGUIMenus.AppendMenuItem( self, menu, 'delete', 'Delete this file.', self._Delete, CC.LOCAL_FILE_SERVICE_KEY )
                 
             elif CC.TRASH_SERVICE_KEY in locations_manager.GetCurrent():
                 
-                ClientGUIMenus.AppendMenuItem( self, menu, 'delete completely', 'Physically delete the selected files from disk.', self._Delete, CC.TRASH_SERVICE_KEY )
-                ClientGUIMenus.AppendMenuItem( self, menu, 'undelete', 'Take the selected files out of the trash.', self._Undelete )
+                ClientGUIMenus.AppendMenuItem( self, menu, 'delete completely', 'Physically delete this file from disk.', self._Delete, CC.TRASH_SERVICE_KEY )
+                ClientGUIMenus.AppendMenuItem( self, menu, 'undelete', 'Take this file out of the trash.', self._Undelete )
                 
             
             ClientGUIMenus.AppendSeparator( menu )
             
-            ClientGUIMenus.AppendMenuItem( self, menu, 'open externally', 'Open the file in your OS\'s default program.', self._OpenExternally )
+            ClientGUIMenus.AppendMenuItem( self, menu, 'open externally', 'Open this file in your OS\'s default program.', self._OpenExternally )
             
             urls = self._current_media.GetLocationsManager().GetURLs()
             
@@ -2376,23 +2523,23 @@ class CanvasPanel( Canvas ):
             
             copy_menu = wx.Menu()
             
-            ClientGUIMenus.AppendMenuItem( self, copy_menu, 'file', 'Copy the file to your clipboard.', self._CopyFileToClipboard )
+            ClientGUIMenus.AppendMenuItem( self, copy_menu, 'file', 'Copy this file to your clipboard.', self._CopyFileToClipboard )
             
             copy_hash_menu = wx.Menu()
             
-            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha256 (hydrus default)', 'Open the file\'s SHA256 hash.', self._CopyHashToClipboard, 'sha256' )
-            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'md5', 'Open the file\'s MD5 hash.', self._CopyHashToClipboard, 'md5' )
-            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha1', 'Open the file\'s SHA1 hash.', self._CopyHashToClipboard, 'sha1' )
-            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha512', 'Open the file\'s SHA512 hash.', self._CopyHashToClipboard, 'sha512' )
+            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha256 (hydrus default)', 'Open this file\'s SHA256 hash.', self._CopyHashToClipboard, 'sha256' )
+            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'md5', 'Open this file\'s MD5 hash.', self._CopyHashToClipboard, 'md5' )
+            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha1', 'Open this file\'s SHA1 hash.', self._CopyHashToClipboard, 'sha1' )
+            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha512', 'Open this file\'s SHA512 hash.', self._CopyHashToClipboard, 'sha512' )
             
             ClientGUIMenus.AppendMenu( copy_menu, copy_hash_menu, 'hash' )
             
             if self._current_media.GetMime() in HC.IMAGES and self._current_media.GetDuration() is None:
                 
-                ClientGUIMenus.AppendMenuItem( self, copy_menu, 'image', 'Copy the file to your clipboard as a bmp.', self._CopyBMPToClipboard )
+                ClientGUIMenus.AppendMenuItem( self, copy_menu, 'image', 'Copy this file to your clipboard as a bmp.', self._CopyBMPToClipboard )
                 
             
-            ClientGUIMenus.AppendMenuItem( self, copy_menu, 'path', 'Copy the file\'s path to your clipboard.', self._CopyPathToClipboard )
+            ClientGUIMenus.AppendMenuItem( self, copy_menu, 'path', 'Copy this file\'s path to your clipboard.', self._CopyPathToClipboard )
             
             ClientGUIMenus.AppendMenu( share_menu, copy_menu, 'copy' )
             
@@ -2446,9 +2593,27 @@ class CanvasWithDetails( Canvas ):
     
     BORDER = wx.NO_BORDER
     
+    def _DrawAdditionalTopMiddleInfo( self, dc, current_y ):
+        
+        pass
+        
+    
     def _DrawBackgroundDetails( self, dc ):
         
-        if self._current_media is not None:
+        if self._current_media is None:
+            
+            text = 'No media to display'
+            
+            ( width, height ) = dc.GetTextExtent( text )
+            
+            ( my_width, my_height ) = self.GetClientSize()
+            
+            x = ( my_width - width ) // 2
+            y = ( my_height - height ) // 2
+            
+            dc.DrawText( text, x, y )
+            
+        else:
             
             ( client_width, client_height ) = self.GetClientSize()
             
@@ -2518,7 +2683,7 @@ class CanvasWithDetails( Canvas ):
             
             # ratings
             
-            services_manager = HG.client_controller.GetServicesManager()
+            services_manager = HG.client_controller.services_manager
             
             like_services = services_manager.GetServices( ( HC.LOCAL_RATING_LIKE, ), randomised = False )
             
@@ -2642,6 +2807,10 @@ class CanvasWithDetails( Canvas ):
             
             dc.DrawText( info_string, ( client_width - x ) / 2, current_y )
             
+            current_y += y + 3
+            
+            self._DrawAdditionalTopMiddleInfo( dc, current_y )
+            
             # bottom-right index
             
             index_string = self._GetIndexString()
@@ -2675,7 +2844,7 @@ class CanvasWithHovers( CanvasWithDetails ):
         self._hover_commands = self._GenerateHoverTopFrame()
         self._hover_tags = ClientGUIHoverFrames.FullscreenHoverFrameTags( self, self._canvas_key )
         
-        ratings_services = HG.client_controller.GetServicesManager().GetServices( ( HC.RATINGS_SERVICES ) )
+        ratings_services = HG.client_controller.services_manager.GetServices( ( HC.RATINGS_SERVICES ) )
         
         if len( ratings_services ) > 0:
             
@@ -2836,32 +3005,32 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
         
         self._file_service_key = file_service_key
         
+        self._maintain_pan_and_zoom = True
+        
+        self._currently_fetching_pairs = False
+        
         self._unprocessed_pairs = []
         self._current_pair = None
         self._processed_pairs = []
+        self._batch_skip_hashes = set()
         
         self._media_list = ClientMedia.ListeningMediaList( self._file_service_key, [] )
         
+        self._reserved_shortcut_names.append( 'media_viewer_browser' )
         self._reserved_shortcut_names.append( 'duplicate_filter' )
-        
-        self._hover_commands.AddCommand( 'this is better', self._CurrentMediaIsBetter )
-        self._hover_commands.AddCommand( 'exact duplicates', self._MediaAreTheSame )
-        self._hover_commands.AddCommand( 'alternates', self._MediaAreAlternates )
-        self._hover_commands.AddCommand( 'not duplicates', self._MediaAreNotDupes )
-        self._hover_commands.AddCommand( 'custom action', self._DoCustomAction )
         
         self.Bind( wx.EVT_MOUSE_EVENTS, self.EventMouse )
         
         # add support for 'f' to borderless
         # add support for F4 and other general shortcuts so people can do edits before processing
         
-        wx.CallAfter( self._ShowNewPair ) # don't set this until we have a size > (20, 20)!
-        
         HG.client_controller.sub( self, 'ProcessContentUpdates', 'content_updates_gui' )
         HG.client_controller.sub( self, 'Delete', 'canvas_delete' )
         HG.client_controller.sub( self, 'Undelete', 'canvas_undelete' )
         HG.client_controller.sub( self, 'SwitchMedia', 'canvas_show_next' )
         HG.client_controller.sub( self, 'SwitchMedia', 'canvas_show_previous' )
+        
+        wx.CallAfter( self._ShowNewPair )
         
     
     def _Close( self ):
@@ -2901,27 +3070,30 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
     
     def _CommitProcessed( self ):
         
-        for ( hash_pair, duplicate_status, first_media, second_media, duplicate_action_options ) in self._processed_pairs:
+        pair_info = []
+        
+        for ( hash_pair, duplicate_type, first_media, second_media, duplicate_action_options, was_auto_skipped ) in self._processed_pairs:
             
-            if duplicate_status == HC.DUPLICATE_UNKNOWN:
+            if duplicate_type == HC.DUPLICATE_UNKNOWN:
                 
                 continue # it was a 'skip' decision
-                
-            
-            list_of_service_keys_to_content_updates = duplicate_action_options.ProcessPairIntoContentUpdates( first_media, second_media )
-            
-            for service_keys_to_content_updates in list_of_service_keys_to_content_updates:
-                
-                HG.client_controller.Write( 'content_updates', service_keys_to_content_updates )
                 
             
             first_hash = first_media.GetHash()
             second_hash = second_media.GetHash()
             
-            HG.client_controller.WriteSynchronous( 'duplicate_pair_status', duplicate_status, first_hash, second_hash, duplicate_action_options )
+            list_of_service_keys_to_content_updates = duplicate_action_options.ProcessPairIntoContentUpdates( first_media, second_media )
+            
+            pair_info.append( ( duplicate_type, first_hash, second_hash, list_of_service_keys_to_content_updates ) )
+            
+        
+        if len( pair_info ) > 0:
+            
+            HG.client_controller.WriteSynchronous( 'duplicate_pair_status', pair_info )
             
         
         self._processed_pairs = []
+        self._batch_skip_hashes = set()
         
     
     def _CurrentMediaIsBetter( self ):
@@ -2929,25 +3101,91 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
         self._ProcessPair( HC.DUPLICATE_BETTER )
         
     
+    def _Delete( self, service_key = None ):
+        
+        if self._current_media is None:
+            
+            return
+            
+        
+        if service_key is None:
+            
+            locations_manager = self._current_media.GetLocationsManager()
+            
+            if CC.LOCAL_FILE_SERVICE_KEY in locations_manager.GetCurrent():
+                
+                service_key = CC.LOCAL_FILE_SERVICE_KEY
+                
+            elif CC.TRASH_SERVICE_KEY in locations_manager.GetCurrent():
+                
+                service_key = CC.TRASH_SERVICE_KEY
+                
+            else:
+                
+                return
+                
+            
+        
+        if service_key == CC.LOCAL_FILE_SERVICE_KEY:
+            
+            text = 'Send this just this file to the trash, or both?'
+            
+        elif service_key == CC.TRASH_SERVICE_KEY:
+            
+            text = 'Permanently delete just this file, or both?'
+            
+        
+        yes_tuples = []
+        
+        yes_tuples.append( ( 'delete just this one', 'current' ) )
+        yes_tuples.append( ( 'delete both', 'both' ) )
+        
+        with ClientGUIDialogs.DialogYesYesNo( self, text, yes_tuples = yes_tuples, no_label = 'forget it' ) as dlg:
+            
+            if dlg.ShowModal() == wx.ID_YES:
+                
+                value = dlg.GetValue()
+                
+                if value == 'current':
+                    
+                    hashes = { self._current_media.GetHash() }
+                    
+                elif value == 'both':
+                    
+                    hashes = { self._current_media.GetHash(), self._media_list.GetNext( self._current_media ).GetHash() }
+                    
+                
+                HG.client_controller.Write( 'content_updates', { service_key : [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_DELETE, hashes ) ] } )
+                
+            
+        
+        self.SetFocus() # annoying bug because of the modal dialog
+        
+    
     def _DoCustomAction( self ):
         
-        duplicate_statuses = [ HC.DUPLICATE_BETTER, HC.DUPLICATE_SAME_FILE, HC.DUPLICATE_ALTERNATE, HC.DUPLICATE_NOT_DUPLICATE ]
+        if self._current_media is None:
+            
+            return
+            
         
-        choice_tuples = [ ( HC.duplicate_status_string_lookup[ duplicate_status ], duplicate_status ) for duplicate_status in duplicate_statuses ]
+        duplicate_types = [ HC.DUPLICATE_BETTER, HC.DUPLICATE_SAME_QUALITY, HC.DUPLICATE_ALTERNATE, HC.DUPLICATE_NOT_DUPLICATE ]
         
-        with ClientGUIDialogs.DialogSelectFromList( self, 'select duplicate_status', choice_tuples ) as dlg_1:
+        choice_tuples = [ ( HC.duplicate_type_string_lookup[ duplicate_type ], duplicate_type ) for duplicate_type in duplicate_types ]
+        
+        with ClientGUIDialogs.DialogSelectFromList( self, 'select duplicate type', choice_tuples ) as dlg_1:
             
             if dlg_1.ShowModal() == wx.ID_OK:
                 
-                duplicate_status = dlg_1.GetChoice()
+                duplicate_type = dlg_1.GetChoice()
                 
                 new_options = HG.client_controller.GetNewOptions()
                 
-                duplicate_action_options = new_options.GetDuplicateActionOptions( duplicate_status )
+                duplicate_action_options = new_options.GetDuplicateActionOptions( duplicate_type )
                 
                 with ClientGUITopLevelWindows.DialogEdit( self, 'edit duplicate merge options' ) as dlg_2:
                     
-                    panel = ClientGUIScrolledPanelsEdit.EditDuplicateActionOptionsPanel( dlg_2, duplicate_status, duplicate_action_options )
+                    panel = ClientGUIScrolledPanelsEdit.EditDuplicateActionOptionsPanel( dlg_2, duplicate_type, duplicate_action_options )
                     
                     dlg_2.SetPanel( panel )
                     
@@ -2955,10 +3193,58 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
                         
                         duplicate_action_options = panel.GetValue()
                         
-                        self._ProcessPair( duplicate_status, duplicate_action_options )
+                        self._ProcessPair( duplicate_type, duplicate_action_options )
                         
                     
                 
+            
+        
+    
+    def _DrawAdditionalTopMiddleInfo( self, dc, current_y ):
+        
+        if self._current_media is not None:
+            
+            shown_media = self._current_media
+            comparison_media = self._media_list.GetNext( shown_media )
+            
+            if shown_media != comparison_media:
+                
+                ( statements, score ) = ClientMedia.GetDuplicateComparisonStatements( shown_media, comparison_media )
+                
+                ( client_width, client_height ) = self.GetClientSize()
+                
+                for statement in statements:
+                    
+                    ( width, height ) = dc.GetTextExtent( statement )
+                    
+                    dc.DrawText( statement, ( client_width - width ) / 2, current_y )
+                    
+                    current_y += height + 3
+                    
+                
+            
+        
+        return current_y
+        
+    
+    def _DrawBackgroundDetails( self, dc ):
+        
+        if self._currently_fetching_pairs:
+            
+            text = u'Loading pairs\u2026'
+            
+            ( width, height ) = dc.GetTextExtent( text )
+            
+            ( my_width, my_height ) = self.GetClientSize()
+            
+            x = ( my_width - width ) // 2
+            y = ( my_height - height ) // 2
+            
+            dc.DrawText( text, x, y )
+            
+        else:
+            
+            CanvasWithHovers._DrawBackgroundDetails( self, dc )
             
         
     
@@ -2983,7 +3269,11 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
                 
             else:
                 
-                return ClientData.GetLighterDarkerColour( normal_colour )
+                new_options = HG.client_controller.GetNewOptions()
+                
+                duplicate_intensity = new_options.GetNoneableInteger( 'duplicate_background_switch_intensity' )
+                
+                return ClientData.GetLighterDarkerColour( normal_colour, duplicate_intensity )
                 
             
         
@@ -2996,20 +3286,25 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
             
         else:
             
+            progress = len( self._processed_pairs ) + 1 # +1 here actually counts for the one currently displayed
+            total = progress + len( self._unprocessed_pairs )
+            
+            index_string = HydrusData.ConvertValueRangeToPrettyString( progress, total )
+            
             if self._current_media == self._media_list.GetFirst():
                 
-                return 'A'
+                return 'A - ' + index_string
                 
             else:
                 
-                return 'B'
+                return 'B - ' + index_string
                 
             
         
     
     def _GetNumCommittableDecisions( self ):
         
-        return len( [ 1 for ( hash_pair, duplicate_status, first_media, second_media, duplicate_action_options ) in self._processed_pairs if duplicate_status != HC.DUPLICATE_UNKNOWN ] )
+        return len( [ 1 for ( hash_pair, duplicate_type, first_media, second_media, duplicate_action_options, was_auto_skipped ) in self._processed_pairs if duplicate_type != HC.DUPLICATE_UNKNOWN ] )
         
     
     def _GoBack( self ):
@@ -3018,9 +3313,18 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
             
             self._unprocessed_pairs.append( self._current_pair )
             
-            ( hash_pair, duplicate_status, first_media, second_media, duplicate_action_options ) = self._processed_pairs.pop()
+            ( hash_pair, duplicate_type, first_media, second_media, duplicate_action_options, was_auto_skipped ) = self._processed_pairs.pop()
             
             self._unprocessed_pairs.append( hash_pair )
+            
+            while was_auto_skipped:
+                
+                ( hash_pair, duplicate_type, first_media, second_media, duplicate_action_options, was_auto_skipped ) = self._processed_pairs.pop()
+                
+                self._unprocessed_pairs.append( hash_pair )
+                
+            
+            self._batch_skip_hashes.difference_update( hash_pair )
             
             self._ShowNewPair()
             
@@ -3038,7 +3342,7 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
     
     def _MediaAreTheSame( self ):
         
-        self._ProcessPair( HC.DUPLICATE_SAME_FILE )
+        self._ProcessPair( HC.DUPLICATE_SAME_QUALITY )
         
     
     def _ProcessApplicationCommand( self, command ):
@@ -3080,6 +3384,10 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
                 
                 self._GoBack()
                 
+            elif action in ( 'view_first', 'view_last', 'view_previous', 'view_next' ):
+                
+                self._SwitchMedia()
+                
             else:
                 
                 command_processed = False
@@ -3098,27 +3406,43 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
         return command_processed
         
     
-    def _ProcessPair( self, duplicate_status, duplicate_action_options = None ):
+    def _ProcessPair( self, duplicate_type, duplicate_action_options = None ):
+        
+        if self._current_media is None:
+            
+            return
+            
         
         if duplicate_action_options is None:
             
             new_options = HG.client_controller.GetNewOptions()
             
-            duplicate_action_options = new_options.GetDuplicateActionOptions( duplicate_status )
+            duplicate_action_options = new_options.GetDuplicateActionOptions( duplicate_type )
             
         
         other_media = self._media_list.GetNext( self._current_media )
         
-        self._processed_pairs.append( ( self._current_pair, duplicate_status, self._current_media, other_media, duplicate_action_options ) )
+        deleted_hashes = duplicate_action_options.GetDeletedHashes( self._current_media, other_media )
+        
+        self._batch_skip_hashes.update( deleted_hashes )
+        
+        was_auto_skipped = False
+        
+        self._processed_pairs.append( ( self._current_pair, duplicate_type, self._current_media, other_media, duplicate_action_options, was_auto_skipped ) )
         
         self._ShowNewPair()
         
     
     def _ShowNewPair( self ):
         
+        if self._currently_fetching_pairs:
+            
+            return
+            
+        
         num_committable = self._GetNumCommittableDecisions()
         
-        if self._unprocessed_pairs == [] and num_committable > 0:
+        if len( self._unprocessed_pairs ) == 0 and num_committable > 0:
             
             label = 'commit ' + HydrusData.ConvertIntToPrettyString( num_committable ) + ' decisions and continue?'
             
@@ -3132,47 +3456,98 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
                     
                 else:
                     
-                    ( hash_pair, duplicate_status, first_media, second_media, duplicate_action_options ) = self._processed_pairs.pop()
+                    ( hash_pair, duplicate_type, first_media, second_media, duplicate_action_options, was_auto_skipped ) = self._processed_pairs.pop()
                     
                     self._unprocessed_pairs.append( hash_pair )
                     
+                    while was_auto_skipped:
+                        
+                        ( hash_pair, duplicate_type, first_media, second_media, duplicate_action_options, was_auto_skipped ) = self._processed_pairs.pop()
+                        
+                        self._unprocessed_pairs.append( hash_pair )
+                        
+                    
+                    self._batch_skip_hashes.difference_update( hash_pair )
+                    
                 
             
         
-        if self._unprocessed_pairs == []:
+        if len( self._unprocessed_pairs ) == 0:
             
+            self._batch_skip_hashes = set()
             self._processed_pairs = [] # just in case someone 'skip'ed everything in the last batch, so this never got cleared above
             
-            result = HG.client_controller.Read( 'unique_duplicate_pairs', self._file_service_key, HC.DUPLICATE_UNKNOWN )
+            self.SetMedia( None )
+            self._media_list = ClientMedia.ListeningMediaList( self._file_service_key, [] )
             
-            if len( result ) == 0:
+            self._currently_fetching_pairs = True
+            
+            HG.client_controller.CallToThread( self.THREADFetchPairs )
+            
+            self._SetDirty()
+            
+        else:
+            
+            potential_pair = self._unprocessed_pairs.pop()
+            
+            ( first_hash, second_hash ) = potential_pair
+            
+            while first_hash in self._batch_skip_hashes or second_hash in self._batch_skip_hashes:
                 
-                wx.MessageBox( 'All pairs have been filtered!' )
+                was_auto_skipped = True
                 
-                self._Close()
+                self._processed_pairs.append( ( potential_pair, HC.DUPLICATE_UNKNOWN, None, None, None, was_auto_skipped ) )
                 
-                return
+                if len( self._unprocessed_pairs ) == 0:
+                    
+                    self._ShowNewPair() # there are no useful decisions left in the queue, so let's reset
+                    
+                    return
+                    
+                
+                potential_pair = self._unprocessed_pairs.pop()
+                
+                ( first_hash, second_hash ) = potential_pair
+                
+            
+            self._current_pair = potential_pair
+            
+            ( first_media_result, second_media_result ) = HG.client_controller.Read( 'media_results', self._current_pair )
+            
+            first_media = ClientMedia.MediaSingleton( first_media_result )
+            second_media = ClientMedia.MediaSingleton( second_media_result )
+            
+            ( statements, score ) = ClientMedia.GetDuplicateComparisonStatements( first_media, second_media )
+            
+            if score > 0:
+                
+                media_results_with_better_first = ( first_media_result, second_media_result )
                 
             else:
                 
-                self._unprocessed_pairs = result
+                media_results_with_better_first = ( second_media_result, first_media_result )
                 
             
-        
-        self._current_pair = self._unprocessed_pairs.pop()
-        
-        media_results = HG.client_controller.Read( 'media_results', self._current_pair )
-        
-        self._media_list = ClientMedia.ListeningMediaList( self._file_service_key, media_results )
-        
-        self.SetMedia( self._media_list.GetFirst() )
+            self._media_list = ClientMedia.ListeningMediaList( self._file_service_key, media_results_with_better_first )
+            
+            self.SetMedia( self._media_list.GetFirst() )
+            
+            self._ResetDragDelta()
+            
+            self._ReinitZoom()
+            
         
     
     def _SkipPair( self ):
         
-        other_media = self._media_list.GetNext( self._current_media )
+        if self._current_media is None:
+            
+            return
+            
         
-        self._processed_pairs.append( ( self._current_pair, HC.DUPLICATE_UNKNOWN, self._current_media, other_media, None ) )
+        was_auto_skipped = False
+        
+        self._processed_pairs.append( ( self._current_pair, HC.DUPLICATE_UNKNOWN, None, None, None, was_auto_skipped ) )
         
         self._ShowNewPair()
         
@@ -3181,7 +3556,7 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
         
         if self._current_media is not None:
             
-            self.SetMedia( self._media_list.GetNext( self._current_media ), maintain_pan_and_zoom = True )
+            self.SetMedia( self._media_list.GetNext( self._current_media ) )
             
         
     
@@ -3203,23 +3578,30 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
     
     def EventCharHook( self, event ):
         
-        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
-        
-        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_ESCAPE ):
-            
-            self._Close()
-            
-        else:
+        if self._CanProcessInput() and not self._FocusIsElsewhere():
             
             ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
             
-            if modifier == wx.ACCEL_NORMAL and key in CC.DELETE_KEYS: self._Delete()
-            elif modifier == wx.ACCEL_SHIFT and key in CC.DELETE_KEYS: self._Undelete()
-            elif modifier == wx.ACCEL_CTRL and key == ord( 'C' ): self._CopyFileToClipboard()
+            if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_ESCAPE ):
+                
+                self._Close()
+                
             else:
                 
-                CanvasWithHovers.EventCharHook( self, event )
+                ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
                 
+                if modifier == wx.ACCEL_NORMAL and key in CC.DELETE_KEYS: self._Delete()
+                elif modifier == wx.ACCEL_SHIFT and key in CC.DELETE_KEYS: self._Undelete()
+                elif modifier == wx.ACCEL_CTRL and key == ord( 'C' ): self._CopyFileToClipboard()
+                else:
+                    
+                    CanvasWithHovers.EventCharHook( self, event )
+                    
+                
+            
+        else:
+            
+            event.Skip()
             
         
     
@@ -3230,11 +3612,7 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
     
     def EventMouse( self, event ):
         
-        if self._HydrusShouldNotProcessInput():
-            
-            event.Skip()
-            
-        else:
+        if self._CanProcessInput():
             
             if event.ShiftDown():
                 
@@ -3284,6 +3662,10 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
                 event.Skip()
                 
             
+        else:
+            
+            event.Skip()
+            
         
     
     def Inbox( self, canvas_key ):
@@ -3313,8 +3695,23 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
                 
             
         
-        
         wx.CallLater( 100, catch_up )
+        
+    
+    def SetMedia( self, media ):
+        
+        CanvasWithHovers.SetMedia( self, media )
+        
+        if media is not None:
+            
+            shown_media = self._current_media
+            comparison_media = self._media_list.GetNext( shown_media )
+            
+            if shown_media != comparison_media:
+                
+                HG.client_controller.pub( 'canvas_new_duplicate_pair', self._canvas_key, shown_media, comparison_media )
+                
+            
         
     
     def SwitchMedia( self, canvas_key ):
@@ -3330,6 +3727,42 @@ class CanvasFilterDuplicates( CanvasWithHovers ):
         if canvas_key == self._canvas_key:
             
             self._Undelete()
+            
+        
+    
+    def THREADFetchPairs( self ):
+        
+        def wx_close():
+            
+            if self:
+                
+                wx.CallAfter( wx.MessageBox, 'All pairs have been filtered!' )
+                
+                self._Close()
+                
+            
+        
+        def wx_continue( unprocessed_pairs ):
+            
+            if self:
+                
+                self._unprocessed_pairs = unprocessed_pairs
+                
+                self._currently_fetching_pairs = False
+                
+                self._ShowNewPair()
+                
+            
+        
+        result = HG.client_controller.Read( 'unique_duplicate_pairs', self._file_service_key, HC.DUPLICATE_UNKNOWN )
+        
+        if len( result ) == 0:
+            
+            wx.CallAfter( wx_close )
+            
+        else:
+            
+            wx.CallAfter( wx_continue, result )
             
         
     
@@ -3468,7 +3901,7 @@ class CanvasMediaList( ClientMedia.ListeningMediaList, CanvasWithHovers ):
         
         singleton_media = { self._current_media }
         
-        ClientMedia.ListeningMediaList._RemoveMedia( self, singleton_media, {} )
+        ClientMedia.ListeningMediaList._RemoveMediaDirectly( self, singleton_media, {} )
         
         if self.HasNoMedia():
             
@@ -3603,9 +4036,12 @@ class CanvasMediaListFilterArchiveDelete( CanvasMediaList ):
     
     def _Back( self ):
         
-        if not self._HydrusShouldNotProcessInput():
+        if self._CanProcessInput():
             
-            if self._current_media == self._GetFirst(): return
+            if self._current_media == self._GetFirst():
+                
+                return
+                
             else:
                 
                 self._ShowPrevious()
@@ -3618,7 +4054,7 @@ class CanvasMediaListFilterArchiveDelete( CanvasMediaList ):
     
     def _Close( self ):
         
-        if not self._HydrusShouldNotProcessInput():
+        if self._CanProcessInput():
             
             if len( self._kept ) > 0 or len( self._deleted ) > 0:
                 
@@ -3753,10 +4189,13 @@ class CanvasMediaListFilterArchiveDelete( CanvasMediaList ):
     
     def _Skip( self ):
         
-        if not self._HydrusShouldNotProcessInput():
+        if self._current_media == self._GetLast():
             
-            if self._current_media == self._GetLast(): self._Close()
-            else: self._ShowNext()
+            self._Close()
+            
+        else:
+            
+            self._ShowNext()
             
         
     
@@ -3791,12 +4230,8 @@ class CanvasMediaListFilterArchiveDelete( CanvasMediaList ):
     
     def EventCharHook( self, event ):
         
-        if self._HydrusShouldNotProcessInput():
+        if self._CanProcessInput() and not self._FocusIsElsewhere():
             
-            event.Skip()
-            
-        else:
-        
             ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
             
             if modifier == wx.ACCEL_CTRL and key == ord( 'C' ): self._CopyFileToClipboard()
@@ -3806,21 +4241,27 @@ class CanvasMediaListFilterArchiveDelete( CanvasMediaList ):
                 CanvasMediaList.EventCharHook( self, event )
                 
             
+        else:
+            
+            event.Skip()
+            
         
     
     def EventDelete( self, event ):
         
-        if self._HydrusShouldNotProcessInput(): event.Skip()
-        else: self._Delete()
+        if self._CanProcessInput():
+            
+            self._Delete()
+            
+        else:
+            
+            event.Skip()
+            
         
     
     def EventMouse( self, event ):
         
-        if self._HydrusShouldNotProcessInput():
-            
-            event.Skip()
-            
-        else:
+        if self._CanProcessInput():
             
             if event.ShiftDown():
                 
@@ -3861,42 +4302,38 @@ class CanvasMediaListFilterArchiveDelete( CanvasMediaList ):
                     
                 
             
-            event.Skip()
-            
+        
+        event.Skip()
         
     
     def EventMenu( self, event ):
         
-        if self._HydrusShouldNotProcessInput(): event.Skip()
-        else:
+        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
+        
+        if action is not None:
             
-            action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
+            ( command, data ) = action
             
-            if action is not None:
+            if command == 'archive_file': self._Keep()
+            elif command == 'back': self._Back()
+            elif command == 'close': self._Close()
+            elif command == 'delete_file': self.EventDelete( event )
+            elif command == 'switch_between_fullscreen_borderless_and_regular_framed_window': self.GetParent().FullscreenSwitch()
+            elif command == 'launch_the_archive_delete_filter': self._Close()
+            elif command == 'move_animation_to_previous_frame': self._media_container.GotoPreviousOrNextFrame( -1 )
+            elif command == 'move_animation_to_next_frame': self._media_container.GotoPreviousOrNextFrame( 1 )
+            elif command == 'manage_file_ratings': self._ManageRatings()
+            elif command == 'manage_file_tags': wx.CallAfter( self._ManageTags )
+            elif command in ( 'pan_up', 'pan_down', 'pan_left', 'pan_right' ):
                 
-                ( command, data ) = action
+                if command == 'pan_up': self._DoManualPan( 0, -1 )
+                elif command == 'pan_down': self._DoManualPan( 0, 1 )
+                elif command == 'pan_left': self._DoManualPan( -1, 0 )
+                elif command == 'pan_right': self._DoManualPan( 1, 0 )
                 
-                if command == 'archive_file': self._Keep()
-                elif command == 'back': self._Back()
-                elif command == 'close': self._Close()
-                elif command == 'delete_file': self.EventDelete( event )
-                elif command == 'switch_between_fullscreen_borderless_and_regular_framed_window': self.GetParent().FullscreenSwitch()
-                elif command == 'launch_the_archive_delete_filter': self._Close()
-                elif command == 'move_animation_to_previous_frame': self._media_container.GotoPreviousOrNextFrame( -1 )
-                elif command == 'move_animation_to_next_frame': self._media_container.GotoPreviousOrNextFrame( 1 )
-                elif command == 'manage_file_ratings': self._ManageRatings()
-                elif command == 'manage_file_tags': wx.CallAfter( self._ManageTags )
-                elif command in ( 'pan_up', 'pan_down', 'pan_left', 'pan_right' ):
-                    
-                    if command == 'pan_up': self._DoManualPan( 0, -1 )
-                    elif command == 'pan_down': self._DoManualPan( 0, 1 )
-                    elif command == 'pan_left': self._DoManualPan( -1, 0 )
-                    elif command == 'pan_right': self._DoManualPan( 1, 0 )
-                    
-                elif command == 'zoom_in': self._ZoomIn()
-                elif command == 'zoom_out': self._ZoomOut()
-                else: event.Skip()
-                
+            elif command == 'zoom_in': self._ZoomIn()
+            elif command == 'zoom_out': self._ZoomOut()
+            else: event.Skip()
             
         
     
@@ -3907,8 +4344,14 @@ class CanvasMediaListFilterArchiveDelete( CanvasMediaList ):
     
     def EventUndelete( self, event ):
         
-        if self._HydrusShouldNotProcessInput(): event.Skip()
-        else: self._Undelete()
+        if self._CanProcessInput():
+            
+            self._Undelete()
+            
+        else:
+            
+            event.Skip()
+            
         
     
     def Skip( self, canvas_key ):
@@ -4166,11 +4609,7 @@ class CanvasMediaListBrowser( CanvasMediaListNavigable ):
     
     def EventCharHook( self, event ):
         
-        if self._HydrusShouldNotProcessInput():
-            
-            event.Skip()
-            
-        else:
+        if self._CanProcessInput() and not self._FocusIsElsewhere():
             
             ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
             
@@ -4184,12 +4623,19 @@ class CanvasMediaListBrowser( CanvasMediaListNavigable ):
                 CanvasMediaListNavigable.EventCharHook( self, event )
                 
             
+        else:
+            
+            event.Skip()
+            
         
     
     def EventMenu( self, event ):
         
         # is None bit means this is prob from a keydown->menu event
-        if event.GetEventObject() is None and self._HydrusShouldNotProcessInput(): event.Skip()
+        if event.GetEventObject() is None:
+            
+            event.Skip()
+            
         else:
             
             action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
@@ -4236,8 +4682,7 @@ class CanvasMediaListBrowser( CanvasMediaListNavigable ):
     
     def EventMouseWheel( self, event ):
         
-        if self._HydrusShouldNotProcessInput(): event.Skip()
-        else:
+        if self._CanProcessInput():
             
             if event.CmdDown():
                 
@@ -4250,13 +4695,17 @@ class CanvasMediaListBrowser( CanvasMediaListNavigable ):
                 else: self._ShowNext()
                 
             
+        else:
+            
+            event.Skip()
+            
         
     
     def EventShowMenu( self, event ):
         
         if self._current_media is not None:
             
-            services = HG.client_controller.GetServicesManager().GetServices()
+            services = HG.client_controller.services_manager.GetServices()
             
             local_ratings_services = [ service for service in services if service.GetServiceType() in ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) ]
             
@@ -4277,53 +4726,51 @@ class CanvasMediaListBrowser( CanvasMediaListNavigable ):
             
             if self._IsZoomable():
                 
-                menu.Append( CC.ID_NULL, 'current zoom: ' + ClientData.ConvertZoomToPercentage( self._current_zoom ) )
+                ClientGUIMenus.AppendMenuLabel( menu, 'current zoom: ' + ClientData.ConvertZoomToPercentage( self._current_zoom ) )
                 
-                menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'zoom_in' ), 'zoom in' )
-                menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'zoom_out' ), 'zoom out' )
+                ClientGUIMenus.AppendMenuItem( self, menu, 'zoom in', 'Zoom the media in.', self._ZoomIn )
+                ClientGUIMenus.AppendMenuItem( self, menu, 'zoom out', 'Zoom the media out.', self._ZoomOut )
                 
                 if self._current_media.GetMime() != HC.APPLICATION_FLASH:
                     
-                    ( my_width, my_height ) = self.GetClientSize()
-                    
-                    ( media_width, media_height ) = self._current_media.GetResolution()
-                    
-                    if self._current_zoom == 1.0:
+                    if self._current_zoom != 1.0:
                         
-                        if media_width > my_width or media_height > my_height:
-                            
-                            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'switch_between_100_percent_and_canvas_zoom' ), 'zoom fit' )
-                            
+                        ClientGUIMenus.AppendMenuItem( self, menu, 'zoom to 100%', 'Set the zoom to 100%.', self._ZoomSwitch )
                         
-                    else:
+                    elif self._current_zoom != self._canvas_zoom:
                         
-                        menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'switch_between_100_percent_and_canvas_zoom' ), 'zoom full' )
+                        ClientGUIMenus.AppendMenuItem( self, menu, 'zoom fit', 'Set the zoom so the media fits the canvas.', self._ZoomSwitch )
                         
                     
                 
                 ClientGUIMenus.AppendSeparator( menu )
                 
             
+            manage_menu = wx.Menu()
+            
+            ClientGUIMenus.AppendMenuItem( self, manage_menu, 'tags', 'Manage this file\'s tags.', self._ManageTags )
+            
             if i_can_post_ratings:
                 
-                manage_menu = wx.Menu()
+                ClientGUIMenus.AppendMenuItem( self, manage_menu, 'ratings', 'Manage this file\'s ratings.', self._ManageRatings )
                 
-                manage_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'manage_file_tags' ), 'tags' )
-                manage_menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'manage_file_ratings' ), 'ratings' )
-                
-                menu.AppendMenu( CC.ID_NULL, 'manage', manage_menu )
-                
-            else:
-                
-                menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'manage_file_tags' ), 'manage tags' )
-                
+            
+            ClientGUIMenus.AppendMenuItem( self, manage_menu, 'known urls', 'Manage this file\'s known urls.', self._ManageURLs )
+            
+            ClientGUIMenus.AppendMenu( menu, manage_menu, 'manage' )
             
             ClientGUIMenus.AppendSeparator( menu )
             
-            if self._current_media.HasInbox(): menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'archive_file' ), '&archive' )
-            if self._current_media.HasArchive(): menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'inbox_file' ), 'return to &inbox' )
+            if self._current_media.HasInbox():
+                
+                ClientGUIMenus.AppendMenuItem( self, menu, 'archive', 'Archive this file, taking it out of the inbox.', self._Archive )
+                
+            elif self._current_media.HasArchive():
+                
+                ClientGUIMenus.AppendMenuItem( self, menu, 'return to inbox', 'Put this file back in the inbox.', self._Inbox )
+                
             
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'remove_file_from_view' ), '&remove' )
+            ClientGUIMenus.AppendMenuItem( self, menu, 'remove', 'Remove this file from the list you are viewing.', self._Remove )
             
             if CC.LOCAL_FILE_SERVICE_KEY in locations_manager.GetCurrent():
                 
@@ -4533,7 +4980,7 @@ class MediaContainer( wx.Window ):
                         raise Exception( 'Failed to initialise the flash window' )
                         
                     
-                    client_files_manager = HG.client_controller.GetClientFilesManager()
+                    client_files_manager = HG.client_controller.client_files_manager
                     
                     self._media_window.movie = client_files_manager.GetFilePath( self._media.GetHash(), HC.APPLICATION_FLASH )
                     
@@ -4637,7 +5084,7 @@ class MediaContainer( wx.Window ):
     
     def EventPropagateMouse( self, event ):
         
-        if self._media is not None:
+        if self._media is not None and self.IsShown(): # Can't ClientToScreen if not shown, like in init
             
             mime = self._media.GetMime()
             
@@ -4675,13 +5122,25 @@ class MediaContainer( wx.Window ):
                 
                 if direction == 1:
                     
-                    if current_frame_index == num_frames - 1: current_frame_index = 0
-                    else: current_frame_index += 1
+                    if current_frame_index == num_frames - 1:
+                        
+                        current_frame_index = 0
+                        
+                    else:
+                        
+                        current_frame_index += 1
+                        
                     
                 else:
                     
-                    if current_frame_index == 0: current_frame_index = num_frames - 1
-                    else: current_frame_index -= 1
+                    if current_frame_index == 0:
+                        
+                        current_frame_index = num_frames - 1
+                        
+                    else:
+                        
+                        current_frame_index -= 1
+                        
                     
                 
                 self._media_window.GotoFrame( current_frame_index )
@@ -4960,7 +5419,7 @@ class EmbedButton( wx.Window ):
             
             hash = self._media.GetHash()
             
-            thumbnail_path = HG.client_controller.GetClientFilesManager().GetFullSizeThumbnailPath( hash )
+            thumbnail_path = HG.client_controller.client_files_manager.GetFullSizeThumbnailPath( hash )
             
             self._thumbnail_bmp = ClientRendering.GenerateHydrusBitmap( thumbnail_path ).GetWxBitmap()
             
@@ -4988,7 +5447,7 @@ class OpenExternallyPanel( wx.Panel ):
             
             hash = self._media.GetHash()
             
-            thumbnail_path = HG.client_controller.GetClientFilesManager().GetFullSizeThumbnailPath( hash )
+            thumbnail_path = HG.client_controller.client_files_manager.GetFullSizeThumbnailPath( hash )
             
             bmp = ClientRendering.GenerateHydrusBitmap( thumbnail_path ).GetWxBitmap()
             
@@ -5018,7 +5477,7 @@ class OpenExternallyPanel( wx.Panel ):
         hash = self._media.GetHash()
         mime = self._media.GetMime()
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
+        client_files_manager = HG.client_controller.client_files_manager
         
         path = client_files_manager.GetFilePath( hash, mime )
         
@@ -5043,11 +5502,11 @@ class StaticImage( wx.Window ):
         
         self._canvas_bmp = None
         
-        self._timer_render_wait = wx.Timer( self, id = ID_TIMER_RENDER_WAIT )
+        self._timer_render_wait = wx.Timer( self )
         
         self.Bind( wx.EVT_PAINT, self.EventPaint )
         self.Bind( wx.EVT_SIZE, self.EventResize )
-        self.Bind( wx.EVT_TIMER, self.TIMEREventRenderWait, id = ID_TIMER_RENDER_WAIT )
+        self.Bind( wx.EVT_TIMER, self.TIMEREventRenderWait )
         self.Bind( wx.EVT_MOUSE_EVENTS, self.EventPropagateMouse )
         self.Bind( wx.EVT_ERASE_BACKGROUND, self.EventEraseBackground )
         
@@ -5110,14 +5569,17 @@ class StaticImage( wx.Window ):
     
     def EventPropagateMouse( self, event ):
         
-        screen_position = self.ClientToScreen( event.GetPosition() )
-        ( x, y ) = self.GetParent().ScreenToClient( screen_position )
-        
-        event.SetX( x )
-        event.SetY( y )
-        
-        event.ResumePropagation( 1 )
-        event.Skip()
+        if self.IsShown(): # Can't ClientToScreen if not shown, like in init
+            
+            screen_position = self.ClientToScreen( event.GetPosition() )
+            ( x, y ) = self.GetParent().ScreenToClient( screen_position )
+            
+            event.SetX( x )
+            event.SetY( y )
+            
+            event.ResumePropagation( 1 )
+            event.Skip()
+            
         
     
     def EventResize( self, event ):

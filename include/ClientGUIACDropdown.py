@@ -80,7 +80,10 @@ class AutoCompleteDropdown( wx.Panel ):
             
             self._dropdown_window.SetSize( ( 0, 0 ) )
             
-            self._dropdown_window.SetPosition( self._text_ctrl.ClientToScreenXY( 0, 0 ) )
+            if self._text_ctrl.IsShown():
+                
+                self._dropdown_window.SetPosition( self._text_ctrl.ClientToScreenXY( 0, 0 ) )
+                
             
             self._dropdown_window.Show()
             
@@ -222,13 +225,16 @@ class AutoCompleteDropdown( wx.Panel ):
         
         ( text_width, text_height ) = self._text_ctrl.GetSize()
         
-        desired_dropdown_position = self._text_ctrl.ClientToScreenXY( -2, text_height - 2 )
-        
-        if self._last_attempted_dropdown_position != desired_dropdown_position:
+        if self._text_ctrl.IsShown():
             
-            self._dropdown_window.SetPosition( desired_dropdown_position )
+            desired_dropdown_position = self._text_ctrl.ClientToScreenXY( -2, text_height - 2 )
             
-            self._last_attempted_dropdown_position = desired_dropdown_position
+            if self._last_attempted_dropdown_position != desired_dropdown_position:
+                
+                self._dropdown_window.SetPosition( desired_dropdown_position )
+                
+                self._last_attempted_dropdown_position = desired_dropdown_position
+                
             
         
         #
@@ -515,9 +521,9 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         
         self._current_matches = []
         
-        file_service = HG.client_controller.GetServicesManager().GetService( self._file_service_key )
+        file_service = HG.client_controller.services_manager.GetService( self._file_service_key )
         
-        tag_service = HG.client_controller.GetServicesManager().GetService( self._tag_service_key )
+        tag_service = HG.client_controller.services_manager.GetService( self._tag_service_key )
         
         self._file_repo_button = ClientGUICommon.BetterButton( self._dropdown_window, file_service.GetName(), self.FileButtonHit )
         self._file_repo_button.SetMinSize( ( 20, -1 ) )
@@ -535,7 +541,7 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         
         self._file_service_key = file_service_key
         
-        file_service = HG.client_controller.GetServicesManager().GetService( self._file_service_key )
+        file_service = HG.client_controller.services_manager.GetService( self._file_service_key )
         
         name = file_service.GetName()
         
@@ -555,7 +561,7 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         
         self._dropdown_list.SetTagService( self._tag_service_key )
         
-        tag_service = tag_service = HG.client_controller.GetServicesManager().GetService( self._tag_service_key )
+        tag_service = tag_service = HG.client_controller.services_manager.GetService( self._tag_service_key )
         
         name = tag_service.GetName()
         
@@ -588,7 +594,7 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
     
     def FileButtonHit( self ):
         
-        services_manager = HG.client_controller.GetServicesManager()
+        services_manager = HG.client_controller.services_manager
         
         services = []
         
@@ -620,7 +626,7 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
     
     def TagButtonHit( self ):
         
-        services_manager = HG.client_controller.GetServicesManager()
+        services_manager = HG.client_controller.services_manager
         
         services = []
         

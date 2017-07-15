@@ -7,6 +7,7 @@ import ClientGUIListBoxes
 import ClientGUITopLevelWindows
 import ClientGUIScrolledPanelsEdit
 import ClientGUIScrolledPanelsManagement
+import ClientMedia
 import HydrusConstants as HC
 import HydrusData
 import HydrusGlobals as HG
@@ -56,16 +57,19 @@ class FullscreenHoverFrame( wx.Frame ):
     
     def _SizeAndPosition( self ):
         
-        ( should_resize, my_ideal_size, my_ideal_position ) = self._GetIdealSizeAndPosition()
-        
-        if should_resize:
+        if self.GetParent().IsShown(): # Can't ClientToScreen if not shown, like in init
             
-            self.Fit()
+            ( should_resize, my_ideal_size, my_ideal_position ) = self._GetIdealSizeAndPosition()
             
-            self.SetSize( my_ideal_size )
+            if should_resize:
+                
+                self.Fit()
+                
+                self.SetSize( my_ideal_size )
+                
             
-        
-        self.SetPosition( my_ideal_position )
+            self.SetPosition( my_ideal_position )
+            
         
     
     def SetDisplayMedia( self, canvas_key, media ):
@@ -92,7 +96,7 @@ class FullscreenHoverFrame( wx.Frame ):
                     
                 
             
-            if self._current_media is None:
+            if self._current_media is None or not self.GetParent().IsShown(): # Can't ClientToScreen if not shown, like in init
                 
                 self.Hide()
                 
@@ -175,6 +179,7 @@ class FullscreenHoverFrameTop( FullscreenHoverFrame ):
         self._top_hbox = wx.BoxSizer( wx.HORIZONTAL )
         self._title_text = ClientGUICommon.BetterStaticText( self, 'title' )
         self._info_text = ClientGUICommon.BetterStaticText( self, 'info' )
+        self._additional_info_text = ClientGUICommon.BetterStaticText( self, '', style = wx.ALIGN_CENTER )
         self._button_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
         self._PopulateLeftButtons()
@@ -188,6 +193,7 @@ class FullscreenHoverFrameTop( FullscreenHoverFrame ):
         vbox.AddF( self._top_hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._title_text, CC.FLAGS_CENTER )
         vbox.AddF( self._info_text, CC.FLAGS_CENTER )
+        vbox.AddF( self._additional_info_text, CC.FLAGS_CENTER )
         vbox.AddF( self._button_hbox, CC.FLAGS_CENTER )
         
         self.SetSizer( vbox )
@@ -264,17 +270,9 @@ class FullscreenHoverFrameTop( FullscreenHoverFrame ):
     
     def _PopulateLeftButtons( self ):
         
-        self._previous_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.previous, HG.client_controller.pub, 'canvas_application_command', self._canvas_key, ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'view_previous' ) )
-        self._previous_button.SetToolTipString( 'previous' )
-        
         self._index_text = ClientGUICommon.BetterStaticText( self, 'index' )
         
-        self._next_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.next, HG.client_controller.pub, 'canvas_application_command', self._canvas_key, ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'view_next' ) )
-        self._next_button.SetToolTipString( 'next' )
-        
-        self._top_hbox.AddF( self._previous_button, CC.FLAGS_VCENTER )
         self._top_hbox.AddF( self._index_text, CC.FLAGS_VCENTER )
-        self._top_hbox.AddF( self._next_button, CC.FLAGS_VCENTER )
         
     
     def _PopulateRightButtons( self ):
@@ -386,6 +384,15 @@ class FullscreenHoverFrameTop( FullscreenHoverFrame ):
             
             self._info_text.Show()
             
+            if self._additional_info_text.GetLabelText() == '':
+                
+                self._additional_info_text.Hide()
+                
+            else:
+                
+                self._additional_info_text.Show()
+                
+            
         
     
     def _SetDefaultShortcuts( self ):
@@ -420,13 +427,6 @@ class FullscreenHoverFrameTop( FullscreenHoverFrame ):
                 new_options.SetStringList( 'default_media_viewer_custom_shortcuts', new_default_media_viewer_custom_shortcuts )
                 
             
-        
-    
-    def AddCommand( self, label, func ):
-        
-        command_button = ClientGUICommon.BetterButton( self, label, func )
-        
-        self._button_hbox.AddF( command_button, CC.FLAGS_VCENTER )
         
     
     def EventMouseWheel( self, event ):
@@ -507,10 +507,17 @@ class FullscreenHoverFrameTopArchiveDeleteFilter( FullscreenHoverFrameTop ):
     
     def _PopulateLeftButtons( self ):
         
+        self._back_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.previous, HG.client_controller.pub, 'canvas_application_command', self._canvas_key, ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'archive_delete_filter_back' ) )
+        self._back_button.SetToolTipString( 'back' )
+        
+        self._top_hbox.AddF( self._back_button, CC.FLAGS_VCENTER )
+        
         FullscreenHoverFrameTop._PopulateLeftButtons( self )
         
-        self._previous_button.SetToolTipString( 'back' )
-        self._next_button.SetToolTipString( 'skip' )
+        self._skip_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.next, HG.client_controller.pub, 'canvas_application_command', self._canvas_key, ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'archive_delete_filter_skip' ) )
+        self._skip_button.SetToolTipString( 'skip' )
+        
+        self._top_hbox.AddF( self._skip_button, CC.FLAGS_VCENTER )
         
     
     def _ResetArchiveButton( self ):
@@ -519,33 +526,97 @@ class FullscreenHoverFrameTopArchiveDeleteFilter( FullscreenHoverFrameTop ):
         self._archive_button.SetToolTipString( 'archive' )
         
     
-class FullscreenHoverFrameTopDuplicatesFilter( FullscreenHoverFrameTop ):
+class FullscreenHoverFrameTopNavigable( FullscreenHoverFrameTop ):
+    
+    def _PopulateLeftButtons( self ):
+        
+        self._previous_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.previous, HG.client_controller.pub, 'canvas_application_command', self._canvas_key, ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'view_previous' ) )
+        self._previous_button.SetToolTipString( 'previous' )
+        
+        self._index_text = ClientGUICommon.BetterStaticText( self, 'index' )
+        
+        self._next_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.next, HG.client_controller.pub, 'canvas_application_command', self._canvas_key, ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'view_next' ) )
+        self._next_button.SetToolTipString( 'next' )
+        
+        self._top_hbox.AddF( self._previous_button, CC.FLAGS_VCENTER )
+        self._top_hbox.AddF( self._index_text, CC.FLAGS_VCENTER )
+        self._top_hbox.AddF( self._next_button, CC.FLAGS_VCENTER )
+        
+    
+class FullscreenHoverFrameTopDuplicatesFilter( FullscreenHoverFrameTopNavigable ):
+    
+    def __init__( self, parent, canvas_key ):
+        
+        FullscreenHoverFrameTopNavigable.__init__( self, parent, canvas_key )
+        
+        HG.client_controller.sub( self, 'SetDuplicatePair', 'canvas_new_duplicate_pair' )
+        
     
     def _PopulateCenterButtons( self ):
         
         menu_items = []
         
         menu_items.append( ( 'normal', 'edit duplicate action options for \'this is better\'', 'edit what content is merged when you filter files', HydrusData.Call( self._EditMergeOptions, HC.DUPLICATE_BETTER ) ) )
-        menu_items.append( ( 'normal', 'edit duplicate action options for \'exact duplicates\'', 'edit what content is merged when you filter files', HydrusData.Call( self._EditMergeOptions, HC.DUPLICATE_SAME_FILE ) ) )
+        menu_items.append( ( 'normal', 'edit duplicate action options for \'same quality\'', 'edit what content is merged when you filter files', HydrusData.Call( self._EditMergeOptions, HC.DUPLICATE_SAME_QUALITY ) ) )
         menu_items.append( ( 'normal', 'edit duplicate action options for \'alternates\'', 'edit what content is merged when you filter files', HydrusData.Call( self._EditMergeOptions, HC.DUPLICATE_ALTERNATE ) ) )
         menu_items.append( ( 'normal', 'edit duplicate action options for \'not duplicates\'', 'edit what content is merged when you filter files', HydrusData.Call( self._EditMergeOptions, HC.DUPLICATE_NOT_DUPLICATE ) ) )
+        menu_items.append( ( 'separator', None, None, None ) )
+        menu_items.append( ( 'normal', 'edit background lighten/darken switch intensity', 'edit how much the background will brighten or darken as you switch between the pair', self._EditBackgroundSwitchIntensity ) )
         
         cog_button = ClientGUICommon.MenuBitmapButton( self, CC.GlobalBMPs.cog, menu_items )
         
         self._top_hbox.AddF( cog_button, CC.FLAGS_SIZER_VCENTER )
         
-        FullscreenHoverFrameTop._PopulateCenterButtons( self )
+        FullscreenHoverFrameTopNavigable._PopulateCenterButtons( self )
+        
+        dupe_commands = []
+        
+        dupe_commands.append( ( 'this is better', 'Set that the current file you are looking at is better than the other in the pair.', ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_this_is_better' ) ) )
+        dupe_commands.append( ( 'same quality', 'Set that the two files are duplicates of very similar quality.', ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_exactly_the_same' ) ) )
+        dupe_commands.append( ( 'alternates', 'Set that the files are not duplicates, but that one is derived from the other or that they are both descendants of a common ancestor.', ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_alternates' ) ) )
+        dupe_commands.append( ( 'not duplicates', 'Set that the files are not duplicates or otherwise related--that this pair is a false-positive match.', ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_not_dupes' ) ) )
+        dupe_commands.append( ( 'custom action', 'Choose one of the other actions but customise the merge and delete options for this specific decision.', ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_custom_action' ) ) )
+        
+        for ( label, tooltip, command ) in dupe_commands:
+            
+            command_button = ClientGUICommon.BetterButton( self, label, HG.client_controller.pub, 'canvas_application_command', self._canvas_key, command )
+            
+            command_button.SetToolTipString( tooltip )
+            
+            self._button_hbox.AddF( command_button, CC.FLAGS_VCENTER )
+            
         
     
-    def _EditMergeOptions( self, duplicate_status ):
+    def _EditBackgroundSwitchIntensity( self ):
         
         new_options = HG.client_controller.GetNewOptions()
         
-        duplicate_action_options = new_options.GetDuplicateActionOptions( duplicate_status )
+        value = new_options.GetNoneableInteger( 'duplicate_background_switch_intensity' )
+        
+        with ClientGUITopLevelWindows.DialogEdit( self, 'edit lighten/darken intensity' ) as dlg:
+            
+            panel = ClientGUIScrolledPanelsEdit.EditNoneableIntegerPanel( dlg, value, message = 'intensity: ', none_phrase = 'do not change', min = 1, max = 9 )
+            
+            dlg.SetPanel( panel )
+            
+            if dlg.ShowModal() == wx.ID_OK:
+                
+                new_value = panel.GetValue()
+                
+                new_options.SetNoneableInteger( 'duplicate_background_switch_intensity', new_value )
+                
+            
+        
+    
+    def _EditMergeOptions( self, duplicate_type ):
+        
+        new_options = HG.client_controller.GetNewOptions()
+        
+        duplicate_action_options = new_options.GetDuplicateActionOptions( duplicate_type )
         
         with ClientGUITopLevelWindows.DialogEdit( self, 'edit duplicate merge options' ) as dlg:
             
-            panel = ClientGUIScrolledPanelsEdit.EditDuplicateActionOptionsPanel( dlg, duplicate_status, duplicate_action_options )
+            panel = ClientGUIScrolledPanelsEdit.EditDuplicateActionOptionsPanel( dlg, duplicate_type, duplicate_action_options )
             
             dlg.SetPanel( panel )
             
@@ -553,14 +624,19 @@ class FullscreenHoverFrameTopDuplicatesFilter( FullscreenHoverFrameTop ):
                 
                 duplicate_action_options = panel.GetValue()
                 
-                new_options.SetDuplicateActionOptions( duplicate_status, duplicate_action_options )
+                new_options.SetDuplicateActionOptions( duplicate_type, duplicate_action_options )
                 
             
         
     
     def _PopulateLeftButtons( self ):
         
-        FullscreenHoverFrameTop._PopulateLeftButtons( self )
+        self._first_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.first, HG.client_controller.pub, 'canvas_application_command', self._canvas_key, ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_back' ) )
+        self._first_button.SetToolTipString( 'go back a pair' )
+        
+        self._top_hbox.AddF( self._first_button, CC.FLAGS_VCENTER )
+        
+        FullscreenHoverFrameTopNavigable._PopulateLeftButtons( self )
         
         self._last_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.last, HG.client_controller.pub, 'canvas_application_command', self._canvas_key, ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'duplicate_filter_skip' ) )
         self._last_button.SetToolTipString( 'show a different pair' )
@@ -568,7 +644,34 @@ class FullscreenHoverFrameTopDuplicatesFilter( FullscreenHoverFrameTop ):
         self._top_hbox.AddF( self._last_button, CC.FLAGS_VCENTER )
         
     
-class FullscreenHoverFrameTopNavigableList( FullscreenHoverFrameTop ):
+    def SetDisplayMedia( self, canvas_key, media ):
+        
+        if canvas_key == self._canvas_key:
+            
+            if media is None:
+                
+                self._additional_info_text.SetLabelText( '' )
+                
+            
+            FullscreenHoverFrameTopNavigable.SetDisplayMedia( self, canvas_key, media )
+            
+        
+    
+    def SetDuplicatePair( self, canvas_key, shown_media, comparison_media ):
+        
+        if canvas_key == self._canvas_key:
+            
+            ( statements, score ) = ClientMedia.GetDuplicateComparisonStatements( shown_media, comparison_media )
+            
+            self._additional_info_text.SetLabelText( os.linesep.join( statements ) )
+            
+            self._ResetText()
+            
+            self._ResetButtons()
+            
+        
+    
+class FullscreenHoverFrameTopNavigableList( FullscreenHoverFrameTopNavigable ):
     
     def _PopulateLeftButtons( self ):
         
@@ -577,7 +680,7 @@ class FullscreenHoverFrameTopNavigableList( FullscreenHoverFrameTop ):
         
         self._top_hbox.AddF( self._first_button, CC.FLAGS_VCENTER )
         
-        FullscreenHoverFrameTop._PopulateLeftButtons( self )
+        FullscreenHoverFrameTopNavigable._PopulateLeftButtons( self )
         
         self._last_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.last, HG.client_controller.pub, 'canvas_application_command', self._canvas_key, ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'view_last' ) )
         self._last_button.SetToolTipString( 'last' )
@@ -621,7 +724,7 @@ class FullscreenHoverFrameTopRight( FullscreenHoverFrame ):
         
         like_hbox.AddF( ( 16, 16 ), CC.FLAGS_EXPAND_BOTH_WAYS )
         
-        like_services = HG.client_controller.GetServicesManager().GetServices( ( HC.LOCAL_RATING_LIKE, ), randomised = False )
+        like_services = HG.client_controller.services_manager.GetServices( ( HC.LOCAL_RATING_LIKE, ), randomised = False )
         
         for service in like_services:
             
@@ -636,7 +739,7 @@ class FullscreenHoverFrameTopRight( FullscreenHoverFrame ):
         
         vbox.AddF( like_hbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
         
-        numerical_services = HG.client_controller.GetServicesManager().GetServices( ( HC.LOCAL_RATING_NUMERICAL, ), randomised = False )
+        numerical_services = HG.client_controller.services_manager.GetServices( ( HC.LOCAL_RATING_NUMERICAL, ), randomised = False )
         
         for service in numerical_services:
             
@@ -652,9 +755,9 @@ class FullscreenHoverFrameTopRight( FullscreenHoverFrame ):
             vbox.AddF( hbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
             
         
-        vbox.AddF( self._icon_panel, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        vbox.AddF( self._file_repos, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( self._urls_vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        vbox.AddF( self._icon_panel, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        vbox.AddF( self._file_repos, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.AddF( self._urls_vbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         self.SetSizer( vbox )
         

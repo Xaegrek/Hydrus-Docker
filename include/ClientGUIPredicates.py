@@ -79,6 +79,50 @@ class PanelPredicateSystemAge( PanelPredicateSystem ):
         return info
         
     
+class PanelPredicateSystemDuplicateRelationships( PanelPredicateSystem ):
+    
+    PREDICATE_TYPE = HC.PREDICATE_TYPE_SYSTEM_DUPLICATE_RELATIONSHIPS
+    
+    def __init__( self, parent ):
+        
+        PanelPredicateSystem.__init__( self, parent )
+        
+        choices = [ '<', u'\u2248', '=', '>' ]
+        
+        self._sign = wx.RadioBox( self, choices = choices, style = wx.RA_SPECIFY_COLS )
+        
+        self._num = wx.SpinCtrl( self, min = 0, max = 65535 )
+        
+        choices = [ ( HC.duplicate_type_string_lookup[ status ], status ) for status in ( HC.DUPLICATE_BETTER_OR_WORSE, HC.DUPLICATE_BETTER, HC.DUPLICATE_WORSE, HC.DUPLICATE_SAME_QUALITY, HC.DUPLICATE_ALTERNATE, HC.DUPLICATE_NOT_DUPLICATE, HC.DUPLICATE_UNKNOWN ) ]
+        
+        self._dupe_type = ClientGUICommon.BetterRadioBox( self, choices = choices, style = wx.RA_SPECIFY_ROWS )
+        
+        #
+        
+        self._sign.SetStringSelection( '>' )
+        self._num.SetValue( 0 )
+        
+        #
+        
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        hbox.AddF( ClientGUICommon.BetterStaticText( self, 'system:num duplicate relationships' ), CC.FLAGS_VCENTER )
+        hbox.AddF( self._sign, CC.FLAGS_VCENTER )
+        hbox.AddF( self._num, CC.FLAGS_VCENTER )
+        hbox.AddF( self._dupe_type, CC.FLAGS_VCENTER )
+        
+        self.SetSizer( hbox )
+        
+        wx.CallAfter( self._num.SetFocus )
+        
+    
+    def GetInfo( self ):
+        
+        info = ( self._sign.GetStringSelection(), self._num.GetValue(), self._dupe_type.GetChoice() )
+        
+        return info
+        
+    
 class PanelPredicateSystemDuration( PanelPredicateSystem ):
     
     PREDICATE_TYPE = HC.PREDICATE_TYPE_SYSTEM_DURATION
@@ -140,7 +184,7 @@ class PanelPredicateSystemFileService( PanelPredicateSystem ):
         
         self._current_pending = ClientGUICommon.BetterRadioBox( self, choices = [ ( 'currently in', HC.CONTENT_STATUS_CURRENT ), ( 'pending to', HC.CONTENT_STATUS_PENDING ) ], style = wx.RA_SPECIFY_ROWS )
         
-        services = HG.client_controller.GetServicesManager().GetServices( HC.FILE_SERVICES )
+        services = HG.client_controller.services_manager.GetServices( HC.FILE_SERVICES )
         
         choices = [ ( service.GetName(), service.GetServiceKey() ) for service in services ]
         
@@ -447,7 +491,7 @@ class PanelPredicateSystemRating( PanelPredicateSystem ):
         
         #
         
-        local_like_services = HG.client_controller.GetServicesManager().GetServices( ( HC.LOCAL_RATING_LIKE, ), randomised = False )
+        local_like_services = HG.client_controller.services_manager.GetServices( ( HC.LOCAL_RATING_LIKE, ), randomised = False )
         
         self._like_checkboxes_to_info = {}
         
@@ -479,7 +523,7 @@ class PanelPredicateSystemRating( PanelPredicateSystem ):
         
         #
         
-        local_numerical_services = HG.client_controller.GetServicesManager().GetServices( ( HC.LOCAL_RATING_NUMERICAL, ), randomised = False )
+        local_numerical_services = HG.client_controller.services_manager.GetServices( ( HC.LOCAL_RATING_NUMERICAL, ), randomised = False )
         
         self._numerical_checkboxes_to_info = {}
         
@@ -742,6 +786,49 @@ class PanelPredicateSystemSize( PanelPredicateSystem ):
     def GetInfo( self ):
         
         info = ( self._sign.GetStringSelection(), self._size.GetValue(), HydrusData.ConvertUnitToInt( self._unit.GetStringSelection() ) )
+        
+        return info
+        
+    
+class PanelPredicateSystemTagAsNumber( PanelPredicateSystem ):
+    
+    PREDICATE_TYPE = HC.PREDICATE_TYPE_SYSTEM_TAG_AS_NUMBER
+    
+    def __init__( self, parent ):
+        
+        PanelPredicateSystem.__init__( self, parent )
+        
+        self._namespace = wx.TextCtrl( self )
+        
+        choices = [ '<', u'\u2248', '>' ]
+        
+        self._sign = wx.RadioBox( self, choices = choices, style = wx.RA_SPECIFY_COLS )
+        
+        self._num = wx.SpinCtrl( self, min = -99999999, max = 99999999 )
+        
+        #
+        
+        self._namespace.SetValue( 'page' )
+        self._sign.SetStringSelection( '>' )
+        self._num.SetValue( 0 )
+        
+        #
+        
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        hbox.AddF( ClientGUICommon.BetterStaticText( self, 'system:tag as number' ), CC.FLAGS_VCENTER )
+        hbox.AddF( self._namespace, CC.FLAGS_VCENTER )
+        hbox.AddF( self._sign, CC.FLAGS_VCENTER )
+        hbox.AddF( self._num, CC.FLAGS_VCENTER )
+        
+        self.SetSizer( hbox )
+        
+        wx.CallAfter( self._num.SetFocus )
+        
+    
+    def GetInfo( self ):
+        
+        info = ( self._namespace.GetValue(), self._sign.GetStringSelection(), self._num.GetValue() )
         
         return info
         

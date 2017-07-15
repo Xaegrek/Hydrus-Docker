@@ -8,6 +8,303 @@
 		<div class="content">
 			<h3>changelog</h3>
 			<ul>
+				<li><h3>version 264</h3></li>
+				<ul>
+					<li>converted the page of images downloader to the new network engine</li>
+					<li>converted the thread watcher downloader to the new network engine</li>
+					<li>rejiggered page of images and thread watcher management panels to better separate the two loops they work on</li>
+					<li>rejiggered some more downloader layout stuff in prep for a new control to better display url cache and overall import status--downloader-global pause button is now always at the top, for instance</li>
+					<li>removed 'waiting politely' indicator from download pages that use the new network engine</li>
+					<li>network job controls now have a simple border</li>
+					<li>network job controls will show current bytes progress and speed in a more intelligent and useful way--no longer spamming the initial 0KB/s, for instance, and flashing more useful summary information when downloading many small files</li>
+					<li>network job controls now display their current bytes progress and speed on a separate right-aligned text beside the main status text (to stop the speed text jumping around so much)</li>
+					<li>network job controls will not show the current download speed until some bytes are actually read</li>
+					<li>wrote a first version of 'services->review bandwidth' review frame, which lists all network contexts with data in the past month</li>
+					<li>wrote an independant and live-updating review frame for indivdual network contexts, launched from the review bandwidth frame, which shows current and historical bandwidth use for that context</li>
+					<li>the main gui status bar now reports current bandwidth usage! updated once a second</li>
+					<li>database->backup process now has some nicer gui, better and more reliable workflow, improved file copy notification, and now correctly obeys a popup-cancel command</li>
+					<li>started the new 'migrate database' gui under the database menu. it currently shows live usage and will gain some verb buttons to atomically alter things hopefully next week</li>
+					<li>moved from a strict begin/commit db model to a save/release system that only commits changes to disk at most every ten seconds or so. small 'write' transactions will now often have no disk-sync overhead and so are super fast, particularly when they come in a large batch.</li>
+					<li>simplified database connection, disconnection, begin, commit, and rollback code significantly</li>
+					<li>the url table in the client database is now non-unique (i.e. multiple files can have the same url). this may lead to undesired 'already in db' or 'deleted' statuses in some downloaders as they check for url status before starting their downloads. if this change turns out to a be a big pain in the future for pixiv manga or whatever, it may be revisited.</li>
+					<li>fixed a bug in deviant art parser that sometimes meant nsfw urls could not be found</li>
+					<li>fixed an issue where progress gauges could sometimes get stuck in a pulsing state</li>
+					<li>fixed a bug with the new optimised result building which sometimes occured when all the files in a batch had common ipfs service membership</li>
+					<li>improved support for unusual videos</li>
+					<li>improved accuracy of duration calculation for unusual videos</li>
+					<li>improved database optimisation after initial and ongoing repository processing</li>
+					<li>a 'wake subscriptions' event now occurs even on 'manage subscriptions' cancel (meaning temporarily-dialog-paused subs will always continue after the dialog is closed)</li>
+					<li>added a careful manual commit to stop the possibility of the definition-desync some users noticed after a power-loss during a big repository sync commit</li>
+					<li>removed some redundant old db compatibility code</li>
+					<li>permitted sqlite installations that allow in-memory temporary tables to use them (but not for vacuums, which tend to be a bit big for this stuff)</li>
+					<li>cleaned up some redundant timer id code</li>
+					<li>misc improvements</li>
+					<li>misc refactoring</li>
+				</ul>
+				<li><h3>version 263</h3></li>
+				<ul>
+					<li>greatly improved how gui sessions are loaded--now the page tabs are loaded instantly, but the thumbnails are loaded in the background. session loaded should be significantly less laggy and buggy</li>
+					<li>the issue of pages sometimes initially sizing at zero size (which could be caused by minimising the client while a session load was ongoing) should hence be better/fixed completely!</li>
+					<li>gui sessions will now load their files in the exact order in which they were saved--behaviour that I think was not previously always reliable</li>
+					<li>more general network code work and polishing</li>
+					<li>added and improved unit tests for network code</li>
+					<li>improved how short-time-delta data bandwidth is reported</li>
+					<li>improved how short-time-delta data bandwidth is tested</li>
+					<li>wrote a networkjobcontrol to display and control the new network job object</li>
+					<li>tumblr parser now produces 68.-less urls</li>
+					<li>tumblr parser now produces https urls</li>
+					<li>cleaned up tumblr parser a little</li>
+					<li>url caches will clip existing tumblr urls of the 68.-subdomain and convert to the new raw format, clearing out dupes along the way</li>
+					<li>url caches will convert existing tumblr and pixiv urls to https, clearing out dupes along the way</li>
+					<li>the pixiv parser now deals with missing creator/title tags without errors</li>
+					<li>extended the specific file domain tag cache to also store deleted mappings, resulting in much faster request building for clients with large numbers of deleted mappings</li>
+					<li>improved some downloader page queue text display timing</li>
+					<li>added support for more types of mp4 file</li>
+					<li>improved how some memory maintenance calls work</li>
+					<li>improved how hydrus datacaches track their recently-used-data fifo list</li>
+					<li>pages now regularly clear out spare thumbnail canvas bmps</li>
+					<li>pages now regularly clear out cached thumbnail canvas bmps when they are not the currently viewed page</li>
+					<li>import caches, when asked for url membership, will now test both the http and https versions the url</li>
+					<li>maybe improved how 'open in file browser' works in windows</li>
+					<li>fixed the 'recount video frames' advanced thumbnail menu entry, which wasn't working with the new ffmpeg wrapper</li>
+					<li>moved some bloaty master hash data out of client.db and into client.master.db</li>
+					<li>pubsub profile will no longer profile 'message', as it just makes for spam</li>
+					<li>reduced some serverside pubsub spam</li>
+					<li>reduced some significant clientside pubsub spam that I think was smashing the gui event loop at inconvenient moments</li>
+					<li>improved some client shutdown object sync code</li>
+					<li>fixed an issue where some duplicate maintenance popups would not clear themselves up properly if interrupted mid-job</li>
+					<li>cleaned up some http-https conversion and comparison code</li>
+					<li>fixed some status-setting code that meant thumbnail pages were sometimes setting status after they were replaced and scheduled for deletion</li>
+					<li>misc improvements</li>
+				</ul>
+				<li><h3>version 262</h3></li>
+				<ul>
+					<li>added apng support!</li>
+					<li>sessions will now append from the default insertion index (e.g. right of current page)</li>
+					<li>sessions will now load in the correct order if the default insertion index is to the left of the current page!</li>
+					<li>fixed an issue with custom 'favorites' gelbooru parsers</li>
+					<li>manage parents/siblings dialogs now load their larger datasets on a thread, after initialising</li>
+					<li>sped up how some default thumbnails are generated on client boot</li>
+					<li>sped up how resized thumbnails are generated</li>
+					<li>refactored ffmpeg video parsing to be simpler and easier to maintain</li>
+					<li>improved some ffmpeg parsing to be much faster</li>
+					<li>ffmpeg can now parse video that reports no duration</li>
+					<li>fixed some more bad video framerate parsing</li>
+					<li>the 4chan/8chan thread watcher will now always generate https urls (even if you enter an http thread url)</li>
+					<li>pixiv will now produce https urls</li>
+					<li>the known url file status system will now check both http and https versions of an url it is given</li>
+					<li>refactored some core elements to simplify common controller requests</li>
+					<li>started on some database migration help and ui--should be finished next week</li>
+					<li>flushed out network engine a little</li>
+					<li>more refactoring and simplification of new network engine object coupling</li>
+					<li>flushed out bandwidth manager</li>
+					<li>misc logic tweaks in bandwidth management</li>
+					<li>wrote a network session manager</li>
+					<li>wrote a new class for identifying all future 'network contexts'</li>
+					<li>employed NetworkContext everywhere in the new engine, massively simplifying several things</li>
+					<li>wrote the first batch of tests for my new network engine and its network jobs</li>
+					<li>wrote tests for the bandwidth rules object, including covering the new short time delta support</li>
+					<li>improved reliability and speed of bandwidth unit tests</li>
+					<li>wrote tests for the new domain-based bandwidth manager</li>
+					<li>misc improvements</li>
+					<li>more misc improvements</li>
+				</ul>
+				<li><h3>version 261</h3></li>
+				<ul>
+					<li>wrote a new manage dialog for urls</li>
+					<li>added 'manage known urls' to media right-click menus!</li>
+					<li>double-left-clicking on any video animation will 'open externally'!</li>
+					<li>added an option to options->gui to set where new pages will appear by default--either far left/right or left/right of current page</li>
+					<li>the tumblr parser now produces '_raw' urls when the post was posted in 2013 or later</li>
+					<li>created a new 'number' subtag cache that will be populated on update</li>
+					<li>created a new 'tag as number' system predicate that can search for, say, all 'page:' tags > 200</li>
+					<li>bandwidth management now tracks requests and num_bytes more sensibly</li>
+					<li>bandwidth tracking objects can now better handle bandwidth usage and rule application in short intervals (i.e. sub-5-second) (however, the current networking engine cannot yet use this information accurately)</li>
+					<li>wrote unit test for bandwidth tracker, including for the new short interval timing</li>
+					<li>fleshed out the new network engine</li>
+					<li>fleshed out the new network job</li>
+					<li>thread watchers can now have a time delta that includes days (giving a max check period of 360 days, wew)</li>
+					<li>adminside mapping petition processing now has adaptive max total petition weight--lower file count range petitions will have much higher max total permitted weight</li>
+					<li>added a new 'callto' debug reporting mode that reports on current thread pool jobs</li>
+					<li>improved calltothread pre-spawning checks to reduce outside chance of deadlock in busy periods</li>
+					<li>the advanced review services repository panel buttons are now hidden unless in advanced mode</li>
+					<li>eliminated some animation buffer looping redundancy</li>
+					<li>fixed a little animation next-frame prediction code</li>
+					<li>fixed up some '1 minutes'-type time_delta->string conversion</li>
+					<li>fixed up label on time delta control button</li>
+					<li>fixed some shutdown thread interactions</li>
+					<li>fixed an issue where sometimes empty tags could be entered into the manage tags panel</li>
+					<li>added some pydeadobject error handling during client shutdown</li>
+					<li>refactored some db multi-tag->file search code, cleaned up wildcard searching</li>
+					<li>misc string cleanup</li>
+					<li>misc dialog cleanup</li>
+				</ul>
+				<li><h3>version 260</h3></li>
+				<ul>
+					<li>fixed video parsing when the video metadata includes random non-utf-friendly garbage</li>
+					<li>fixed video parsing when ffmpeg reports no fps at all</li>
+					<li>improved video frame counting accuracy</li>
+					<li>thumbnail waterfall process now adapts to the current speed of the cache and can hence use significantly less overhead</li>
+					<li>the thumbnail fading process now adapts to the current rendering speed, delivering smooth fade when CPU is available but otherwise skipping frames and more reliably filling in thumbnails within a quarter of a second</li>
+					<li>canvases now draw their thumbnails with slightly less overhead</li>
+					<li>increased database synchronous pragma to FULL to better safeguard against power loss during multiple-db commit--we'll see if it slows things down too much, and maybe add an option about it</li>
+					<li>cleaned up and improved some client gui pubsubs</li>
+					<li>made pubsub profile mode far less popup-spammy</li>
+					<li>if a profile takes less than 20ms, it now won't be fully printed to the log</li>
+					<li>tweaked some more server object maintenance code</li>
+					<li>added 'changelog' link to help menu</li>
+					<li>updated lz4 library and fixed some old deprecated calls</li>
+					<li>misc serverside pubsub cleanup</li>
+					<li>misc fixes</li>
+					<li>misc refactoring</li>
+					<li>misc code cleaning</li>
+				</ul>
+				<li><h3>version 259</h3></li>
+				<ul>
+					<li>planned out new networking engine and started the principal objects</li>
+					<li>renamed the 'exact match' duplicate status to 'same quality', to reduce confusion on what is appropriate for this status</li>
+					<li>the duplicate filter, on hitting the delete key, now offers the option of deleting both files</li>
+					<li>the duplicate system now combines duplicate status setting and the consequent batch of content updates into the same database transaction, speeding things up</li>
+					<li>the duplicate system now batches multiple duplicate status setting into a single transaction, massively speeding up large filters or thumbnail status set actions</li>
+					<li>misc duplicate help tweaks</li>
+					<li>you can now edit the default duplicate merge options from the new thumbnail duplicate menu</li>
+					<li>the duplicates page's jobs are less demanding on gui time and take better breaks if something else happens</li>
+					<li>renamed the new dupe system predicate to 'system:num duplicate relationships' to clarify what it searches</li>
+					<li>for normal queries, current and pending mappings are now fetched from a faster mappings cache. you should see faster result building across the board, particularly on fresh boots or otherwise slow-disk-access systems</li>
+					<li>added a prototype 'advanced mode' (defaulting to off, so experienced users will want to turn it on) under the help menu that will enable menu items that are often not helpful to new users. I will add more things to this in future, suggestions welcome</li>
+					<li>the new thumbnail menu dupe relationship set stuff is now considered advanced</li>
+					<li>thumbnail menu find similar files is now considered advanced</li>
+					<li>the thumbnail menu copy hash entries are now considered advanced</li>
+					<li>advanced content update buttons (on manage tags and review services) are now considered advanced</li>
+					<li>added an advanced mode 'open file location' entry to the thumbnail share menu, which will open the file in your OS's file explorer (not available on Linux)</li>
+					<li>added an advanced mode 'correct video frame count' thumbnail menu entry that will force-apply last week's more accurate video frame counter to correct and videos that render too fast and then cut off</li>
+					<li>fixed many entries on the media viewer menus, which were being blocked by an over-eager 'can continue' test and hence silently failing</li>
+					<li>fixed the youtube downloader on Linux and OS X--both now use youtube-dl</li>
+					<li>fixed an issue where the GetLighterDarkerColour function was producing very bright alternates to very dark colours (meaning dark dupe filters were having their bright background text rendered unreadable)</li>
+					<li>improved video frame number parsing accuracy</li>
+					<li>improved the accurate version of video frame number parsing accuracy, particularly for longer videos</li>
+					<li>the network engine now reports 5xx http status codes as ServerException to better contextualise to the user what went wrong</li>
+					<li>adminside mapping petitions are now sub-ordered by tag</li>
+					<li>adminside sibling/parent petitions are now ordered by the 'older' tag and sub-ordered by the 'newer' tag</li>
+					<li>censorship taglists are now roughly sorted</li>
+					<li>reduced default shutdown work max time to five minutes</li>
+					<li>improved how subprocesses are started</li>
+					<li>misc cleanup</li>
+					<li>misc refactoring</li>
+				</ul>
+				<li><h3>version 258</h3></li>
+				<ul>
+					<li>added a duplicate entry to the thumbnail right-click menu</li>
+					<li>the new duplicate menu will now attempt to fetch known duplicate counts for the focused file for the current file domain (if the db is locked, it will say so rather than block)</li>
+					<li>the new duplicate menu's counts in the thumbnail menu can be clicked to show those files in a new page</li>
+					<li>the new duplicate menu allows you to set the four main dupe statuses (with default merge options), or a customised verson of the same, or set unknown/potential, or delete dupe status completely, for all the possible pairs in the current selection</li>
+					<li>added tentative support for variable framerate files, manually counting up their frames and displaying them with an averaged constant framerate in the client renderer. this now permits a number of webms that were previously 'mime unsupported'. let me know how it works for you!</li>
+					<li>cleaned some server locking code, hopefully fixing the ssl handshake issue (which is actually a deadlocking issue)</li>
+					<li>export file dialogs will remember the last value of 'export tags to .txt files?', and clicking that checkbox will always launch the dialog for editing (rather than clearing if there are some set)</li>
+					<li>fixed the advanced content update (as used by service-wide update), which was not able to differentiate namespaces since the recent service changes. I apologise to anyone affected by this--I will add some unit tests to make sure it doesn't happen again</li>
+					<li>reworked and cleaned some canvas event handling code</li>
+					<li>the canvas will now accept mouse wheel events even when it does not have focus</li>
+					<li>the canvas frame will no longer accept keyboard events (and hence activate fullscreen_switch) if the mouse is over a flash window</li>
+					<li>hydrus servers now respond to /robots.txt with a 'disallow all'</li>
+					<li>servers will now provide mappings petitions to admins in groups of similar size, rather than mixing petitions of weight 5000 with a hundred of weight 1</li>
+					<li>fixed the back/skip buttons in the archive/delete filter's top hover window</li>
+					<li>the file path tagging dialog's namespace and regular regexes now support parenthesis groups, and in that case will take each of those submatches instead of the wider match</li>
+					<li>hence regexes with groups will now compile in that dialog</li>
+					<li>you can now 'new page here' on the final (rightmost) page tab</li>
+					<li>fixed an issue where media-viewer-launched manage tags frames would yield focus to the main gui if they had opened a sub-dialog while they were open</li>
+					<li>the tag censorship edit panel now has a 'help here -->' label in blue text</li>
+					<li>file imports will fail properly when the final temp_path->client_files file copy operation fails (due, for instance, to the destination being on a removable medium that was recently disconnected)</li>
+					<li>fixed serverside upnp maintenance, which was silently failing early, and also updated it to the new server object code</li>
+					<li>wrote a new checklistbox dialog that handles the underlying data explicitly rather than messing around with external text->data maps</li>
+					<li>replaced all the old string checklistbox dialog instances with the new one</li>
+					<li>subscriptions will now correctly clear their 'recent error' status on a successful sync</li>
+					<li>refactored and cleaned how basic mediaresult objects store and consult simple file information</li>
+					<li>locationsmanager objects now handle inbox status and the related content update events that affect it</li>
+					<li>fixed a bug in HydrusTagArchive when attempting to figure out hash type from an existing hash</li>
+					<li>removed the obsolete servertoclientcontentupdatepackage object</li>
+					<li>misc duplicate code cleanup</li>
+					<li>misc serverside service code improvements</li>
+					<li>misc small fixes</li>
+					<li>misc cleanup</li>
+				</ul>
+				<li><h3>version 257</h3></li>
+				<ul>
+					<li>the duplicate filter will now maintain zoom on files with the same ratio</li>
+					<li>split the duplicate merge options into separate tag/rating controls--you may see some duplicate service entries, but these will be cleaned on your next shutdown</li>
+					<li>duplicate merge options now allow syncing 'archive' status</li>
+					<li>duplicate merge options now allow 'delete both files', which you may find use for in custom actions</li>
+					<li>created a tag censorship object to handle and action a rich tag censorship ruleset</li>
+					<li>tag duplicate merge options now have and use this tag censorship object to filter which tags are merged, with an initial value of 'let everything through'</li>
+					<li>wrote a tag censorship edit panel and tied it into the duplicate action edit panel so these new tag censorship objects can be edited</li>
+					<li>added an optimisation to the duplicate status setting code--if two files are better/worse, they are inherantly duplicates and so 'not dupe' and 'alternate' relationships apply to both equally and can be duplicated</li>
+					<li>fixed and culled and normalised the 'this has more tags' dupe filter statements to be more accurate and useful</li>
+					<li>added 'this has a larger filesize' type-statements to the dupe filter</li>
+					<li>created a 'system:duplicate relationships' predicate that can find files based on how many duplicate relationships of a particular type they have</li>
+					<li>cleaned up some misc duplicate filter code and added some tooltips to the top hover window dupe action buttons</li>
+					<li>added 'move to left/right end' to main gui page tab right-click menu</li>
+					<li>added 'new page' and 'new page here' to main gui page tab right-click menu</li>
+					<li>you can now right-click for a menu from empty tab space on the main gui</li>
+					<li>the main gui statusbar now updates more efficiently when under heavy refresh load</li>
+					<li>the main gui statusbar now shows db read/write/commit status and sets the current db job summary as its tooltip--if you experience persistent hangs, please hover over the statusbar and report what you see!</li>
+					<li>export tags to .txts checkbox will now default to 'all services on' when checked</li>
+					<li>fixed the thread watcher, which was accidentally disabling its text input early</li>
+					<li>'similar files' searches launched from the thumbnail menu will now default to 'my files' file domain rather than 'all local files'</li>
+					<li>downloader pages will now correctly sort their files on initialisation</li>
+					<li>refactored and generally cleaned up some collect and sort code</li>
+					<li>fixed some unlikely-but-possible collect/sort bugs</li>
+					<li>fixed some bad layout in the top-right hover window that was making it grow unreasonably tall when many urls were shown</li>
+					<li>on the different download import pages, the progress gauge that shows file download progress will now reset back to 0 as soon as the file download is complete</li>
+					<li>fixed a problem where video imports with unicode characters in their path were failing to mime-parse</li>
+					<li>improved the file import status update pipeline to better deal with large transactions (like skipping/deleting/retrying a thousand rows at once). all these big transactions should lag the gui far less</li>
+					<li>improved some misc import status cache code</li>
+					<li>made first step in a big size rewrite job that will size many elements according to local system font size rather than specific pixel values</li>
+					<li>hydrus servers now explicitly default to TLSv1.2--we'll see if that clears up some of the handshake timeout problems we have recently seen</li>
+					<li>cleaned up a bunch of possible pydeadobjecterrors when the new review services panel is closed</li>
+					<li>improved and rescheduled gelbooru redirect url purge</li>
+					<li>added a catch-and-recovery to hydrus network session initialisation, which may sometimes receive invalid data after a service deletion</li>
+					<li>added similar catches to tag parent/sibling initialisation, which apparently can be vulnerable to a similar invalid data problem</li>
+					<li>I think I cleaned up some more Linux ClientToScreen console errors</li>
+					<li>refactored and cleaned some frame size event responsibility</li>
+					<li>refactored and cleaned the panel and controls that display file import status</li>
+					<li>did a little more menu code cleanup</li>
+					<li>misc cleanup</li>
+					<li>misc fixes</li>
+				</ul>
+				<li><h3>version 256</h3></li>
+				<ul>
+					<li>the duplicate filter now loads new pairs off the gui thread. it will display 'loading pairs...' during this time</li>
+					<li>media viewers of all kinds are now more comfortable displaying no media (when this occurs, it is usually a frame or two during startup/shutdown)</li>
+					<li>the duplicate filter now responds to any media_viewer_browser navigation commands (like view_next) with a media switch action</li>
+					<li>you can now alter the duplicate filter's background lighten/darken switch intensity from its top hover window's cog icon</li>
+					<li>fixed a bug in the new dupe pair selection algorithm that was preventing pairs from being presented as groups</li>
+					<li>the duplicate filter will now speed up workflow by automatically skipping pairs when you have previously chosen to delete one of the files in the current batch</li>
+					<li>auto-skipped pairs _should_ be auto-reverse-skipped on a 'go back' action</li>
+					<li>added a |< 'go back' index navigation button to the duplicate filter top hover window</li>
+					<li>the duplicate filter now displays several 'this file has larger resolution'-type statements about the currently viewed file. it lists them on the top hover window and in the background details text underneath</li>
+					<li>the duplicate filter _roughly_ attempts to put the better file of the two first. this will always be indexed 'A'</li>
+					<li>the duplicate filter now shows done/total batch progress in its index string--not sure how clear/helpful this ultimately is, so may need to revisit</li>
+					<li>an unusual bug where Linux would spam the 'All pairs have been filtered!' duplicate filter message over and over and then crash _should_ be fixed--the filter no longer waits for that message to be OKed before closing itself</li>
+					<li>drag-and-dropping text onto the client will now a) open a url import page if none already exist and b) put the dropped text into the input box of the first open url import page (and focus it, so you can quickly hit enter)! This works when dragging text links from browsers, as well</li>
+					<li>you can now 'append' gui sessions, which will just append that session's tabs to whatever is already open--say, if you have several 'favourites' pages you want to be able to quickly load up without having to break your existing workflow</li>
+					<li>ipfs services now have a 'check daemon' button on their review services panel which will test the daemon is running and accessible and report its version</li>
+					<li>fixed the 'test address' button for ipfs services on their manage services panel</li>
+					<li>the client can now automatically download files it wants and knows are on an ipfs service</li>
+					<li>middle-click on an 'all known files' domain thumbnail will now correctly start a download (as long as a specific remote file service is known)</li>
+					<li>the multihash prefix option is reinstated on ipfs manage services panels</li>
+					<li>the gelbooru parser now discovers the correct page url to associate with its files</li>
+					<li>wrote some redirect fetching code to fix the gelbooru bad urls issue</li>
+					<li>discovered a quicker fix for the gelbooru issue--the redirect location is the garbage in the original url in base64</li>
+					<li>all downloader/subscription url caches will purge any old gelbooru 'redirect.php' urls on update</li>
+					<li>fixed an issue where 'previously deleted' gallery/thread imports were returning 'fail'</li>
+					<li>fixed a problem that was causing some redundant laggy work in adminside petition processing</li>
+					<li>thread watchers will now remember their file and tag import options through a session save even when no thread url has yet been entered</li>
+					<li>fixed an issue where media 'removed' from a media viewer view of a collection resulted in the entire collection being removed at the thumbnail level</li>
+					<li>fixed an issue where media deleted from a media viewer view of a collection resulted in the media not being correctly removed from selection tags</li>
+					<li>tag, namespace, and wildcard searches on a specific file domain (i.e. other than 'all known files') now take advantage of an optimisation in the autocomplete cache and so run significantly faster</li>
+					<li>fixed a hover window coordinate calculation issue after minimising the media viewer on some platforms</li>
+					<li>removed some 'all files failed to download' spam that could sometimes occur</li>
+					<li>misc fixes</li>
+				</ul>
 				<li><h3>version 255</h3></li>
 				<ul>
 					<li>the duplicate filter now supports shift+left-click to drag, like the archive/delete filter (this remains hardcoded for now)</li>

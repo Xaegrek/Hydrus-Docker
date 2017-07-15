@@ -2,19 +2,26 @@ import HydrusConstants as HC
 import HydrusData
 import HydrusExceptions
 import os
+import shlex
 import socket
 import subprocess
 import threading
 import traceback
-from twisted.internet import reactor, defer
-from twisted.internet.threads import deferToThread
-from twisted.python import log
 
 # new stuff starts here
 
-if HC.PLATFORM_LINUX: upnpc_path = os.path.join( HC.BIN_DIR, 'upnpc_linux' )
-elif HC.PLATFORM_OSX: upnpc_path = os.path.join( HC.BIN_DIR, 'upnpc_osx' )
-elif HC.PLATFORM_WINDOWS: upnpc_path = os.path.join( HC.BIN_DIR, 'upnpc_win32.exe' )
+if HC.PLATFORM_LINUX:
+    
+    upnpc_path = os.path.join( HC.BIN_DIR, 'upnpc_linux' )
+    
+elif HC.PLATFORM_OSX:
+    
+    upnpc_path = os.path.join( HC.BIN_DIR, 'upnpc_osx' )
+    
+elif HC.PLATFORM_WINDOWS:
+    
+    upnpc_path = os.path.join( HC.BIN_DIR, 'upnpc_win32.exe' )
+    
 
 EXTERNAL_IP = {}
 EXTERNAL_IP[ 'ip' ] = None
@@ -22,16 +29,16 @@ EXTERNAL_IP[ 'time' ] = 0
 
 def GetExternalIP():
     
-    if HC.options[ 'external_host' ] is not None:
+    if 'external_host' in HC.options and HC.options[ 'external_host' ] is not None:
         
         return HC.options[ 'external_host' ]
         
     
     if HydrusData.TimeHasPassed( EXTERNAL_IP[ 'time' ] + ( 3600 * 24 ) ):
         
-        cmd = [ upnpc_path, '-l' ]
+        cmd = '"' + upnpc_path + '" -l'
         
-        p = subprocess.Popen( cmd, stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+        p = subprocess.Popen( shlex.split( cmd ), stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE, startupinfo = HydrusData.GetHideTerminalSubprocessStartupInfo() )
         
         HydrusData.WaitForProcessToFinish( p, 30 )
         
@@ -71,9 +78,9 @@ def GetLocalIP(): return socket.gethostbyname( socket.gethostname() )
 
 def AddUPnPMapping( internal_client, internal_port, external_port, protocol, description, duration = 3600 ):
     
-    cmd = [ upnpc_path, '-e', description, '-a', internal_client, str( internal_port ), str( external_port ), protocol, str( duration ) ]
+    cmd = '"' + upnpc_path + '" -e "' + description + '" -a ' + internal_client + ' ' + str( internal_port ) + ' ' + str( external_port ) + ' ' + protocol + ' ' + str( duration )
     
-    p = subprocess.Popen( cmd, stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+    p = subprocess.Popen( shlex.split( cmd ), stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE, startupinfo = HydrusData.GetHideTerminalSubprocessStartupInfo() )
     
     HydrusData.WaitForProcessToFinish( p, 30 )
     
@@ -105,9 +112,9 @@ def GetUPnPMappings():
     
     external_ip_address = GetExternalIP()
     
-    cmd = [ upnpc_path, '-l' ]
+    cmd = '"' + upnpc_path + '" -l'
     
-    p = subprocess.Popen( cmd, stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+    p = subprocess.Popen( shlex.split( cmd ), stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE, startupinfo = HydrusData.GetHideTerminalSubprocessStartupInfo() )
     
     HydrusData.WaitForProcessToFinish( p, 30 )
     
@@ -176,9 +183,9 @@ def GetUPnPMappings():
     
 def RemoveUPnPMapping( external_port, protocol ):
     
-    cmd = [ upnpc_path, '-d', str( external_port ), protocol ]
+    cmd = '"' + upnpc_path + '" -d ' + str( external_port ) + ' ' + protocol
     
-    p = subprocess.Popen( cmd, stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+    p = subprocess.Popen( shlex.split( cmd ), stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE, startupinfo = HydrusData.GetHideTerminalSubprocessStartupInfo() )
     
     HydrusData.WaitForProcessToFinish( p, 30 )
     

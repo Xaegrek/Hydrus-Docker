@@ -12,7 +12,6 @@ import threading
 import time
 import traceback
 import urllib
-from twisted.internet.threads import deferToThread
 import HydrusData
 import HydrusGlobals as HG
 
@@ -55,8 +54,8 @@ class HydrusSessionManagerServer( object ):
             
             self._service_keys_to_session_keys_to_sessions[ service_key ][ session_key ] = ( account_key, expires )
             
-        
-        return ( session_key, expires )
+            return ( session_key, expires )
+            
         
     
     def GetAccount( self, service_key, session_key ):

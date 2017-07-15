@@ -153,9 +153,9 @@ class TestSerialisables( unittest.TestCase ):
             self.assertEqual( obj.ToTuple(), dupe_obj.ToTuple() )
             
         
-        duplicate_action_options_delete_and_move = ClientData.DuplicateActionOptions( [ ( CC.LOCAL_TAG_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_MOVE ), ( TC.LOCAL_RATING_LIKE_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_MOVE ), ( TC.LOCAL_RATING_NUMERICAL_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_MOVE ) ], True )
-        duplicate_action_options_copy = ClientData.DuplicateActionOptions( [ ( CC.LOCAL_TAG_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_COPY ), ( TC.LOCAL_RATING_LIKE_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_COPY ), ( TC.LOCAL_RATING_NUMERICAL_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_COPY ) ], False )
-        duplicate_action_options_merge = ClientData.DuplicateActionOptions( [ ( CC.LOCAL_TAG_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE ), ( TC.LOCAL_RATING_LIKE_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE ), ( TC.LOCAL_RATING_NUMERICAL_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE ) ], False )
+        duplicate_action_options_delete_and_move = ClientData.DuplicateActionOptions( [ ( CC.LOCAL_TAG_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_MOVE, ClientData.TagCensor() ) ], [ ( TC.LOCAL_RATING_LIKE_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_MOVE ), ( TC.LOCAL_RATING_NUMERICAL_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_MOVE ) ], True )
+        duplicate_action_options_copy = ClientData.DuplicateActionOptions( [ ( CC.LOCAL_TAG_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_COPY, ClientData.TagCensor() ) ], [ ( TC.LOCAL_RATING_LIKE_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_COPY ), ( TC.LOCAL_RATING_NUMERICAL_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_COPY ) ], False )
+        duplicate_action_options_merge = ClientData.DuplicateActionOptions( [ ( CC.LOCAL_TAG_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE, ClientData.TagCensor() ) ], [ ( TC.LOCAL_RATING_LIKE_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE ), ( TC.LOCAL_RATING_NUMERICAL_SERVICE_KEY, HC.CONTENT_MERGE_ACTION_TWO_WAY_MERGE ) ], False )
         
         inbox = True
         size = 40960
@@ -166,9 +166,9 @@ class TestSerialisables( unittest.TestCase ):
         num_frames = None
         num_words = None
         
-        local_locations_manager = ClientMedia.LocationsManager( { CC.LOCAL_FILE_SERVICE_KEY, CC.COMBINED_LOCAL_FILE_SERVICE_KEY }, set(), set(), set() )
-        trash_locations_manager = ClientMedia.LocationsManager( { CC.TRASH_SERVICE_KEY, CC.COMBINED_LOCAL_FILE_SERVICE_KEY }, set(), set(), set() )
-        deleted_locations_manager = ClientMedia.LocationsManager( set(), { CC.COMBINED_LOCAL_FILE_SERVICE_KEY }, set(), set() )
+        local_locations_manager = ClientMedia.LocationsManager( { CC.LOCAL_FILE_SERVICE_KEY, CC.COMBINED_LOCAL_FILE_SERVICE_KEY }, set(), set(), set(), inbox )
+        trash_locations_manager = ClientMedia.LocationsManager( { CC.TRASH_SERVICE_KEY, CC.COMBINED_LOCAL_FILE_SERVICE_KEY }, set(), set(), set(), inbox )
+        deleted_locations_manager = ClientMedia.LocationsManager( set(), { CC.COMBINED_LOCAL_FILE_SERVICE_KEY }, set(), set(), inbox )
         
         # duplicate to generate proper dicts
         
@@ -182,45 +182,73 @@ class TestSerialisables( unittest.TestCase ):
         substantial_ratings_manager = ClientRatings.RatingsManager( { TC.LOCAL_RATING_LIKE_SERVICE_KEY : 1.0, TC.LOCAL_RATING_NUMERICAL_SERVICE_KEY : 0.8 } )
         empty_ratings_manager = ClientRatings.RatingsManager( {} )
         
+        #
+        
         local_hash_has_values = HydrusData.GenerateKey()
         
-        media_result = ClientMedia.MediaResult( ( local_hash_has_values, inbox, size, mime, width, height, duration, num_frames, num_words, substantial_tags_manager, local_locations_manager, substantial_ratings_manager ) )
+        file_info_manager = ClientMedia.FileInfoManager( local_hash_has_values, size, mime, width, height, duration, num_frames, num_words )
+        
+        media_result = ClientMedia.MediaResult( file_info_manager, substantial_tags_manager, local_locations_manager, substantial_ratings_manager )
         
         local_media_has_values = ClientMedia.MediaSingleton( media_result )
         
+        #
+        
         other_local_hash_has_values = HydrusData.GenerateKey()
         
-        media_result = ClientMedia.MediaResult( ( other_local_hash_has_values, inbox, size, mime, width, height, duration, num_frames, num_words, substantial_tags_manager, local_locations_manager, substantial_ratings_manager ) )
+        file_info_manager = ClientMedia.FileInfoManager( other_local_hash_has_values, size, mime, width, height, duration, num_frames, num_words )
+        
+        media_result = ClientMedia.MediaResult( file_info_manager, substantial_tags_manager, local_locations_manager, substantial_ratings_manager )
         
         other_local_media_has_values = ClientMedia.MediaSingleton( media_result )
         
+        #
+        
         local_hash_empty = HydrusData.GenerateKey()
         
-        media_result = ClientMedia.MediaResult( ( local_hash_empty, inbox, size, mime, width, height, duration, num_frames, num_words, empty_tags_manager, local_locations_manager, empty_ratings_manager ) )
+        file_info_manager = ClientMedia.FileInfoManager( local_hash_empty, size, mime, width, height, duration, num_frames, num_words )
+        
+        media_result = ClientMedia.MediaResult( file_info_manager, empty_tags_manager, local_locations_manager, empty_ratings_manager )
         
         local_media_empty = ClientMedia.MediaSingleton( media_result )
         
+        #
+        
         trashed_hash_empty = HydrusData.GenerateKey()
         
-        media_result = ClientMedia.MediaResult( ( trashed_hash_empty, inbox, size, mime, width, height, duration, num_frames, num_words, empty_tags_manager, trash_locations_manager, empty_ratings_manager ) )
+        file_info_manager = ClientMedia.FileInfoManager( trashed_hash_empty, size, mime, width, height, duration, num_frames, num_words )
+        
+        media_result = ClientMedia.MediaResult( file_info_manager, empty_tags_manager, trash_locations_manager, empty_ratings_manager )
         
         trashed_media_empty = ClientMedia.MediaSingleton( media_result )
         
+        #
+        
         deleted_hash_empty = HydrusData.GenerateKey()
         
-        media_result = ClientMedia.MediaResult( ( deleted_hash_empty, inbox, size, mime, width, height, duration, num_frames, num_words, empty_tags_manager, deleted_locations_manager, empty_ratings_manager ) )
+        file_info_manager = ClientMedia.FileInfoManager( deleted_hash_empty, size, mime, width, height, duration, num_frames, num_words )
+        
+        media_result = ClientMedia.MediaResult( file_info_manager, empty_tags_manager, deleted_locations_manager, empty_ratings_manager )
         
         deleted_media_empty = ClientMedia.MediaSingleton( media_result )
         
+        #
+        
         one_hash = HydrusData.GenerateKey()
         
-        media_result = ClientMedia.MediaResult( ( one_hash, inbox, size, mime, width, height, duration, num_frames, num_words, one_tags_manager, local_locations_manager, one_ratings_manager ) )
+        file_info_manager = ClientMedia.FileInfoManager( one_hash, size, mime, width, height, duration, num_frames, num_words )
+        
+        media_result = ClientMedia.MediaResult( file_info_manager, one_tags_manager, local_locations_manager, one_ratings_manager )
         
         one_media = ClientMedia.MediaSingleton( media_result )
         
+        #
+        
         two_hash = HydrusData.GenerateKey()
         
-        media_result = ClientMedia.MediaResult( ( two_hash, inbox, size, mime, width, height, duration, num_frames, num_words, two_tags_manager, local_locations_manager, two_ratings_manager ) )
+        file_info_manager = ClientMedia.FileInfoManager( two_hash, size, mime, width, height, duration, num_frames, num_words )
+        
+        media_result = ClientMedia.MediaResult( file_info_manager, two_tags_manager, local_locations_manager, two_ratings_manager )
         
         two_media = ClientMedia.MediaSingleton( media_result )
         
@@ -480,7 +508,7 @@ class TestSerialisables( unittest.TestCase ):
         check_now = False
         seed_cache = ClientImporting.SeedCache()
         
-        seed_cache.AddSeed( 'http://exampleurl.com/image/123456' )
+        seed_cache.AddSeeds( [ 'http://exampleurl.com/image/123456' ] )
         
         sub.SetTuple( gallery_identifier, gallery_stream_identifiers, query, period, get_tags_if_url_known_and_file_redundant, initial_file_limit, periodic_file_limit, paused, import_file_options, import_tag_options, last_checked, last_error, check_now, seed_cache )
         
@@ -496,5 +524,150 @@ class TestSerialisables( unittest.TestCase ):
         self.assertEqual( sub._paused, False )
         
         self._dump_and_load_and_test( sub, test )
+        
+    
+    def test_SERIALISABLE_TYPE_TAG_CENSOR( self ):
+        
+        def test( obj, dupe_obj ):
+            
+            self.assertEqual( obj._tag_slices_to_rules, dupe_obj._tag_slices_to_rules )
+            
+        
+        tags = set()
+        
+        tags.add( 'title:test title' )
+        tags.add( 'series:neon genesis evangelion' )
+        tags.add( 'series:kill la kill' )
+        tags.add( 'smile' )
+        tags.add( 'blue eyes' )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'smile', 'blue eyes', 'title:test title', 'series:neon genesis evangelion', 'series:kill la kill' } )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( '', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( ':', CC.CENSOR_BLACKLIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), set() )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( '', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( ':', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( 'series:', CC.CENSOR_WHITELIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'series:neon genesis evangelion', 'series:kill la kill' } )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( '', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( ':', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( 'series:kill la kill', CC.CENSOR_WHITELIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'series:kill la kill' } )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( '', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( ':', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( 'smile', CC.CENSOR_WHITELIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'smile' } )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( ':', CC.CENSOR_BLACKLIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'smile', 'blue eyes' } )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( ':', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( 'series:', CC.CENSOR_WHITELIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'smile', 'blue eyes', 'series:neon genesis evangelion', 'series:kill la kill' } )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( ':', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( 'series:kill la kill', CC.CENSOR_WHITELIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'smile', 'blue eyes', 'series:kill la kill' } )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( 'series:', CC.CENSOR_BLACKLIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'smile', 'blue eyes', 'title:test title' } )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( 'series:', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( 'series:neon genesis evangelion', CC.CENSOR_WHITELIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'smile', 'blue eyes', 'title:test title', 'series:neon genesis evangelion' } )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( '', CC.CENSOR_BLACKLIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'title:test title', 'series:neon genesis evangelion', 'series:kill la kill' } )
+        
+        #
+        
+        tag_censor = ClientData.TagCensor()
+        
+        tag_censor.SetRule( '', CC.CENSOR_BLACKLIST )
+        tag_censor.SetRule( 'blue eyes', CC.CENSOR_WHITELIST )
+        
+        self._dump_and_load_and_test( tag_censor, test )
+        
+        self.assertEqual( tag_censor.Censor( tags ), { 'title:test title', 'series:neon genesis evangelion', 'series:kill la kill', 'blue eyes' } )
         
     

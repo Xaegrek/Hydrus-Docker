@@ -103,24 +103,22 @@ class HydrusPubSub( object ):
         
         # do this _outside_ the lock, lol
         
-        for callable in callables:
+        pubsub_profilable = topic != 'message'
+        
+        if HG.pubsub_profile_mode and pubsub_profilable:
             
-            if HG.pubsub_profile_mode:
-                
-                summary = 'Profiling ' + topic + ': ' + repr( callable )
-                
-                if topic == 'message':
-                    
-                    HydrusData.Print( summary )
-                    
-                else:
-                    
-                    HydrusData.ShowText( summary )
-                    
+            summary = 'Profiling ' + HydrusData.ConvertIntToPrettyString( len( callables ) ) + ' x ' + topic
+            
+            HydrusData.ShowText( summary )
+            
+            for callable in callables:
                 
                 HydrusData.Profile( summary, 'callable( *args, **kwargs )', globals(), locals() )
                 
-            else:
+            
+        else:
+            
+            for callable in callables:
                 
                 try:
                     
@@ -151,7 +149,10 @@ class HydrusPubSub( object ):
             callables = self._GetCallables( topic )
             
         
-        for callable in callables: callable( *args, **kwargs )
+        for callable in callables:
+            
+            callable( *args, **kwargs )
+            
         
     
     def sub( self, object, method_name, topic ):

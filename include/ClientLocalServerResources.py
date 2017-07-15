@@ -12,23 +12,21 @@ local_booru_css = FileResource( os.path.join( HC.STATIC_DIR, 'local_booru_style.
 
 class HydrusResourceBooru( HydrusServerResources.HydrusResource ):
     
-    def _recordDataUsage( self, request ):
+    def _reportDataUsed( self, request, num_bytes ):
         
-        path = request.path[1:] # /account -> account
+        self._service.ReportDataUsed( num_bytes )
         
-        if request.method == 'GET': method = HC.GET
-        else: method = HC.POST
+    
+    def _reportRequestUsed( self, request ):
         
-        num_bytes = request.hydrus_request_data_usage
-        
-        self._service.RequestMade( num_bytes )
+        self._service.ReportRequestUsed()
         
     
     def _checkService( self, request ):
         
         HydrusServerResources.HydrusResource._checkService( self, request )
         
-        if not self._service.BandwidthOk():
+        if not self._service.BandwidthOK():
             
             raise HydrusExceptions.BandwidthException( 'This service has run out of bandwidth. Please try again later.' )
             
@@ -45,7 +43,7 @@ class HydrusResourceBooruFile( HydrusResourceBooru ):
         
         local_booru_manager.CheckFileAuthorised( share_key, hash )
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
+        client_files_manager = HG.client_controller.client_files_manager
         
         path = client_files_manager.GetFilePath( hash )
         
@@ -246,7 +244,7 @@ class HydrusResourceBooruThumbnail( HydrusResourceBooru ):
         
         if mime in HC.MIMES_WITH_THUMBNAILS:
             
-            client_files_manager = HG.client_controller.GetClientFilesManager()
+            client_files_manager = HG.client_controller.client_files_manager
             
             path = client_files_manager.GetFullSizeThumbnailPath( hash )
             
@@ -267,7 +265,7 @@ class HydrusResourceLocalFile( HydrusServerResources.HydrusResource ):
         
         hash = request.hydrus_args[ 'hash' ]
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
+        client_files_manager = HG.client_controller.client_files_manager
         
         path = client_files_manager.GetFilePath( hash )
         
@@ -282,7 +280,7 @@ class HydrusResourceLocalThumbnail( HydrusServerResources.HydrusResource ):
         
         hash = request.hydrus_args[ 'hash' ]
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
+        client_files_manager = HG.client_controller.client_files_manager
         
         path = client_files_manager.GetFullSizeThumbnailPath( hash )
         

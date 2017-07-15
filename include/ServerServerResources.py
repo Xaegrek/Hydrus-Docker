@@ -111,12 +111,12 @@ class HydrusResourceRestricted( HydrusServerResources.HydrusResource ):
     
     def _checkBandwidth( self, request ):
         
-        if not self._service.BandwidthOk():
+        if not self._service.BandwidthOK():
             
             raise HydrusExceptions.BandwidthException( 'This service has run out of bandwidth. Please try again later.' )
             
         
-        if not HG.server_controller.ServerBandwidthOk():
+        if not HG.server_controller.ServerBandwidthOK():
             
             raise HydrusExceptions.BandwidthException( 'This server has run out of bandwidth. Please try again later.' )
             
@@ -160,17 +160,27 @@ class HydrusResourceRestricted( HydrusServerResources.HydrusResource ):
         return request
         
     
-    def _recordDataUsage( self, request ):
+    def _reportDataUsed( self, request, num_bytes ):
         
-        HydrusServerResources.HydrusResource._recordDataUsage( self, request )
-        
-        num_bytes = request.hydrus_request_data_usage
+        HydrusServerResources.HydrusResource._reportDataUsed( self, request, num_bytes )
         
         account = request.hydrus_account
         
         if account is not None:
             
-            account.RequestMade( num_bytes )
+            account.ReportDataUsed( num_bytes )
+            
+        
+    
+    def _reportRequestUsed( self, request ):
+        
+        HydrusServerResources.HydrusResource._reportRequestUsed( self, request )
+        
+        account = request.hydrus_account
+        
+        if account is not None:
+            
+            account.ReportRequestUsed()
             
         
     
@@ -219,11 +229,13 @@ class HydrusResourceRestrictedAccountModification( HydrusResourceRestricted ):
         
         kwargs = request.hydrus_args # for things like expires, title, and so on
         
+        server_session_manager = HG.server_controller.GetServerSessionManager()
+        
         with HG.dirty_object_lock:
             
             HG.server_controller.WriteSynchronous( 'account_modification', self._service_key, request.hydrus_account, action, subject_accounts, **kwargs )
             
-            HG.server_controller.UpdateAccounts( self._service_key, subject_accounts )
+            server_session_manager.UpdateAccounts( self._service_key, subject_accounts )
             
         
         response_context = HydrusServerResources.ResponseContext( 200 )

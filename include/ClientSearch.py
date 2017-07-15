@@ -296,7 +296,7 @@ class FileSearchContext( HydrusSerialisable.SerialisableBase ):
         self._file_service_key = file_service_key.decode( 'hex' )
         self._tag_service_key = tag_service_key.decode( 'hex' )
         
-        services_manager = HG.client_controller.GetServicesManager()
+        services_manager = HG.client_controller.services_manager
         
         if not services_manager.ServiceExists( self._file_service_key ):
             
@@ -424,6 +424,8 @@ class FileSystemPredicates( object ):
         
         self._ratings_predicates = []
         
+        self._duplicate_predicates = []
+        
         new_options = HG.client_controller.GetNewOptions()
         
         forced_search_limit = new_options.GetNoneableInteger( 'forced_search_limit' )
@@ -548,6 +550,19 @@ class FileSystemPredicates( object ):
                 elif operator == '>': self._common_info[ 'min_num_tags' ] = num_tags
                 
             
+            if predicate_type == HC.PREDICATE_TYPE_SYSTEM_TAG_AS_NUMBER:
+                
+                ( namespace, operator, num ) = value
+                
+                if operator == '<': self._common_info[ 'max_tag_as_number' ] = ( namespace, num )
+                elif operator == '>': self._common_info[ 'min_tag_as_number' ] = ( namespace, num )
+                elif operator == u'\u2248':
+                    
+                    self._common_info[ 'min_tag_as_number' ] = ( namespace, int( num * 0.85 ) )
+                    self._common_info[ 'max_tag_as_number' ] = ( namespace, int( num * 1.15 ) )
+                    
+                
+            
             if predicate_type == HC.PREDICATE_TYPE_SYSTEM_WIDTH:
                 
                 ( operator, width ) = value
@@ -655,6 +670,18 @@ class FileSystemPredicates( object ):
                 self._similar_to = ( hash, max_hamming )
                 
             
+            if predicate_type == HC.PREDICATE_TYPE_SYSTEM_DUPLICATE_RELATIONSHIPS:
+                
+                ( operator, num_relationships, dupe_type ) = value
+                
+                self._duplicate_predicates.append( ( operator, num_relationships, dupe_type ) )
+                
+            
+        
+    
+    def GetDuplicateRelationshipsPredicates( self ):
+        
+        return self._duplicate_predicates
         
     
     def GetFileServiceInfo( self ): return ( self._file_services_to_include_current, self._file_services_to_include_pending, self._file_services_to_exclude_current, self._file_services_to_exclude_pending )
@@ -1074,7 +1101,7 @@ class Predicate( HydrusSerialisable.SerialisableBase ):
                     
                     ( operator, value, service_key ) = self._value
                     
-                    service = HG.client_controller.GetServicesManager().GetService( service_key )
+                    service = HG.client_controller.services_manager.GetService( service_key )
                     
                     service_type = service.GetServiceType()
                     
@@ -1149,9 +1176,72 @@ class Predicate( HydrusSerialisable.SerialisableBase ):
                     if current_or_pending == HC.CONTENT_STATUS_PENDING: base += u' pending to '
                     else: base += u' currently in '
                     
-                    service = HG.client_controller.GetServicesManager().GetService( service_key )
+                    service = HG.client_controller.services_manager.GetService( service_key )
                     
                     base += service.GetName()
+                    
+                
+            elif self._predicate_type == HC.PREDICATE_TYPE_SYSTEM_TAG_AS_NUMBER:
+                
+                if self._value is None:
+                    
+                    base = 'tag as number'
+                    
+                else:
+                    
+                    ( namespace, operator, num ) = self._value
+                    
+                    if namespace == '':
+                        
+                        n_text = 'tag'
+                        
+                    else:
+                        
+                        n_text = namespace
+                        
+                    
+                    if operator == u'\u2248':
+                        
+                        o_text = ' about '
+                        
+                    elif operator == '<':
+                        
+                        o_text = ' less than '
+                        
+                    elif operator == '>':
+                        
+                        o_text = ' more than '
+                        
+                    
+                    base = n_text + o_text + HydrusData.ConvertIntToPrettyString( num )
+                    
+                
+            elif self._predicate_type == HC.PREDICATE_TYPE_SYSTEM_DUPLICATE_RELATIONSHIPS:
+                
+                base = 'num duplicate relationships'
+                
+                if self._value is not None:
+                    
+                    ( operator, num_relationships, dupe_type ) = self._value
+                    
+                    if operator == u'\u2248':
+                        
+                        o_text = ' about '
+                        
+                    elif operator == '<':
+                        
+                        o_text = ' less than '
+                        
+                    elif operator == '>':
+                        
+                        o_text = ' more than '
+                        
+                    elif operator == '=':
+                        
+                        o_text = ' '
+                        
+                    
+                    base += u' - has' + o_text + HydrusData.ConvertIntToPrettyString( num_relationships ) + u' ' + HC.duplicate_type_string_lookup[ dupe_type ]
                     
                 
             

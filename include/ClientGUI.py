@@ -18,6 +18,7 @@ import ClientGUIShortcuts
 import ClientGUITopLevelWindows
 import ClientDownloading
 import ClientMedia
+import ClientNetworking
 import ClientSearch
 import ClientServices
 import ClientThreading
@@ -36,6 +37,7 @@ import HydrusTagArchive
 import HydrusVideoHandling
 import os
 import PIL
+import shlex
 import sqlite3
 import ssl
 import subprocess
@@ -46,6 +48,8 @@ import traceback
 import types
 import webbrowser
 import wx
+
+ID_TIMER_GUI_BANDWIDTH = wx.NewId()
 
 # Sizer Flags
 
@@ -66,18 +70,25 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         ClientGUITopLevelWindows.FrameThatResizes.__init__( self, None, title, 'main_gui', float_on_parent = False )
         
-        self.SetDropTarget( ClientDragDrop.FileDropTarget( self.ImportFiles ) )
+        self.SetDropTarget( ClientDragDrop.FileDropTarget( self.ImportFiles, self.ImportURL ) )
+        
+        bandwidth_width = ClientData.ConvertTextToPixelWidth( self, 7 )
+        idle_width = ClientData.ConvertTextToPixelWidth( self, 4 )
+        system_busy_width = ClientData.ConvertTextToPixelWidth( self, 11 )
+        db_width = ClientData.ConvertTextToPixelWidth( self, 12 )
         
         self._statusbar = self.CreateStatusBar()
-        self._statusbar.SetFieldsCount( 4 )
-        self._statusbar.SetStatusWidths( [ -1, 25, 90, 50 ] )
+        self._statusbar.SetFieldsCount( 5 )
+        self._statusbar.SetStatusWidths( [ -1, bandwidth_width, idle_width, system_busy_width, db_width ] )
+        
+        self._statusbar_thread_updater = ClientGUICommon.ThreadToGUIUpdater( self._statusbar, self.RefreshStatusBar )
         
         self._focus_holder = wx.Window( self, size = ( 0, 0 ) )
         
-        self._loading_session = False
         self._media_status_override = None
         self._closed_pages = []
         self._deleted_page_keys = set()
+        self._next_new_page_index = None
         self._lock = threading.Lock()
         
         self._notebook = wx.Notebook( self )
@@ -92,9 +103,11 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         self.Bind( wx.EVT_LEFT_DCLICK, self.EventFrameNewPage )
         self.Bind( wx.EVT_MIDDLE_DOWN, self.EventFrameNewPage )
+        self.Bind( wx.EVT_RIGHT_DOWN, self.EventFrameNotebookMenu )
         self.Bind( wx.EVT_CLOSE, self.EventClose )
         self.Bind( wx.EVT_SET_FOCUS, self.EventFocus )
         self.Bind( wx.EVT_CHAR_HOOK, self.EventCharHook )
+        self.Bind( wx.EVT_TIMER, self.TIMEREventBandwidth, id = ID_TIMER_GUI_BANDWIDTH )
         
         self._controller.sub( self, 'ClearClosedPages', 'clear_closed_pages' )
         self._controller.sub( self, 'NewCompose', 'new_compose_frame' )
@@ -114,7 +127,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         self._controller.sub( self, 'NotifyNewServices', 'notify_new_services_gui' )
         self._controller.sub( self, 'NotifyNewSessions', 'notify_new_sessions' )
         self._controller.sub( self, 'NotifyNewUndo', 'notify_new_undo' )
-        self._controller.sub( self, 'RefreshStatusBar', 'refresh_status' )
+        self._controller.sub( self._statusbar_thread_updater, 'Update', 'refresh_status' )
         self._controller.sub( self, 'SetDBLockedStatus', 'db_locked_status' )
         self._controller.sub( self, 'SetMediaFocus', 'set_media_focus' )
         self._controller.sub( self, 'SetTitle', 'main_gui_title' )
@@ -136,44 +149,11 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         self._RefreshStatusBar()
         
-        default_gui_session = HC.options[ 'default_gui_session' ]
+        wx.CallAfter( self._InitialiseSession ) # do this in callafter as some pages want to talk to controller.gui, which doesn't exist yet!
         
-        existing_session_names = self._controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_GUI_SESSION )
+        self._move_hide_timer = wx.Timer( self, id = ID_TIMER_GUI_BANDWIDTH )
         
-        cannot_load_from_db = default_gui_session not in existing_session_names
-        
-        load_a_blank_page = HC.options[ 'default_gui_session' ] == 'just a blank page' or cannot_load_from_db
-        
-        if not load_a_blank_page:
-            
-            if self._controller.LastShutdownWasBad():
-                
-                # this can be upgraded to a nicer checkboxlist dialog to select pages or w/e
-                
-                message = 'It looks like the last instance of the client did not shut down cleanly.'
-                message += os.linesep * 2
-                message += 'Would you like to try loading your default session \'' + default_gui_session + '\', or just a blank page?'
-                
-                with ClientGUIDialogs.DialogYesNo( self, message, title = 'Previous shutdown was bad', yes_label = 'try to load the default session', no_label = 'just load a blank page' ) as dlg:
-                    
-                    if dlg.ShowModal() == wx.ID_NO:
-                        
-                        load_a_blank_page = True
-                        
-                    
-                
-            
-        
-        if load_a_blank_page:
-            
-            self._NewPageQuery( CC.LOCAL_FILE_SERVICE_KEY )
-            
-        else:
-            
-            self._LoadGUISession( default_gui_session )
-            
-        
-        wx.CallLater( 5 * 60 * 1000, self.SaveLastSession )
+        self._move_hide_timer.Start( 1000, wx.TIMER_CONTINUOUS )
         
     
     def _AboutWindow( self ):
@@ -233,7 +213,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 
                 subject_account_key = dlg.GetValue().decode( 'hex' )
                 
-                service = self._controller.GetServicesManager().GetService( service_key )
+                service = self._controller.services_manager.GetService( service_key )
                 
                 response = service.Request( HC.GET, 'account_info', { 'subject_account_key' : subject_account_key } )
                 
@@ -266,6 +246,48 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 
                 self._controller.Write( 'analyze', force_reanalyze = True )
                 
+            
+        
+    
+    def _AppendGUISession( self, name ):
+        
+        try:
+            
+            session = self._controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_GUI_SESSION, name )
+            
+        except Exception as e:
+            
+            HydrusData.ShowText( 'While trying to load session ' + name + ', this error happened:' )
+            HydrusData.ShowException( e )
+            
+            self._NewPageQuery( CC.LOCAL_FILE_SERVICE_KEY )
+            
+            return
+            
+        
+        starting_index = self._GetDefaultPageInsertionIndex()
+        
+        try:
+            
+            forced_insertion_index = starting_index
+            
+            for ( page_name, management_controller, initial_hashes ) in session.IteratePages():
+                
+                try:
+                    
+                    self._NewPage( page_name, management_controller, initial_hashes = initial_hashes, forced_insertion_index = forced_insertion_index )
+                    
+                    forced_insertion_index += 1
+                    
+                except Exception as e:
+                    
+                    HydrusData.ShowException( e )
+                    
+                
+            
+        finally:
+            
+            self._media_status_override = None
             
         
     
@@ -303,7 +325,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             file_repo.SetCredentials( credentials )
             
-            all_services = self._controller.GetServicesManager().GetServices()
+            all_services = self._controller.services_manager.GetServices()
             
             all_services.append( tag_repo )
             all_services.append( file_repo )
@@ -355,7 +377,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                     
                     HydrusData.ShowText( u'Starting server\u2026' )
                     
-                    db_dir = '-d=' + self._controller.GetDBDir()
+                    db_param = '-d="' + self._controller.GetDBDir() + '"'
                     
                     if HC.PLATFORM_WINDOWS:
                         
@@ -367,8 +389,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                         
                     
                     if os.path.exists( server_frozen_path ):
-                    
-                        subprocess.Popen( [ server_frozen_path, db_dir ] )
+                        
+                        cmd = '"' + server_frozen_path + '" ' + db_param
                         
                     else:
                         
@@ -384,8 +406,12 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                             python_executable = python_executable.replace( 'pythonw', 'python' )
                             
                         
-                        subprocess.Popen( [ python_executable, os.path.join( HC.BASE_DIR, 'server.py' ), db_dir ] )
+                        server_script_path = os.path.join( HC.BASE_DIR, 'server.py' )
                         
+                        cmd = '"' + python_executable + '" "' + server_script_path + '" ' + db_param
+                        
+                    
+                    subprocess.Popen( shlex.split( cmd ) )
                     
                     time_waited = 0
                     
@@ -444,13 +470,13 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             #
             
-            all_services = list( self._controller.GetServicesManager().GetServices() )
+            all_services = list( self._controller.services_manager.GetServices() )
             
             all_services.append( admin_service )
             
             self._controller.SetServices( all_services )
             
-            admin_service = self._controller.GetServicesManager().GetService( admin_service_key ) # let's refresh it
+            admin_service = self._controller.services_manager.GetService( admin_service_key ) # let's refresh it
             
             HydrusData.ShowText( 'Admin service initialised.' )
             
@@ -511,7 +537,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             started = HydrusData.GetNow()
             
-            service = self._controller.GetServicesManager().GetService( service_key )
+            service = self._controller.services_manager.GetService( service_key )
             
             service.Request( HC.POST, 'backup' )
             
@@ -564,7 +590,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
     
     def _CheckFileIntegrity( self ):
         
-        client_files_manager = self._controller.GetClientFilesManager()
+        client_files_manager = self._controller.client_files_manager
         
         message = 'This will go through all the files the database thinks it has and check that they actually exist. Any files that are missing will be deleted from the internal record.'
         message += os.linesep * 2
@@ -609,7 +635,9 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
         
     
-    def _ChooseNewPage( self ):
+    def _ChooseNewPage( self, insertion_index = None ):
+        
+        self._next_new_page_index = insertion_index
         
         with ClientGUIDialogs.DialogPageChooser( self ) as dlg:
             
@@ -629,7 +657,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 
                 text = 'What would you like to do with the orphaned files? Note that all orphaned thumbnails will be deleted.'
                 
-                client_files_manager = self._controller.GetClientFilesManager()
+                client_files_manager = self._controller.client_files_manager
                 
                 with ClientGUIDialogs.DialogYesNo( self, text, title = 'Choose what do to with the orphans.', yes_label = 'move them somewhere', no_label = 'delete them' ) as dlg_2:
                     
@@ -676,11 +704,16 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             return
             
         
+        name = self._notebook.GetPageText( selection )
+        
         page = self._notebook.GetPage( selection )
         
         if polite:
             
-            try: page.TestAbleToClose()
+            try:
+                
+                page.TestAbleToClose()
+                
             except HydrusExceptions.PermissionException:
                 
                 return
@@ -689,10 +722,6 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         page.PrepareToHide()
         
-        page.Hide()
-        
-        name = self._notebook.GetPageText( selection )
-        
         with self._lock:
             
             self._closed_pages.append( ( HydrusData.GetNow(), selection, name, page ) )
@@ -700,7 +729,10 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         self._notebook.RemovePage( selection )
         
-        if self._notebook.GetPageCount() == 0: self._focus_holder.SetFocus()
+        if self._notebook.GetPageCount() == 0:
+            
+            self._focus_holder.SetFocus()
+            
         
         self._controller.pub( 'notify_new_undo' )
         
@@ -826,7 +858,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
     
     def _DeletePending( self, service_key ):
         
-        service = self._controller.GetServicesManager().GetService( service_key )
+        service = self._controller.services_manager.GetService( service_key )
         
         with ClientGUIDialogs.DialogYesNo( self, 'Are you sure you want to delete the pending data for ' + service.GetName() + '?' ) as dlg:
             
@@ -870,7 +902,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 
                 hash = dlg.GetValue().decode( 'hex' )
                 
-                service = self._controller.GetServicesManager().GetService( service_key )
+                service = self._controller.services_manager.GetService( service_key )
                 
                 with wx.BusyCursor(): response = service.Request( HC.GET, 'ip', { 'hash' : hash } )
                 
@@ -1017,6 +1049,15 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
                 
                 ClientGUIMenus.AppendMenu( sessions, load, 'load' )
                 
+                append = wx.Menu()
+                
+                for name in gui_session_names:
+                    
+                    ClientGUIMenus.AppendMenuItem( self, append, name, 'Append this session to whatever pages are already open.', self._AppendGUISession, name )
+                    
+                
+                ClientGUIMenus.AppendMenu( sessions, append, 'append' )
+                
             
             ClientGUIMenus.AppendMenuItem( self, sessions, 'save current', 'Save the existing open pages as a session.', self._SaveGUISession )
             
@@ -1045,7 +1086,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             search_menu = wx.Menu()
             
-            services = self._controller.GetServicesManager().GetServices()
+            services = self._controller.services_manager.GetServices()
             
             petition_permissions = [ ( content_type, HC.PERMISSION_ACTION_OVERRULE ) for content_type in HC.REPOSITORY_CONTENT_TYPES ]
             
@@ -1152,8 +1193,25 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             ClientGUIMenus.AppendSeparator( menu )
             
-            ClientGUIMenus.AppendMenuItem( self, menu, 'create a database backup', 'Back the database up to an external location.', self._controller.BackupDatabase )
-            ClientGUIMenus.AppendMenuItem( self, menu, 'restore a database backup', 'Restore the database from an external location.', self._controller.RestoreDatabase )
+            backup_path = self._new_options.GetNoneableString( 'backup_path' )
+            
+            if backup_path is None:
+                
+                ClientGUIMenus.AppendMenuItem( self, menu, 'set up a database backup location', 'Choose a path to back the database up to.', self._SetupBackupPath )
+                
+            else:
+                
+                ClientGUIMenus.AppendMenuItem( self, menu, 'update database backup', 'Back the database up to an external location.', self._controller.BackupDatabase )
+                ClientGUIMenus.AppendMenuItem( self, menu, 'change database backup location', 'Choose a path to back the database up to.', self._SetupBackupPath )
+                
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
+            ClientGUIMenus.AppendMenuItem( self, menu, 'restore from a database backup', 'Restore the database from an external location.', self._controller.RestoreDatabase )
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
+            ClientGUIMenus.AppendMenuItem( self, menu, 'migrate database (under construction!)', 'Review and manage the locations your database is stored.', self._MigrateDatabase )
             
             ClientGUIMenus.AppendSeparator( menu )
             
@@ -1192,7 +1250,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             for ( service_key, info ) in nums_pending.items():
                 
-                service = self._controller.GetServicesManager().GetService( service_key )
+                service = self._controller.services_manager.GetService( service_key )
                 
                 service_type = service.GetServiceType()
                 name = service.GetName()
@@ -1258,8 +1316,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         def services():
             
-            tag_services = self._controller.GetServicesManager().GetServices( ( HC.TAG_REPOSITORY, ) )
-            file_services = self._controller.GetServicesManager().GetServices( ( HC.FILE_REPOSITORY, ) )
+            tag_services = self._controller.services_manager.GetServices( ( HC.TAG_REPOSITORY, ) )
+            file_services = self._controller.services_manager.GetServices( ( HC.FILE_REPOSITORY, ) )
             
             submenu = wx.Menu()
             
@@ -1277,10 +1335,10 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             repository_admin_permissions = [ ( HC.CONTENT_TYPE_ACCOUNTS, HC.PERMISSION_ACTION_CREATE ), ( HC.CONTENT_TYPE_ACCOUNTS, HC.PERMISSION_ACTION_OVERRULE ), ( HC.CONTENT_TYPE_ACCOUNT_TYPES, HC.PERMISSION_ACTION_OVERRULE ) ]
             
-            repositories = self._controller.GetServicesManager().GetServices( HC.REPOSITORIES )
+            repositories = self._controller.services_manager.GetServices( HC.REPOSITORIES )
             admin_repositories = [ service for service in repositories if True in ( service.HasPermission( content_type, action ) for ( content_type, action ) in repository_admin_permissions ) ]
             
-            servers_admin = self._controller.GetServicesManager().GetServices( ( HC.SERVER_ADMIN, ) )
+            servers_admin = self._controller.services_manager.GetServices( ( HC.SERVER_ADMIN, ) )
             server_admins = [ service for service in servers_admin if service.HasPermission( HC.CONTENT_TYPE_SERVICES, HC.PERMISSION_ACTION_OVERRULE ) ]
             
             if len( admin_repositories ) > 0 or len( server_admins ) > 0:
@@ -1369,6 +1427,10 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             ClientGUIMenus.AppendSeparator( menu )
             
+            ClientGUIMenus.AppendMenuItem( self, menu, 'review bandwidth usage (under construction!)', 'See where you are consuming data.', self._ReviewBandwidth )
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
             ClientGUIMenus.AppendMenuItem( self, menu, 'import repository update files', 'Add repository update files to the database.', self._ImportUpdateFiles )
             
             ClientGUIMenus.AppendSeparator( menu )
@@ -1398,12 +1460,6 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             ClientGUIMenus.AppendMenuItem( self, menu, 'help', 'Open hydrus\'s local help in your web browser.', webbrowser.open, 'file://' + HC.HELP_DIR + '/index.html' )
             
-            dont_know = wx.Menu()
-            
-            ClientGUIMenus.AppendMenuItem( self, dont_know, 'just set up some repositories for me, please', 'This will add the hydrus dev\'s two repositories to your client.', self._AutoRepoSetup )
-            
-            ClientGUIMenus.AppendMenu( menu, dont_know, 'I don\'t know what I am doing' )
-            
             links = wx.Menu()
             
             site = ClientGUIMenus.AppendMenuBitmapItem( self, links, 'site', 'Open hydrus\'s website, which is mostly a mirror of the local help.', CC.GlobalBMPs.file_repository, webbrowser.open, 'https://hydrusnetwork.github.io/hydrus/' )
@@ -1415,10 +1471,32 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             ClientGUIMenus.AppendMenu( menu, links, 'links' )
             
+            ClientGUIMenus.AppendMenuItem( self, menu, 'changelog', 'Open hydrus\'s local changelog in your web browser.', webbrowser.open, 'file://' + HC.HELP_DIR + '/changelog.html' )
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
+            dont_know = wx.Menu()
+            
+            ClientGUIMenus.AppendMenuItem( self, dont_know, 'just set up some repositories for me, please', 'This will add the hydrus dev\'s two repositories to your client.', self._AutoRepoSetup )
+            
+            ClientGUIMenus.AppendMenu( menu, dont_know, 'I don\'t know what I am doing' )
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
+            check_manager = ClientGUICommon.CheckboxManagerOptions( 'advanced_mode' )
+            
+            current_value = check_manager.GetCurrentValue()
+            func = check_manager.Invert
+            
+            ClientGUIMenus.AppendMenuCheckItem( self, menu, 'advanced mode', 'Turn on advanced menu options and buttons.', current_value, func )
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
             debug = wx.Menu()
             
             ClientGUIMenus.AppendMenuItem( self, debug, 'make some popups', 'Throw some varied popups at the message manager, just to check it is working.', self._DebugMakeSomePopups )
             ClientGUIMenus.AppendMenuItem( self, debug, 'make a popup in five seconds', 'Throw a delayed popup at the message manager, giving you time to minimise or otherwise alter the client before it arrives.', wx.CallLater, 5000, HydrusData.ShowText, 'This is a delayed popup message.' )
+            ClientGUIMenus.AppendMenuCheckItem( self, debug, 'callto report mode', 'Report whenever the thread pool is given a task.', HG.callto_report_mode, self._SwitchBoolean, 'callto_report_mode' )
             ClientGUIMenus.AppendMenuCheckItem( self, debug, 'db report mode', 'Have the db report query information, where supported.', HG.db_report_mode, self._SwitchBoolean, 'db_report_mode' )
             ClientGUIMenus.AppendMenuCheckItem( self, debug, 'db profile mode', 'Run detailed \'profiles\' on every database query and dump this information to the log (this is very useful for hydrus dev to have, if something is running slow for you!).', HG.db_profile_mode, self._SwitchBoolean, 'db_profile_mode' )
             ClientGUIMenus.AppendMenuCheckItem( self, debug, 'gui report mode', 'Have the gui report inside information, where supported.', HG.gui_report_mode, self._SwitchBoolean, 'gui_report_mode' )
@@ -1432,6 +1510,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             ClientGUIMenus.AppendMenuItem( self, debug, 'run and initialise server for testing', 'This will try to boot the server in your install folder and initialise it. This is mostly here for testing purposes.', self._AutoServerSetup )
             
             ClientGUIMenus.AppendMenu( menu, debug, 'debug' )
+            
+            ClientGUIMenus.AppendSeparator( menu )
             
             ClientGUIMenus.AppendMenuItem( self, menu, 'hardcoded shortcuts', 'Review some currently hardcoded shortcuts.', wx.MessageBox, CC.SHORTCUT_HELP )
             ClientGUIMenus.AppendMenuItem( self, menu, 'about', 'See this client\'s version and other information.', self._AboutWindow )
@@ -1451,6 +1531,37 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
     def _GenerateNewAccounts( self, service_key ):
         
         with ClientGUIDialogs.DialogGenerateNewAccounts( self, service_key ) as dlg: dlg.ShowModal()
+        
+    
+    def _GetDefaultPageInsertionIndex( self ):
+        
+        new_page_goes = self._new_options.GetInteger( 'default_new_page_goes' )
+        
+        current_index = self._notebook.GetSelection()
+        
+        if current_index == wx.NOT_FOUND:
+            
+            new_page_goes = CC.NEW_PAGE_GOES_FAR_LEFT
+            
+        
+        if new_page_goes == CC.NEW_PAGE_GOES_FAR_LEFT:
+            
+            insertion_index = 0
+            
+        elif new_page_goes == CC.NEW_PAGE_GOES_LEFT_OF_CURRENT:
+            
+            insertion_index = current_index
+            
+        elif new_page_goes == CC.NEW_PAGE_GOES_RIGHT_OF_CURRENT:
+            
+            insertion_index = current_index + 1
+            
+        elif new_page_goes == CC.NEW_PAGE_GOES_FAR_RIGHT:
+            
+            insertion_index = self._notebook.GetPageCount()
+            
+        
+        return insertion_index
         
     
     def _ImportFiles( self, paths = None ):
@@ -1604,30 +1715,49 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
         
     
-    def _LoadGUISession( self, name ):
+    def _InitialiseSession( self ):
         
-        if self._loading_session:
+        default_gui_session = HC.options[ 'default_gui_session' ]
+        
+        existing_session_names = self._controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_GUI_SESSION )
+        
+        cannot_load_from_db = default_gui_session not in existing_session_names
+        
+        load_a_blank_page = HC.options[ 'default_gui_session' ] == 'just a blank page' or cannot_load_from_db
+        
+        if not load_a_blank_page:
             
-            HydrusData.ShowText( 'Sorry, currently loading a session. Please wait.' )
-            
-            return
+            if self._controller.LastShutdownWasBad():
+                
+                # this can be upgraded to a nicer checkboxlist dialog to select pages or w/e
+                
+                message = 'It looks like the last instance of the client did not shut down cleanly.'
+                message += os.linesep * 2
+                message += 'Would you like to try loading your default session \'' + default_gui_session + '\', or just a blank page?'
+                
+                with ClientGUIDialogs.DialogYesNo( self, message, title = 'Previous shutdown was bad', yes_label = 'try to load the default session', no_label = 'just load a blank page' ) as dlg:
+                    
+                    if dlg.ShowModal() == wx.ID_NO:
+                        
+                        load_a_blank_page = True
+                        
+                    
+                
             
         
-        self._loading_session = True
-        
-        try:
-            
-            session = self._controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_GUI_SESSION, name )
-            
-        except Exception as e:
-            
-            HydrusData.ShowText( 'While trying to load session ' + name + ', this error happened:' )
-            HydrusData.ShowException( e )
+        if load_a_blank_page:
             
             self._NewPageQuery( CC.LOCAL_FILE_SERVICE_KEY )
             
-            return
+        else:
             
+            self._LoadGUISession( default_gui_session )
+            
+        
+        wx.CallLater( 5 * 60 * 1000, self.SaveLastSession )
+        
+    
+    def _LoadGUISession( self, name ):
         
         for page in [ self._notebook.GetPage( i ) for i in range( self._notebook.GetPageCount() ) ]:
             
@@ -1646,62 +1776,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             self._CloseCurrentPage( polite = False )
             
         
-        def do_it():
-            
-            try:
-                
-                if not HC.PLATFORM_LINUX:
-                    
-                    # on linux, this stops session pages from accepting keyboard input, wew
-                    
-                    wx.CallAfter( self._notebook.Disable )
-                    
-                
-                for ( page_name, management_controller, initial_hashes ) in session.IteratePages():
-                    
-                    try:
-                        
-                        if len( initial_hashes ) > 0:
-                            
-                            initial_media_results = []
-                            
-                            for group_of_inital_hashes in HydrusData.SplitListIntoChunks( initial_hashes, 256 ):
-                                
-                                more_media_results = self._controller.Read( 'media_results', group_of_inital_hashes )
-                                
-                                initial_media_results.extend( more_media_results )
-                                
-                                self._media_status_override = u'Loading session page \'' + page_name + u'\'\u2026 ' + HydrusData.ConvertValueRangeToPrettyString( len( initial_media_results ), len( initial_hashes ) )
-                                
-                                self._controller.pub( 'refresh_status' )
-                                
-                            
-                        else:
-                            
-                            initial_media_results = []
-                            
-                        
-                        wx.CallAfter( self._NewPage, page_name, management_controller, initial_media_results = initial_media_results )
-                        
-                    except Exception as e:
-                        
-                        HydrusData.ShowException( e )
-                        
-                    
-                
-            finally:
-                
-                self._loading_session = False
-                self._media_status_override = None
-                
-                if not HC.PLATFORM_LINUX:
-                    
-                    wx.CallAfter( self._notebook.Enable )
-                    
-                
-            
-        
-        self._controller.CallToThread( do_it )
+        self._AppendGUISession( name )
         
     
     def _ManageAccountTypes( self, service_key ):
@@ -1748,7 +1823,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
         
         self._controller.pub( 'wake_daemons' )
-        self._controller.pub( 'refresh_status' )
+        self._controller.pubimmediate( 'refresh_status' )
         
     
     def _ManageParsingScripts( self ):
@@ -1845,6 +1920,8 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             HC.options[ 'pause_subs_sync' ] = original_pause_status
             
+            HG.client_controller.pub( 'notify_new_subscriptions' )
+            
         
     
     def _ManageTagCensorship( self ):
@@ -1867,13 +1944,22 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         with ClientGUIDialogsManage.DialogManageUPnP( self ) as dlg: dlg.ShowModal()
         
     
+    def _MigrateDatabase( self ):
+        
+        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, 'migrate database' )
+        
+        panel = ClientGUIScrolledPanelsReview.MigrateDatabasePanel( frame, self._controller )
+        
+        frame.SetPanel( panel )
+        
+    
     def _ModifyAccount( self, service_key ):
         
         wx.MessageBox( 'this does not work yet!' )
         
         return
         
-        service = self._controller.GetServicesManager().GetService( service_key )
+        service = self._controller.services_manager.GetService( service_key )
         
         with ClientGUIDialogs.DialogTextEntry( self, 'Enter the account key for the account to be modified.' ) as dlg:
             
@@ -1897,9 +1983,24 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
         
     
-    def _MovePage( self, page_index, direction ):
+    def _MovePage( self, page_index, delta = None, new_index = None ):
         
-        new_page_index = page_index + direction
+        new_page_index = page_index
+        
+        if delta is not None:
+            
+            new_page_index = page_index + delta
+            
+        
+        if new_index is not None:
+            
+            new_page_index = new_index
+            
+        
+        if new_page_index == page_index:
+            
+            return
+            
         
         if 0 <= new_page_index and new_page_index <= self._notebook.GetPageCount() - 1:
             
@@ -1914,19 +2015,37 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
         
     
-    def _NewPage( self, page_name, management_controller, initial_media_results = None ):
+    def _NewPage( self, page_name, management_controller, initial_hashes = None, forced_insertion_index = None ):
         
         self._controller.ResetIdleTimer()
         self._controller.ResetPageChangeTimer()
         
-        if initial_media_results is None:
+        if initial_hashes is None:
             
-            initial_media_results = []
+            initial_hashes = []
             
         
-        page = ClientGUIPages.Page( self._notebook, self._controller, management_controller, initial_media_results )
+        page = ClientGUIPages.Page( self._notebook, self._controller, management_controller, initial_hashes )
         
-        self._notebook.AddPage( page, page_name, select = True )
+        if forced_insertion_index is None:
+            
+            if self._next_new_page_index is None:
+                
+                insertion_index = self._GetDefaultPageInsertionIndex()
+                
+            else:
+                
+                insertion_index = self._next_new_page_index
+                
+                self._next_new_page_index = None
+                
+            
+        else:
+            
+            insertion_index = forced_insertion_index
+            
+        
+        self._notebook.InsertPage( insertion_index, page, page_name, select = True )
         
         wx.CallAfter( page.SetSearchFocus )
         
@@ -1987,25 +2106,32 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         management_controller = ClientGUIManagement.CreateManagementControllerPetitions( service_key )
         
-        service = self._controller.GetServicesManager().GetService( service_key )
+        service = self._controller.services_manager.GetService( service_key )
         
         page_name = service.GetName() + ' petitions'
         
         self._NewPage( page_name, management_controller )
         
     
-    def _NewPageQuery( self, file_service_key, initial_media_results = None, initial_predicates = None ):
+    def _NewPageQuery( self, file_service_key, initial_hashes = None, initial_predicates = None ):
         
-        if initial_media_results is None: initial_media_results = []
-        if initial_predicates is None: initial_predicates = []
+        if initial_hashes is None:
+            
+            initial_hashes = []
+            
         
-        search_enabled = len( initial_media_results ) == 0
+        if initial_predicates is None:
+            
+            initial_predicates = []
+            
+        
+        search_enabled = len( initial_hashes ) == 0
         
         new_options = self._controller.GetNewOptions()
         
         tag_service_key = new_options.GetKey( 'default_tag_service_search_page' )
         
-        if not self._controller.GetServicesManager().ServiceExists( tag_service_key ):
+        if not self._controller.services_manager.ServiceExists( tag_service_key ):
             
             tag_service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2014,7 +2140,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
         management_controller = ClientGUIManagement.CreateManagementControllerQuery( file_service_key, file_search_context, search_enabled )
         
-        self._NewPage( 'files', management_controller, initial_media_results = initial_media_results )
+        self._NewPage( 'files', management_controller, initial_hashes = initial_hashes )
         
     
     def _OpenDBFolder( self ):
@@ -2157,7 +2283,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             if dlg.ShowModal() == wx.ID_YES:
                 
-                self._controller.CallToThread( self._controller.GetClientFilesManager().Rebalance, partial = False )
+                self._controller.CallToThread( self._controller.client_files_manager.Rebalance, partial = False )
                 
             
         
@@ -2210,19 +2336,14 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             busy_status = ''
             
         
-        if self._controller.DBCurrentlyDoingJob():
-            
-            db_status = 'db locked'
-            
-        else:
-            
-            db_status = ''
-            
+        ( db_status, job_name ) = HG.client_controller.GetDBStatus()
+        
+        self._statusbar.SetToolTipString( job_name )
         
         self._statusbar.SetStatusText( media_status, number = 0 )
-        self._statusbar.SetStatusText( idle_status, number = 1 )
-        self._statusbar.SetStatusText( busy_status, number = 2 )
-        self._statusbar.SetStatusText( db_status, number = 3 )
+        self._statusbar.SetStatusText( idle_status, number = 2 )
+        self._statusbar.SetStatusText( busy_status, number = 3 )
+        self._statusbar.SetStatusText( db_status, number = 4 )
         
     
     def _RegenerateACCache( self ):
@@ -2265,7 +2386,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
     
     def _RegenerateThumbnails( self ):
         
-        client_files_manager = self._controller.GetClientFilesManager()
+        client_files_manager = self._controller.client_files_manager
         
         text = 'This will rebuild all your thumbnails from the original files. You probably only want to do this if you experience thumbnail errors. If you have a lot of files, it will take some time. A popup message will show its progress.'
         text += os.linesep * 2
@@ -2310,6 +2431,15 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
         
     
+    def _ReviewBandwidth( self ):
+        
+        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, 'review bandwidth' )
+        
+        panel = ClientGUIScrolledPanelsReview.ReviewAllBandwidthPanel( frame, self._controller )
+        
+        frame.SetPanel( panel )
+        
+    
     def _ReviewServices( self ):
         
         frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, self._controller.PrepStringForDisplay( 'Review Services' ), 'review_services' )
@@ -2320,13 +2450,6 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
         
     
     def _SaveGUISession( self, name = None ):
-        
-        if self._loading_session:
-            
-            HydrusData.ShowText( 'Sorry, currently loading a session. Please wait.' )
-            
-            return
-            
         
         if name is None:
             
@@ -2380,14 +2503,7 @@ class FrameGUI( ClientGUITopLevelWindows.FrameThatResizes ):
             
             management_controller = page.GetManagementController()
             
-            # this bit could obviously be 'getmediaresultsobject' or whatever, with sort/collect/selection/view status
-            media = page.GetMedia()
-            
-            hashes = set()
-            
-            for m in media: hashes.update( m.GetHashes() )
-            
-            hashes = list( hashes )
+            hashes = list( page.GetHashes() )
             
             session.AddPage( page_name, management_controller, hashes )
             
@@ -2441,6 +2557,90 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         if page is not None: page.SetSynchronisedWait()
         
     
+    def _SetupBackupPath( self ):
+        
+        backup_intro = 'Everything in your client is stored in the database, which consists of a handful of .db files and a single subdirectory that contains all your media files. It is a very good idea to maintain a regular backup schedule--to save from hard drive failure, serious software fault, accidental deletion, or any other unexpected problem. It sucks to lose all your work, so make sure it can\'t happen!'
+        backup_intro += os.linesep * 2
+        backup_intro += 'If you prefer to create a manual backup with an external program like FreeFileSync, then please cancel out of the dialog after this and set up whatever you like, but if you would rather a simple solution, simply select a directory and the client will remember it as the designated backup location. Creating or updating your backup can be triggered at any time from the database menu.'
+        backup_intro += os.linesep * 2
+        backup_intro += 'An ideal backup location is initially empty and on a different hard drive.'
+        backup_intro += os.linesep * 2
+        backup_intro += 'If you have a large database (100,000+ files) or a slow hard drive, creating the initial backup may take a long time--perhaps an hour or more--but updating an existing backup should only take a couple of minutes (since the client only has to copy new or modified files). Try to update your backup every week!'
+        backup_intro += os.linesep * 2
+        backup_intro += 'If you would like some more info on making or restoring backups, please consult the help\'s \'installing and updating\' page.'
+        
+        wx.MessageBox( backup_intro )
+        
+        with wx.DirDialog( self, 'Select backup location.' ) as dlg:
+            
+            if dlg.ShowModal() == wx.ID_OK:
+                
+                path = HydrusData.ToUnicode( dlg.GetPath() )
+                
+                if path == '':
+                    
+                    path = None
+                    
+                
+                if path == self._controller.GetDBDir():
+                    
+                    wx.MessageBox( 'That directory is your current database directory! You cannot backup to the same location you are backing up from!' )
+                    
+                    return
+                    
+                
+                if os.path.exists( path ):
+                    
+                    filenames = os.listdir( path )
+                    
+                    num_files = len( filenames )
+                    
+                    if num_files == 0:
+                        
+                        extra_info = 'It looks currently empty, which is great--there is no danger of anything being overwritten.'
+                        
+                    elif 'client.db' in filenames:
+                        
+                        extra_info = 'It looks like a client database already exists in the location--be certain that it is ok to overwrite it.'
+                        
+                    else:
+                        
+                        extra_info = 'It seems to have some files already in it--be careful and make sure you chose the correct location.'
+                        
+                    
+                else:
+                    
+                    extra_info = 'The path does not exist yet--it will be created when you make your first backup.'
+                    
+                
+                text = 'You chose "' + path + '". Here is what I understand about it:'
+                text += os.linesep * 2
+                text += extra_info
+                text += os.linesep * 2
+                text += 'Are you sure this is the correct directory?'
+                
+                with ClientGUIDialogs.DialogYesNo( self, text ) as dlg_yn:
+                    
+                    if dlg_yn.ShowModal() == wx.ID_YES:
+                        
+                        self._new_options.SetNoneableString( 'backup_path', path )
+                        
+                        text = 'Would you like to create your backup now?'
+                        
+                        with ClientGUIDialogs.DialogYesNo( self, text ) as dlg_yn_2:
+                            
+                            if dlg_yn_2.ShowModal() == wx.ID_YES:
+                                
+                                self._controller.BackupDatabase()
+                                
+                            
+                        
+                    
+                
+            
+        
+        
+    
     def _ShowHideSplitters( self ):
         
         page = self._notebook.GetCurrentPage()
@@ -2453,7 +2653,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
     
     def _StartIPFSDownload( self ):
         
-        ipfs_services = self._controller.GetServicesManager().GetServices( ( HC.IPFS, ) )
+        ipfs_services = self._controller.services_manager.GetServices( ( HC.IPFS, ) )
         
         if len( ipfs_services ) > 0:
             
@@ -2511,7 +2711,11 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
     
     def _SwitchBoolean( self, name ):
         
-        if name == 'db_report_mode':
+        if name == 'callto_report_mode':
+            
+            HG.callto_report_mode = not HG.callto_report_mode
+            
+        elif name == 'db_report_mode':
             
             HG.db_report_mode = not HG.db_report_mode
             
@@ -2704,7 +2908,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
     
     def _THREADUploadPending( self, service_key ):
         
-        service = self._controller.GetServicesManager().GetService( service_key )
+        service = self._controller.services_manager.GetService( service_key )
         
         service_name = service.GetName()
         service_type = service.GetServiceType()
@@ -2762,7 +2966,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
                             
                             media_result = result
                             
-                            client_files_manager = self._controller.GetClientFilesManager()
+                            client_files_manager = self._controller.client_files_manager
                             
                             hash = media_result.GetHash()
                             mime = media_result.GetMime()
@@ -2773,11 +2977,11 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
                             
                             service.Request( HC.POST, 'file', { 'file' : file } )
                             
-                            ( hash, inbox, size, mime, width, height, duration, num_frames, num_words, tags_manager, locations_manager, ratings_manager ) = media_result.ToTuple()
+                            file_info_manager = media_result.GetFileInfoManager()
                             
                             timestamp = HydrusData.GetNow()
                             
-                            content_update_row = ( hash, size, mime, timestamp, width, height, duration, num_frames, num_words )
+                            content_update_row = ( file_info_manager, timestamp )
                             
                             content_updates = [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_ADD, content_update_row ) ]
                             
@@ -2878,7 +3082,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
     
     def CurrentlyBusy( self ):
         
-        return self._loading_session
+        return False
         
     
     def EventCharHook( self, event ):
@@ -2936,6 +3140,16 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             
         
     
+    def EventFrameNotebookMenu( self, event ):
+        
+        ( tab_index, flags ) = self._notebook.HitTest( ( event.GetX(), event.GetY() ) )
+        
+        if flags == wx.NB_HITTEST_NOWHERE:
+            
+            self.EventNotebookMenu( event )
+            
+        
+    
     def EventNotebookLeftDoubleClick( self, event ):
         
         ( tab_index, flags ) = self._notebook.HitTest( ( event.GetX(), event.GetY() ) )
@@ -2950,25 +3164,45 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         
         ( tab_index, flags ) = self._notebook.HitTest( ( event.GetX(), event.GetY() ) )
         
+        click_over_tab = tab_index != -1
+        
+        menu = wx.Menu()
+        
         if tab_index != -1:
-            
-            menu = wx.Menu()
             
             ClientGUIMenus.AppendMenuItem( self, menu, 'close page', 'Close this page.', self._ClosePage, tab_index )
             ClientGUIMenus.AppendMenuItem( self, menu, 'rename page', 'Rename this page.', self._RenamePage, tab_index )
             
             more_than_one_tab = self._notebook.GetPageCount() > 1
             
+            ClientGUIMenus.AppendSeparator( menu )
+            
+        
+        ClientGUIMenus.AppendMenuItem( self, menu, 'new page', 'Choose a new page.', self._ChooseNewPage )
+        
+        if click_over_tab:
+            
             if more_than_one_tab:
+                
+                end_index = self._notebook.GetPageCount() - 1
+                
+                can_home = tab_index > 1
+                can_move_left = tab_index > 0
+                can_move_right = tab_index < end_index
+                can_end = tab_index < end_index - 1
+                
+                ClientGUIMenus.AppendMenuItem( self, menu, 'new page here', 'Choose a new page.', self._ChooseNewPage, tab_index )
                 
                 ClientGUIMenus.AppendSeparator( menu )
                 
-                can_move_left = tab_index > 0
-                can_move_right = tab_index < self._notebook.GetPageCount() - 1
+                if can_home:
+                    
+                    ClientGUIMenus.AppendMenuItem( self, menu, 'move to left end', 'Move this page all the way to the left.', self._MovePage, tab_index, new_index = 0 )
+                    
                 
                 if can_move_left:
                     
-                    ClientGUIMenus.AppendMenuItem( self, menu, 'move left', 'Move this page one to the left.', self._MovePage, tab_index, -1 )
+                    ClientGUIMenus.AppendMenuItem( self, menu, 'move left', 'Move this page one to the left.', self._MovePage, tab_index, delta = -1 )
                     
                 
                 if can_move_right:
@@ -2976,9 +3210,14 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
                     ClientGUIMenus.AppendMenuItem( self, menu, 'move right', 'Move this page one to the right.', self._MovePage, tab_index, 1 )
                     
                 
+                if can_end:
+                    
+                    ClientGUIMenus.AppendMenuItem( self, menu, 'move to right end', 'Move this page all the way to the right.', self._MovePage, tab_index, new_index = end_index )
+                    
+                
             
-            self._controller.PopupMenu( self, menu )
-            
+        
+        self._controller.PopupMenu( self, menu )
         
     
     def EventNotebookMiddleClick( self, event ):
@@ -3007,6 +3246,22 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         self._RefreshStatusBar()
         
         event.Skip( True )
+        
+    
+    def TIMEREventBandwidth( self, event ):
+        
+        current_usage = self._controller.network_engine.bandwidth_manager.GetTracker( ClientNetworking.GLOBAL_NETWORK_CONTEXT ).GetUsage( HC.BANDWIDTH_TYPE_DATA, 1 )
+        
+        if current_usage == 0:
+            
+            bandwidth_status = ''
+            
+        else:
+            
+            bandwidth_status = HydrusData.ConvertIntToBytes( current_usage ) + '/s'
+            
+        
+        self._statusbar.SetStatusText( bandwidth_status, number = 1 )
         
     
     def Exit( self, restart = False ):
@@ -3059,10 +3314,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         
         try:
             
-            if not self._loading_session:
-                
-                self._SaveGUISession( 'last session' )
-                
+            self._SaveGUISession( 'last session' )
             
             self._message_manager.CleanBeforeDestroy()
             
@@ -3114,7 +3366,7 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
             
             ( predicate_type, value, inclusive ) = predicate.GetInfo()
             
-            if value is None and predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS, HC.PREDICATE_TYPE_SYSTEM_LIMIT, HC.PREDICATE_TYPE_SYSTEM_SIZE, HC.PREDICATE_TYPE_SYSTEM_DIMENSIONS, HC.PREDICATE_TYPE_SYSTEM_AGE, HC.PREDICATE_TYPE_SYSTEM_HASH, HC.PREDICATE_TYPE_SYSTEM_DURATION, HC.PREDICATE_TYPE_SYSTEM_NUM_WORDS, HC.PREDICATE_TYPE_SYSTEM_MIME, HC.PREDICATE_TYPE_SYSTEM_RATING, HC.PREDICATE_TYPE_SYSTEM_SIMILAR_TO, HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE ]:
+            if value is None and predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS, HC.PREDICATE_TYPE_SYSTEM_LIMIT, HC.PREDICATE_TYPE_SYSTEM_SIZE, HC.PREDICATE_TYPE_SYSTEM_DIMENSIONS, HC.PREDICATE_TYPE_SYSTEM_AGE, HC.PREDICATE_TYPE_SYSTEM_HASH, HC.PREDICATE_TYPE_SYSTEM_DURATION, HC.PREDICATE_TYPE_SYSTEM_NUM_WORDS, HC.PREDICATE_TYPE_SYSTEM_MIME, HC.PREDICATE_TYPE_SYSTEM_RATING, HC.PREDICATE_TYPE_SYSTEM_SIMILAR_TO, HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, HC.PREDICATE_TYPE_SYSTEM_TAG_AS_NUMBER, HC.PREDICATE_TYPE_SYSTEM_DUPLICATE_RELATIONSHIPS ]:
                 
                 with ClientGUIDialogs.DialogInputFileSystemPredicates( self, predicate_type ) as dlg:
                     
@@ -3153,6 +3405,45 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
         self._ImportFiles( paths )
         
     
+    def ImportURL( self, url ):
+        
+        if True not in ( page.IsURLImportPage() for page in [ self._notebook.GetPage( i ) for i in range( self._notebook.GetPageCount() ) ] ):
+            
+            self._NewPageImportURLs()
+            
+        
+        for ( page, i ) in [ ( self._notebook.GetPage( i ), i ) for i in range( self._notebook.GetPageCount() ) ]:
+            
+            if page.IsURLImportPage():
+                
+                if page != self._notebook.GetCurrentPage():
+                    
+                    self._notebook.SetSelection( i )
+                    
+                
+                page_key = page.GetPageKey()
+                
+                HG.client_controller.pub( 'set_page_url_input', page_key, url )
+                
+                break
+                
+            
+        
+    
+    def IsCurrentPage( self, page_key ):
+        
+        result = self._notebook.GetCurrentPage()
+        
+        if result is None:
+            
+            return False
+            
+        else:
+            
+            return page_key == result.GetPageKey()
+            
+        
+    
     def NewPageDuplicateFilter( self ):
         
         self._NewPageDuplicateFilter()
@@ -3185,12 +3476,19 @@ The password is cleartext here but obscured in the entry dialog. Enter a blank p
     
     def NewPagePetitions( self, service_key ): self._NewPagePetitions( service_key )
     
-    def NewPageQuery( self, service_key, initial_media_results = None, initial_predicates = None ):
+    def NewPageQuery( self, service_key, initial_hashes = None, initial_predicates = None ):
         
-        if initial_media_results is None: initial_media_results = []
-        if initial_predicates is None: initial_predicates = []
+        if initial_hashes is None:
+            
+            initial_hashes = []
+            
         
-        self._NewPageQuery( service_key, initial_media_results = initial_media_results, initial_predicates = initial_predicates )
+        if initial_predicates is None:
+            
+            initial_predicates = []
+            
+        
+        self._NewPageQuery( service_key, initial_hashes = initial_hashes, initial_predicates = initial_predicates )
         
     
     def NewSimilarTo( self, file_service_key, hash, hamming_distance ):

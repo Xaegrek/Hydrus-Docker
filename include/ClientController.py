@@ -12,6 +12,7 @@ import HydrusData
 import HydrusExceptions
 import HydrusGlobals as HG
 import HydrusNetworking
+import HydrusPaths
 import HydrusSerialisable
 import HydrusThreading
 import HydrusVideoHandling
@@ -48,7 +49,7 @@ class Controller( HydrusController.HydrusController ):
         
         # just to set up some defaults, in case some db update expects something for an odd yaml-loading reason
         self._options = ClientDefaults.GetClientDefaultOptions()
-        self._new_options = ClientData.ClientOptions( self._db_dir )
+        self._new_options = ClientData.ClientOptions( self.db_dir )
         
         HC.options = self._options
         
@@ -57,31 +58,53 @@ class Controller( HydrusController.HydrusController ):
         self._previously_idle = False
         self._idle_started = None
         
+        self.client_files_manager = None
+        self.services_manager = None
+        
     
     def _InitDB( self ):
         
-        return ClientDB.DB( self, self._db_dir, 'client', no_wal = self._no_wal )
+        return ClientDB.DB( self, self.db_dir, 'client', no_wal = self._no_wal )
         
     
     def BackupDatabase( self ):
         
-        with wx.DirDialog( self._gui, 'Select backup location.' ) as dlg:
+        path = self._new_options.GetNoneableString( 'backup_path' )
+        
+        if path is None:
             
-            if dlg.ShowModal() == wx.ID_OK:
+            wx.MessageBox( 'No backup path is set!' )
+            
+            return
+            
+        
+        if not os.path.exists( path ):
+            
+            wx.MessageBox( 'The backup path does not exist--creating it now.' )
+            
+            HydrusPaths.MakeSureDirectoryExists( path )
+            
+        
+        client_db_path = os.path.join( path, 'client.db' )
+        
+        if os.path.exists( client_db_path ):
+            
+            action = 'Update the existing'
+            
+        else:
+            
+            action = 'Create a new'
+            
+        
+        text = action + ' backup at "' + path + '"?'
+        text += os.linesep * 2
+        text += 'The database will be locked while the backup occurs, which may lock up your gui as well.'
+        
+        with ClientGUIDialogs.DialogYesNo( self._gui, text ) as dlg_yn:
+            
+            if dlg_yn.ShowModal() == wx.ID_YES:
                 
-                path = HydrusData.ToUnicode( dlg.GetPath() )
-                
-                text = 'Are you sure "' + path + '" is the correct directory?'
-                text += os.linesep * 2
-                text += 'The database will be locked while the backup occurs, which may lock up your gui as well.'
-                
-                with ClientGUIDialogs.DialogYesNo( self._gui, text ) as dlg_yn:
-                    
-                    if dlg_yn.ShowModal() == wx.ID_YES:
-                        
-                        self.Write( 'backup', path )
-                        
-                    
+                self.Write( 'backup', path )
                 
             
         
@@ -150,7 +173,7 @@ class Controller( HydrusController.HydrusController ):
     
     def CheckAlreadyRunning( self ):
     
-        while HydrusData.IsAlreadyRunning( self._db_dir, 'client' ):
+        while HydrusData.IsAlreadyRunning( self.db_dir, 'client' ):
             
             self.pub( 'splash_set_status_text', 'client already running' )
             
@@ -173,7 +196,7 @@ class Controller( HydrusController.HydrusController ):
             
             for i in range( 10, 0, -1 ):
                 
-                if not HydrusData.IsAlreadyRunning( self._db_dir, 'client' ):
+                if not HydrusData.IsAlreadyRunning( self.db_dir, 'client' ):
                     
                     break
                     
@@ -207,7 +230,7 @@ class Controller( HydrusController.HydrusController ):
             
             if move_knocked_us_out_of_idle:
                 
-                self.pub( 'refresh_status' )
+                self.pubimmediate( 'refresh_status' )
                 
             
         
@@ -391,13 +414,13 @@ class Controller( HydrusController.HydrusController ):
         
         stop_time = HydrusData.GetNow() + ( self._options[ 'idle_shutdown_max_minutes' ] * 60 )
         
-        self._client_files_manager.Rebalance( partial = False, stop_time = stop_time )
+        self.client_files_manager.Rebalance( partial = False, stop_time = stop_time )
         
         self.MaintainDB( stop_time = stop_time )
         
         if not self._options[ 'pause_repo_sync' ]:
             
-            services = self.GetServicesManager().GetServices( HC.REPOSITORIES )
+            services = self.services_manager.GetServices( HC.REPOSITORIES )
             
             for service in services:
                 
@@ -475,7 +498,7 @@ class Controller( HydrusController.HydrusController ):
         HG.force_idle_mode = not HG.force_idle_mode
         
         self.pub( 'wake_daemons' )
-        self.pub( 'refresh_status' )
+        self.pubimmediate( 'refresh_status' )
         
     
     def GetApp( self ):
@@ -483,9 +506,9 @@ class Controller( HydrusController.HydrusController ):
         return self._app
         
     
-    def GetClientFilesManager( self ):
+    def GetBandwidthManager( self ):
         
-        return self._client_files_manager
+        raise NotImplementedError()
         
     
     def GetClientSessionManager( self ):
@@ -498,7 +521,10 @@ class Controller( HydrusController.HydrusController ):
         return self._shortcuts_manager.GetCommand( shortcut_names, shortcut )
         
     
-    def GetGUI( self ): return self._gui
+    def GetGUI( self ):
+        
+        return self._gui
+        
     
     def GetOptions( self ):
         
@@ -510,21 +536,23 @@ class Controller( HydrusController.HydrusController ):
         return self._new_options
         
     
-    def GetServicesManager( self ):
-        
-        return self._services_manager
-        
-    
     def GoodTimeToDoForegroundWork( self ):
         
-        return not self._gui.CurrentlyBusy()
+        if self._gui:
+            
+            return not self._gui.CurrentlyBusy()
+            
+        else:
+            
+            return True
+            
         
     
     def InitClientFilesManager( self ):
         
-        self._client_files_manager = ClientCaches.ClientFilesManager( self )
+        self.client_files_manager = ClientCaches.ClientFilesManager( self )
         
-        missing_locations = self._client_files_manager.GetMissing()
+        missing_locations = self.client_files_manager.GetMissing()
         
         while len( missing_locations ) > 0:
             
@@ -536,9 +564,9 @@ class Controller( HydrusController.HydrusController ):
                 
                 if dlg.ShowModal() == wx.ID_OK:
                     
-                    self._client_files_manager = ClientCaches.ClientFilesManager( self )
+                    self.client_files_manager = ClientCaches.ClientFilesManager( self )
                     
-                    missing_locations = self._client_files_manager.GetMissing()
+                    missing_locations = self.client_files_manager.GetMissing()
                     
                 else:
                     
@@ -556,7 +584,7 @@ class Controller( HydrusController.HydrusController ):
         
         HydrusController.HydrusController.InitModel( self )
         
-        self._services_manager = ClientCaches.ServicesManager( self )
+        self.services_manager = ClientCaches.ServicesManager( self )
         
         self._options = self.Read( 'options' )
         self._new_options = self.Read( 'serialisable', HydrusSerialisable.SERIALISABLE_TYPE_CLIENT_OPTIONS )
@@ -572,6 +600,18 @@ class Controller( HydrusController.HydrusController ):
             
         
         self.InitClientFilesManager()
+        
+        #
+        
+        bandwidth_manager = self.Read( 'serialisable', HydrusSerialisable.SERIALISABLE_TYPE_NETWORK_BANDWIDTH_MANAGER )
+        session_manager = self.Read( 'serialisable', HydrusSerialisable.SERIALISABLE_TYPE_NETWORK_SESSION_MANAGER )
+        login_manager = ClientNetworking.NetworkLoginManager()
+        
+        self.network_engine = ClientNetworking.NetworkEngine( self, bandwidth_manager, session_manager, login_manager )
+        
+        self.CallToThread( self.network_engine.MainLoop )
+        
+        #
         
         self._client_session_manager = ClientCaches.HydrusSessionManager( self )
         
@@ -675,7 +715,7 @@ class Controller( HydrusController.HydrusController ):
             self._daemons.append( HydrusThreading.DAEMONBackgroundWorker( self, 'UPnP', ClientDaemons.DAEMONUPnP, ( 'notify_new_upnp_mappings', ), init_wait = 120, pre_call_wait = 6 ) )
             
         
-        if self._db.IsFirstStart():
+        if self.db.IsFirstStart():
             
             message = 'Hi, this looks like the first time you have started the hydrus client.'
             message += os.linesep * 2
@@ -686,12 +726,12 @@ class Controller( HydrusController.HydrusController ):
             HydrusData.ShowText( message )
             
         
-        if self._db.IsDBUpdated():
+        if self.db.IsDBUpdated():
             
             HydrusData.ShowText( 'The client has updated to version ' + str( HC.SOFTWARE_VERSION ) + '!' )
             
         
-        for message in self._db.GetInitialMessages():
+        for message in self.db.GetInitialMessages():
             
             HydrusData.ShowText( message )
             
@@ -757,7 +797,7 @@ class Controller( HydrusController.HydrusController ):
                 
                 self.pub( 'splash_set_status_text', 'fattening service info' )
                 
-                services = self.GetServicesManager().GetServices()
+                services = self.services_manager.GetServices()
                 
                 for service in services:
                     
@@ -770,9 +810,9 @@ class Controller( HydrusController.HydrusController ):
             
         
     
-    def MaintainMemory( self ):
+    def MaintainMemorySlow( self ):
         
-        HydrusController.HydrusController.MaintainMemory( self )
+        HydrusController.HydrusController.MaintainMemorySlow( self )
         
         if HydrusData.TimeHasPassed( self._timestamps[ 'last_page_change' ] + 30 * 60 ):
             
@@ -814,11 +854,11 @@ class Controller( HydrusController.HydrusController ):
     
     def PageCompletelyDestroyed( self, page_key ):
         
-        try:
+        if self._gui:
             
             return self._gui.PageCompletelyDestroyed( page_key )
             
-        except wx.PyDeadObjectError:
+        else:
             
             return True
             
@@ -826,7 +866,14 @@ class Controller( HydrusController.HydrusController ):
     
     def PageClosedButNotDestroyed( self, page_key ):
         
-        return self._gui.PageClosedButNotDestroyed( page_key )
+        if self._gui:
+            
+            return self._gui.PageClosedButNotDestroyed( page_key )
+            
+        else:
+            
+            return False
+            
         
     
     def PopupMenu( self, window, menu ):
@@ -851,7 +898,7 @@ class Controller( HydrusController.HydrusController ):
     
     def RefreshServices( self ):
         
-        self._services_manager.RefreshServices()
+        self.services_manager.RefreshServices()
         
     
     def ResetIdleTimer( self ):
@@ -866,7 +913,7 @@ class Controller( HydrusController.HydrusController ):
     
     def RestartBooru( self ):
         
-        service = self.GetServicesManager().GetService( CC.LOCAL_BOORU_SERVICE_KEY )
+        service = self.services_manager.GetService( CC.LOCAL_BOORU_SERVICE_KEY )
         
         port = service.GetPort()
         
@@ -939,6 +986,8 @@ class Controller( HydrusController.HydrusController ):
     
     def RestoreDatabase( self ):
         
+        restore_intro = ''
+        
         with wx.DirDialog( self._gui, 'Select backup location.' ) as dlg:
             
             if dlg.ShowModal() == wx.ID_OK:
@@ -959,12 +1008,12 @@ class Controller( HydrusController.HydrusController ):
                             
                             wx.CallAfter( self._gui.Exit )
                             
-                            while not self._db.LoopIsFinished():
+                            while not self.db.LoopIsFinished():
                                 
                                 time.sleep( 0.1 )
                                 
                             
-                            self._db.RestoreBackup( path )
+                            self.db.RestoreBackup( path )
                             
                             while not HG.shutdown_complete:
                                 
@@ -1009,11 +1058,25 @@ class Controller( HydrusController.HydrusController ):
         
         with HG.dirty_object_lock:
             
-            dirty_services = [ service for service in self._services_manager.GetServices() if service.IsDirty() ]
+            dirty_services = [ service for service in self.services_manager.GetServices() if service.IsDirty() ]
             
             if len( dirty_services ) > 0:
                 
                 self.WriteSynchronous( 'dirty_services', dirty_services )
+                
+            
+            if self.network_engine.bandwidth_manager.IsDirty():
+                
+                self.WriteSynchronous( 'serialisable', self.network_engine.bandwidth_manager )
+                
+                self.network_engine.bandwidth_manager.SetClean()
+                
+            
+            if self.network_engine.session_manager.IsDirty():
+                
+                self.WriteSynchronous( 'serialisable', self.network_engine.session_manager )
+                
+                self.network_engine.session_manager.SetClean()
                 
             
         
@@ -1024,8 +1087,18 @@ class Controller( HydrusController.HydrusController ):
             
             self.WriteSynchronous( 'update_services', services )
             
-            self._services_manager.RefreshServices()
+            self.services_manager.RefreshServices()
             
+        
+    
+    def ShutdownModel( self ):
+        
+        if not HG.emergency_exit:
+            
+            self.SaveDirtyObjects()
+            
+        
+        HydrusController.HydrusController.ShutdownModel( self )
         
     
     def ShutdownView( self ):
@@ -1052,9 +1125,9 @@ class Controller( HydrusController.HydrusController ):
         HydrusController.HydrusController.ShutdownView( self )
         
     
-    def StartFileQuery( self, query_key, search_context ):
+    def StartFileQuery( self, page_key, job_key, search_context ):
         
-        self.CallToThread( self.THREADDoFileQuery, query_key, search_context )
+        self.CallToThread( self.THREADDoFileQuery, page_key, job_key, search_context )
         
     
     def SystemBusy( self ):
@@ -1101,7 +1174,7 @@ class Controller( HydrusController.HydrusController ):
             return True
             
         
-        services = self.GetServicesManager().GetServices( HC.REPOSITORIES )
+        services = self.services_manager.GetServices( HC.REPOSITORIES )
         
         for service in services:
             
@@ -1114,7 +1187,7 @@ class Controller( HydrusController.HydrusController ):
         return False
         
     
-    def THREADDoFileQuery( self, query_key, search_context ):
+    def THREADDoFileQuery( self, page_key, job_key, search_context ):
         
         QUERY_CHUNK_SIZE = 256
         
@@ -1124,20 +1197,23 @@ class Controller( HydrusController.HydrusController ):
         
         for sub_query_hash_ids in HydrusData.SplitListIntoChunks( query_hash_ids, QUERY_CHUNK_SIZE ):
             
-            if query_key.IsCancelled(): return
+            if job_key.IsCancelled():
+                
+                return
+                
             
             more_media_results = self.Read( 'media_results_from_ids', sub_query_hash_ids )
             
             media_results.extend( more_media_results )
             
-            self.pub( 'set_num_query_results', len( media_results ), len( query_hash_ids ) )
+            self.pub( 'set_num_query_results', page_key, len( media_results ), len( query_hash_ids ) )
             
             self.WaitUntilPubSubsEmpty()
             
         
         search_context.SetComplete()
         
-        self.pub( 'file_query_done', query_key, media_results )
+        self.pub( 'file_query_done', page_key, job_key, media_results )
         
     
     def THREADBootEverything( self ):
@@ -1146,9 +1222,9 @@ class Controller( HydrusController.HydrusController ):
             
             self.CheckAlreadyRunning()
             
-            self._last_shutdown_was_bad = HydrusData.LastShutdownWasBad( self._db_dir, 'client' )
+            self._last_shutdown_was_bad = HydrusData.LastShutdownWasBad( self.db_dir, 'client' )
             
-            HydrusData.RecordRunningStart( self._db_dir, 'client' )
+            HydrusData.RecordRunningStart( self.db_dir, 'client' )
             
             self.InitModel()
             
@@ -1197,7 +1273,7 @@ class Controller( HydrusController.HydrusController ):
             
             self.ShutdownModel()
             
-            HydrusData.CleanRunningFile( self._db_dir, 'client' )
+            HydrusData.CleanRunningFile( self.db_dir, 'client' )
             
         except HydrusExceptions.PermissionException: pass
         except HydrusExceptions.ShutdownException: pass

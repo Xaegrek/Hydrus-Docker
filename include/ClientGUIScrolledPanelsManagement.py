@@ -34,13 +34,14 @@ import itertools
 import os
 import random
 import traceback
+import urlparse
 import wx
 
 class ManageAccountTypesPanel( ClientGUIScrolledPanels.ManagePanel ):
     
     def __init__( self, parent, service_key ):
         
-        self._admin_service = HG.client_controller.GetServicesManager().GetService( service_key )
+        self._admin_service = HG.client_controller.services_manager.GetService( service_key )
         
         ClientGUIScrolledPanels.ManagePanel.__init__( self, parent )
         
@@ -259,7 +260,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         #
         
-        all_services = HG.client_controller.GetServicesManager().GetServices()
+        all_services = HG.client_controller.services_manager.GetServices()
         
         for service in all_services:
             
@@ -404,7 +405,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             if self._service_type in HC.REMOTE_SERVICES:
                 
-                remote_panel = self._ServiceRemotePanel( self, self._dictionary )
+                remote_panel = self._ServiceRemotePanel( self, self._service_type, self._dictionary )
                 
                 self._panels.append( remote_panel )
                 
@@ -482,13 +483,17 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     hta = HydrusTagArchive.HydrusTagArchive( hta_path )
                     
-                    archive_namespaces = hta.GetNamespaces()
-                
-                    with ClientGUIDialogs.DialogCheckFromListOfStrings( self, 'Select namespaces', HydrusData.ConvertUglyNamespacesToPrettyStrings( archive_namespaces ) ) as dlg:
+                    archive_namespaces = list( hta.GetNamespaces() )
+                    
+                    archive_namespaces.sort()
+                    
+                    list_of_tuples = [ ( HydrusData.ConvertUglyNamespaceToPrettyString( namespace ), namespace, False ) for namespace in archive_namespaces ]
+                    
+                    with ClientGUIDialogs.DialogCheckFromList( self, 'Select namespaces', list_of_tuples ) as dlg:
                         
                         if dlg.ShowModal() == wx.ID_OK:
                             
-                            namespaces = HydrusData.ConvertPrettyStringsToUglyNamespaces( dlg.GetChecked() )
+                            namespaces = dlg.GetChecked()
                             
                         else:
                             
@@ -522,13 +527,17 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 hta = HydrusTagArchive.HydrusTagArchive( hta_path )
                 
-                archive_namespaces = hta.GetNamespaces()
+                archive_namespaces = list( hta.GetNamespaces() )
                 
-                with ClientGUIDialogs.DialogCheckFromListOfStrings( self, 'Select namespaces', HydrusData.ConvertUglyNamespacesToPrettyStrings( archive_namespaces ), HydrusData.ConvertUglyNamespacesToPrettyStrings( existing_namespaces ) ) as dlg:
+                archive_namespaces.sort()
+                
+                list_of_tuples = [ ( HydrusData.ConvertUglyNamespaceToPrettyString( namespace ), namespace, namespace in existing_namespaces ) for namespace in archive_namespaces ]
+                
+                with ClientGUIDialogs.DialogCheckFromList( self, 'Select namespaces', list_of_tuples ) as dlg:
                     
                     if dlg.ShowModal() == wx.ID_OK:
                         
-                        namespaces = HydrusData.ConvertPrettyStringsToUglyNamespaces( dlg.GetChecked() )
+                        namespaces = dlg.GetChecked()
                         
                     else:
                         
@@ -550,24 +559,6 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
             if selection != wx.NOT_FOUND:
                 
                 self._archive_sync.Delete( selection )
-                
-            
-        
-        def EventCheckIPFS( self, event ):
-            
-            service = self.GetValue()
-            
-            try:
-                
-                version = service.GetDaemonVersion()
-                
-                wx.MessageBox( 'Everything looks ok! Connected to IPFS Daemon with version: ' + version )
-                
-            except Exception as e:
-                
-                HydrusData.ShowException( e )
-                
-                wx.MessageBox( 'Could not connect!' )
                 
             
         
@@ -621,9 +612,11 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         class _ServiceRemotePanel( ClientGUICommon.StaticBox ):
             
-            def __init__( self, parent, dictionary ):
+            def __init__( self, parent, service_type, dictionary ):
                 
                 ClientGUICommon.StaticBox.__init__( self, parent, 'clientside network' )
+                
+                self._service_type = service_type
                 
                 credentials = dictionary[ 'credentials' ]
                 bandwidth_rules = dictionary[ 'bandwidth_rules' ]
@@ -670,11 +663,24 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 ( host, port ) = credentials.GetAddress()
                 
-                url = 'https://' + host + ':' + str( port ) + '/'
+                if self._service_type == HC.IPFS:
+                    
+                    scheme = 'http://'
+                    hydrus_network = False
+                    request = 'api/v0/version'
+                    
+                else:
+                    
+                    scheme = 'https://'
+                    hydrus_network = True
+                    request = ''
+                    
+                
+                url = scheme + host + ':' + str( port ) + '/' + request
                 
                 try:
                     
-                    result = HG.client_controller.DoHTTP( HC.GET, url, hydrus_network = True )
+                    result = HG.client_controller.DoHTTP( HC.GET, url, hydrus_network = hydrus_network )
                     
                     wx.MessageBox( 'Got an ok response!' )
                     
@@ -1171,14 +1177,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 ClientGUICommon.StaticBox.__init__( self, parent, 'ipfs' )
                 
-                # test creds and fetch version
-                # multihash_prefix
-                '''
-            if service_type == HC.IPFS:
-                
-                self._ipfs_panel = ClientGUICommon.StaticBox( self, 'ipfs settings' )
-                
-                self._multihash_prefix = wx.TextCtrl( self._ipfs_panel, value = info[ 'multihash_prefix' ] )
+                self._multihash_prefix = wx.TextCtrl( self )
                 
                 tts = 'When you tell the client to copy the ipfs multihash to your clipboard, it will prefix it with this.'
                 tts += os.linesep * 2
@@ -1190,21 +1189,20 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 self._multihash_prefix.SetToolTipString( tts )
                 
-            '''
-                self._st = ClientGUICommon.BetterStaticText( self )
+                #
+                
+                self._multihash_prefix.SetValue( dictionary[ 'multihash_prefix' ] )
                 
                 #
                 
-                self._st.SetLabelText( 'This is an IPFS service. This box will get regain IPFS options in a future update.' )
-                
-                #
-                
-                self.AddF( self._st, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self.AddF( ClientGUICommon.WrapInText( self._multihash_prefix, self, 'multihash prefix: ' ), CC.FLAGS_EXPAND_PERPENDICULAR )
                 
             
             def GetValue( self ):
                 
                 dictionary_part = {}
+                
+                dictionary_part[ 'multihash_prefix' ] = self._multihash_prefix.GetValue()
                 
                 return dictionary_part
                 
@@ -1807,7 +1805,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._thread_times_to_check = wx.SpinCtrl( thread_checker, min = 0, max = 65536 )
             self._thread_times_to_check.SetToolTipString( 'how many times the thread checker will check' )
             
-            self._thread_check_period = ClientGUICommon.TimeDeltaButton( thread_checker, min = 30, hours = True, minutes = True, seconds = True )
+            self._thread_check_period = ClientGUICommon.TimeDeltaButton( thread_checker, min = 30, days = True, hours = True, minutes = True, seconds = True )
             self._thread_check_period.SetToolTipString( 'how long the checker will wait between checks' )
             
             #
@@ -2354,6 +2352,13 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._default_gui_session = wx.Choice( self )
             
+            self._default_new_page_goes = ClientGUICommon.BetterChoice( self )
+            
+            for value in [ CC.NEW_PAGE_GOES_FAR_LEFT, CC.NEW_PAGE_GOES_LEFT_OF_CURRENT, CC.NEW_PAGE_GOES_RIGHT_OF_CURRENT, CC.NEW_PAGE_GOES_FAR_RIGHT ]:
+                
+                self._default_new_page_goes.Append( CC.new_page_goes_string_lookup[ value ], value )
+                
+            
             self._confirm_client_exit = wx.CheckBox( self )
             self._confirm_trash = wx.CheckBox( self )
             self._confirm_archive = wx.CheckBox( self )
@@ -2397,6 +2402,8 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             try: self._default_gui_session.SetStringSelection( HC.options[ 'default_gui_session' ] )
             except: self._default_gui_session.SetSelection( 0 )
             
+            self._default_new_page_goes.SelectClientData( self._new_options.GetInteger( 'default_new_page_goes' ) )
+            
             self._confirm_client_exit.SetValue( HC.options[ 'confirm_client_exit' ] )
             
             self._confirm_trash.SetValue( HC.options[ 'confirm_trash' ] )
@@ -2433,6 +2440,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             rows.append( ( 'Main gui title: ', self._main_gui_title ) )
             rows.append( ( 'Default session on startup: ', self._default_gui_session ) )
+            rows.append( ( 'By default, new page tabs: ', self._default_new_page_goes ) )
             rows.append( ( 'Confirm client exit: ', self._confirm_client_exit ) )
             rows.append( ( 'Confirm sending files to trash: ', self._confirm_trash ) )
             rows.append( ( 'Confirm sending more than one file to archive or inbox: ', self._confirm_archive ) )
@@ -2519,6 +2527,8 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._new_options.SetString( 'main_gui_title', title )
             
+            self._new_options.SetInteger( 'default_new_page_goes', self._default_new_page_goes.GetChoice() )
+            
             HG.client_controller.pub( 'main_gui_title', title )
             
             self._new_options.SetBoolean( 'show_thumbnail_title_banner', self._show_thumbnail_title_banner.GetValue() )
@@ -2576,7 +2586,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._media_zooms.SetValue( ','.join( ( str( media_zoom ) for media_zoom in media_zooms ) ) )
             
-            mimes_in_correct_order = ( HC.IMAGE_JPEG, HC.IMAGE_PNG, HC.IMAGE_GIF, HC.APPLICATION_FLASH, HC.APPLICATION_PDF, HC.APPLICATION_HYDRUS_UPDATE_CONTENT, HC.APPLICATION_HYDRUS_UPDATE_DEFINITIONS, HC.VIDEO_AVI, HC.VIDEO_FLV, HC.VIDEO_MOV, HC.VIDEO_MP4, HC.VIDEO_MKV, HC.VIDEO_MPEG, HC.VIDEO_WEBM, HC.VIDEO_WMV, HC.AUDIO_MP3, HC.AUDIO_OGG, HC.AUDIO_FLAC, HC.AUDIO_WMA )
+            mimes_in_correct_order = ( HC.IMAGE_JPEG, HC.IMAGE_PNG, HC.IMAGE_APNG, HC.IMAGE_GIF, HC.APPLICATION_FLASH, HC.APPLICATION_PDF, HC.APPLICATION_HYDRUS_UPDATE_CONTENT, HC.APPLICATION_HYDRUS_UPDATE_DEFINITIONS, HC.VIDEO_AVI, HC.VIDEO_FLV, HC.VIDEO_MOV, HC.VIDEO_MP4, HC.VIDEO_MKV, HC.VIDEO_MPEG, HC.VIDEO_WEBM, HC.VIDEO_WMV, HC.AUDIO_MP3, HC.AUDIO_OGG, HC.AUDIO_FLAC, HC.AUDIO_WMA )
             
             for mime in mimes_in_correct_order:
                 
@@ -2902,7 +2912,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._estimated_number_thumbnails = wx.StaticText( media_panel, label = '' )
             
-            self._fullscreen_cache_size = wx.SpinCtrl( media_panel, min = 25, max = 3000 )
+            self._fullscreen_cache_size = wx.SpinCtrl( media_panel, min = 25, max = 8192 )
             self._fullscreen_cache_size.Bind( wx.EVT_SPINCTRL, self.EventFullscreensUpdate )
             
             self._estimated_number_fullscreens = wx.StaticText( media_panel, label = '' )
@@ -3209,7 +3219,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._suggested_favourites_services.Append( CC.LOCAL_TAG_SERVICE_KEY, CC.LOCAL_TAG_SERVICE_KEY )
             
-            tag_services = HG.client_controller.GetServicesManager().GetServices( ( HC.TAG_REPOSITORY, ) )
+            tag_services = HG.client_controller.services_manager.GetServices( ( HC.TAG_REPOSITORY, ) )
             
             for tag_service in tag_services:
                 
@@ -3270,7 +3280,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._default_tag_service_search_page.Append( 'all known tags', CC.COMBINED_TAG_SERVICE_KEY )
             
-            services = HG.client_controller.GetServicesManager().GetServices( HC.TAG_SERVICES )
+            services = HG.client_controller.services_manager.GetServices( HC.TAG_SERVICES )
             
             for service in services:
                 
@@ -3518,7 +3528,7 @@ class ManageServerServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
     
     def __init__( self, parent, service_key ):
         
-        self._clientside_admin_service = HG.client_controller.GetServicesManager().GetService( service_key )
+        self._clientside_admin_service = HG.client_controller.services_manager.GetService( service_key )
         
         ClientGUIScrolledPanels.ManagePanel.__init__( self, parent )
         
@@ -4201,7 +4211,7 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 #
                 
-                services = HG.client_controller.GetServicesManager().GetServices( ( HC.LOCAL_TAG, HC.TAG_REPOSITORY, HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
+                services = HG.client_controller.services_manager.GetServices( ( HC.LOCAL_TAG, HC.TAG_REPOSITORY, HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
                 
                 for service in services:
                     
@@ -4235,7 +4245,7 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     ( service_key, content_type, action, value ) = data
                     
-                    self._service = HG.client_controller.GetServicesManager().GetService( service_key )
+                    self._service = HG.client_controller.services_manager.GetService( service_key )
                     
                     service_name = self._service.GetName()
                     service_type = self._service.GetServiceType()
@@ -4518,7 +4528,7 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                         
                         service_key = self._ratings_like_service_keys.GetClientData( selection )
                         
-                        service = HG.client_controller.GetServicesManager().GetService( service_key )
+                        service = HG.client_controller.services_manager.GetService( service_key )
                         
                         self._current_ratings_like_service = service
                         
@@ -4532,7 +4542,7 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                         
                         service_key = self._ratings_numerical_service_keys.GetClientData( selection )
                         
-                        service = HG.client_controller.GetServicesManager().GetService( service_key )
+                        service = HG.client_controller.services_manager.GetService( service_key )
                         
                         self._current_ratings_numerical_service = service
                         
@@ -4844,7 +4854,7 @@ class ManageSubscriptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         HG.client_controller.Write( 'serialisables_overwrite', [ HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION ], subscriptions )
         
-        HG.client_controller.pub( 'notify_new_subscriptions' )
+        # we pubsub changes outside, so it happens even on cancel
         
     
     def Delete( self ):
@@ -5094,7 +5104,7 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         #
         
-        services = HG.client_controller.GetServicesManager().GetServices( HC.TAG_SERVICES )
+        services = HG.client_controller.services_manager.GetServices( HC.TAG_SERVICES )
         
         for service in services:
             
@@ -5303,7 +5313,7 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             if not self._i_am_local_tag_service:
                 
-                self._service = HG.client_controller.GetServicesManager().GetService( tag_service_key )
+                self._service = HG.client_controller.services_manager.GetService( tag_service_key )
                 
             
             self._tags_box_sorter = ClientGUICommon.StaticBoxSorterForListBoxTags( self, 'tags' )
@@ -5331,7 +5341,7 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             expand_parents = True
             
-            self._add_tag_box = ClientGUIACDropdown.AutoCompleteDropdownTagsWrite( self, self.EnterTags, expand_parents, self._file_service_key, self._tag_service_key, null_entry_callable = self.Ok )
+            self._add_tag_box = ClientGUIACDropdown.AutoCompleteDropdownTagsWrite( self, self.EnterTags, expand_parents, self._file_service_key, self._tag_service_key, null_entry_callable = self.OK )
             
             self._advanced_content_update_button = wx.Button( self, label = 'advanced operation' )
             self._advanced_content_update_button.Bind( wx.EVT_BUTTON, self.EventAdvancedContentUpdate )
@@ -5375,6 +5385,11 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                 
             
+            if not self._new_options.GetBoolean( 'advanced_mode' ):
+                
+                self._advanced_content_update_button.Hide()
+                
+            
             copy_paste_hbox = wx.BoxSizer( wx.HORIZONTAL )
             
             copy_paste_hbox.AddF( self._copy_tags, CC.FLAGS_VCENTER )
@@ -5411,6 +5426,8 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
         
         def _AddTags( self, tags, only_add = False, only_remove = False, forced_reason = None ):
+            
+            tags = HydrusTags.CleanTags( tags )
             
             if not self._i_am_local_tag_service and self._service.HasPermission( HC.CONTENT_TYPE_MAPPINGS, HC.PERMISSION_ACTION_OVERRULE ):
                 
@@ -5603,6 +5620,11 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
                             
                         
                     
+                    # if this above sub-dialog occurs, the 'default focus' reverts to the main gui when the manage tags frame closes, wew lad
+                    
+                    ClientGUICommon.GetTLP( self ).GetParent().SetFocus()
+                    self.SetFocus()
+                    
                 else:
                     
                     reason = forced_reason
@@ -5714,9 +5736,9 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             parent = self.GetTopLevelParent().GetParent()
             
-            self.Ok()
+            self.OK()
             
-            # do this because of the Ok() call, which doesn't want to happen in the dialog event loop
+            # do this because of the OK() call, which doesn't want to happen in the dialog event loop
             def do_it():
                 
                 with ClientGUITopLevelWindows.DialogNullipotent( parent, 'advanced content update' ) as dlg:
@@ -5830,7 +5852,7 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             return len( self._content_updates ) > 0
             
         
-        def Ok( self ):
+        def OK( self ):
             
             wx.PostEvent( self, wx.CommandEvent( commandType = wx.wxEVT_COMMAND_MENU_SELECTED, winid = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'ok' ) ) )
             
@@ -5880,6 +5902,169 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
         
 
+class ManageURLsPanel( ClientGUIScrolledPanels.ManagePanel ):
+    
+    def __init__( self, parent, media ):
+        
+        ClientGUIScrolledPanels.ManagePanel.__init__( self, parent )
+        
+        self._media = media
+        
+        self._urls_listbox = wx.ListBox( self, style = wx.LB_SORT | wx.LB_SINGLE )
+        self._urls_listbox.Bind( wx.EVT_LISTBOX_DCLICK, self.EventListDoubleClick )
+        
+        ideal_size = ClientData.ConvertTextToPixels( self._urls_listbox, ( 120, 10 ) )
+        
+        self._urls_listbox.SetBestFittingSize( ideal_size )
+        
+        self._url_input = wx.TextCtrl( self, style = wx.TE_PROCESS_ENTER )
+        self._url_input.Bind( wx.EVT_CHAR_HOOK, self.EventInputCharHook )
+        
+        self._urls_to_add = set()
+        self._urls_to_remove = set()
+        
+        #
+        
+        locations_manager = self._media.GetLocationsManager()
+        
+        self._original_urls = set( locations_manager.GetURLs() )
+        
+        for url in self._original_urls:
+            
+            self._urls_listbox.Append( url, url )
+            
+        
+        self._current_urls = set( self._original_urls )
+        
+        #
+        
+        vbox = wx.BoxSizer( wx.VERTICAL )
+        
+        vbox.AddF( self._urls_listbox, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.AddF( self._url_input, CC.FLAGS_EXPAND_PERPENDICULAR )
+        
+        self.SetSizer( vbox )
+        
+        wx.CallAfter( self._url_input.SetFocus )
+        
+    
+    def _EnterURL( self, url ):
+        
+        if url in self._current_urls:
+            
+            for index in range( self._urls_listbox.GetCount() ):
+                
+                existing_url = self._urls_listbox.GetClientData( index )
+                
+                if existing_url == url:
+                    
+                    self._RemoveURL( index )
+                    
+                    return
+                    
+                
+            
+        else:
+            
+            self._urls_listbox.Append( url, url )
+            
+            self._current_urls.add( url )
+            
+            if url not in self._original_urls:
+                
+                self._urls_to_add.add( url )
+                
+            
+        
+    
+    def _RemoveURL( self, index ):
+        
+        url = self._urls_listbox.GetClientData( index )
+        
+        self._urls_listbox.Delete( index )
+        
+        self._current_urls.discard( url )
+        
+        self._urls_to_add.discard( url )
+        
+        if url in self._original_urls:
+            
+            self._urls_to_remove.add( url )
+            
+        
+    
+    def EventListDoubleClick( self, event ):
+        
+        selection = self._urls_listbox.GetSelection()
+        
+        if selection != wx.NOT_FOUND:
+            
+            url = self._urls_listbox.GetClientData( selection )
+            
+            self._RemoveURL( selection )
+            
+            self._url_input.SetValue( url )
+            
+        
+    
+    def EventInputCharHook( self, event ):
+        
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+        
+        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
+            
+            url = self._url_input.GetValue()
+            
+            if url == '':
+                
+                self.GetParent().DoOK()
+                
+            else:
+                
+                parse_result = urlparse.urlparse( url )
+                
+                if parse_result.scheme == '':
+                    
+                    wx.MessageBox( 'Could not parse that URL! Please make sure you include http:// or https://.' )
+                    
+                    return
+                    
+                
+                self._EnterURL( url )
+                
+                self._url_input.SetValue( '' )
+                
+            
+        else:
+            
+            event.Skip()
+            
+        
+    
+    def CommitChanges( self ):
+        
+        hash = self._media.GetHash()
+        
+        content_updates = []
+        
+        if len( self._urls_to_add ) > 0:
+            
+            content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_URLS, HC.CONTENT_UPDATE_ADD, ( hash, self._urls_to_add ) ) )
+            
+        
+        if len( self._urls_to_remove ) > 0:
+            
+            content_updates.append( HydrusData.ContentUpdate( HC.CONTENT_TYPE_URLS, HC.CONTENT_UPDATE_DELETE, ( hash, self._urls_to_remove ) ) )
+            
+        
+        if len( content_updates ) > 0:
+            
+            service_keys_to_content_updates = { CC.COMBINED_LOCAL_FILE_SERVICE_KEY : content_updates }
+            
+            HG.client_controller.WriteSynchronous( 'content_updates', service_keys_to_content_updates )
+            
+        
+    
 class RepairFileSystemPanel( ClientGUIScrolledPanels.ManagePanel ):
     
     def __init__( self, parent, missing_locations ):

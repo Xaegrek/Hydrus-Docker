@@ -227,31 +227,45 @@ def ConvertTimeDeltaToPrettyString( seconds ):
     
     if seconds is None:
         
-        return 'month'
+        return 'per month'
         
     
     if seconds > 60:
         
         seconds = int( seconds )
         
-        if seconds > 86400:
+        if seconds >= 86400:
             
             days = seconds / 86400
             hours = ( seconds % 86400 ) / 3600
             
-            result = '%d' % days + ' days'
+            if days == 1:
+                
+                result = '1 day'
+                
+            else:
+                
+                result = '%d' % days + ' days'
+                
             
             if hours > 0:
                 
                 result += ' %d' % hours + ' hours'
                 
             
-        elif seconds > 3600:
+        elif seconds >= 3600:
             
             hours = seconds / 3600
             minutes = ( seconds % 3600 ) / 60
             
-            result = '%d' % hours + ' hours'
+            if hours == 1:
+                
+                result = '1 hour'
+                
+            else:
+                
+                result = '%d' % hours + ' hours'
+                
             
             if minutes > 0:
                 
@@ -274,6 +288,10 @@ def ConvertTimeDeltaToPrettyString( seconds ):
     elif seconds > 1:
         
         result = '%.1f' % seconds + ' seconds'
+        
+    elif seconds == 1:
+        
+        result = '1 second'
         
     elif seconds > 0.1:
         
@@ -541,13 +559,24 @@ def ConvertTimeToPrettyTime( secs ):
     
     return time.strftime( '%H:%M:%S', time.gmtime( secs ) )
     
+def ConvertUglyNamespaceToPrettyString( namespace ):
+    
+    if namespace is None or namespace == '':
+        
+        return 'no namespace'
+        
+    else:
+        
+        return namespace
+        
+    
 def ConvertUglyNamespacesToPrettyStrings( namespaces ):
     
-    result = [ namespace for namespace in namespaces if namespace != '' and namespace is not None ]
+    namespaces = list( namespaces )
     
-    result.sort()
+    namespaces.sort()
     
-    if '' in namespaces or None in namespaces: result.insert( 0, 'no namespace' )
+    result = [ ConvertUglyNamespaceToPrettyString( namespace ) for namespace in namespaces ]
     
     return result
     
@@ -604,12 +633,6 @@ def GenerateKey():
     
     return os.urandom( HC.HYDRUS_KEY_LENGTH )
     
-def GetEmptyDataDict():
-    
-    data = collections.defaultdict( default_dict_list )
-    
-    return data
-    
 def Get64BitHammingDistance( phash1, phash2 ):
     
     # old way of doing this was:
@@ -633,12 +656,43 @@ def Get64BitHammingDistance( phash1, phash2 ):
     
     return n
     
-def GetNow(): return int( time.time() )
-
+def GetEmptyDataDict():
+    
+    data = collections.defaultdict( default_dict_list )
+    
+    return data
+    
+def GetHideTerminalSubprocessStartupInfo():
+    
+    if HC.PLATFORM_WINDOWS:
+        
+        # This suppresses the terminal window that tends to pop up when calling ffmpeg or whatever
+        
+        startupinfo = subprocess.STARTUPINFO()
+        
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        
+    else:
+        
+        startupinfo = None
+        
+    
+    return startupinfo
+    
+def GetNow():
+    
+    return int( time.time() )
+    
 def GetNowPrecise():
     
-    if HC.PLATFORM_WINDOWS: return time.clock()
-    else: return time.time()
+    if HC.PLATFORM_WINDOWS:
+        
+        return time.clock()
+        
+    else:
+        
+        return time.time()
+        
     
 def GetSiblingProcessPorts( db_path, instance ):
     
@@ -689,23 +743,6 @@ def GetSiblingProcessPorts( db_path, instance ):
         
     
     return None
-    
-def GetSubprocessStartupInfo():
-    
-    if HC.PLATFORM_WINDOWS:
-        
-        # This suppresses the terminal window that tends to pop up when calling ffmpeg or whatever
-        
-        startupinfo = subprocess.STARTUPINFO()
-        
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        
-    else:
-        
-        startupinfo = None
-        
-    
-    return startupinfo
     
 def IntelligentMassIntersect( sets_to_reduce ):
     
@@ -873,33 +910,47 @@ def PrintException( e, do_wait = True ):
     
 ShowException = PrintException
 
-def Profile( summary, code, g, l ):
+def Profile( summary, code, g, l, min_duration_ms = 20 ):
     
     profile = cProfile.Profile()
     
+    started = GetNowPrecise()
+    
     profile.runctx( code, g, l )
     
-    output = cStringIO.StringIO()
+    finished = GetNowPrecise()
     
-    stats = pstats.Stats( profile, stream = output )
+    if finished - started > min_duration_ms / 1000.0:
+        
+        output = cStringIO.StringIO()
+        
+        stats = pstats.Stats( profile, stream = output )
+        
+        stats.strip_dirs()
+        
+        stats.sort_stats( 'tottime' )
+        
+        output.write( 'Stats' )
+        output.write( os.linesep * 2 )
+        
+        stats.print_stats()
+        
+        output.write( 'Callers' )
+        output.write( os.linesep * 2 )
+        
+        stats.print_callers()
+        
+        output.seek( 0 )
+        
+        details = output.read()
+        
+    else:
+        
+        details = 'It took less than ' + ConvertIntToPrettyString( min_duration_ms ) + 'ms.' + os.linesep * 2
+        
     
-    stats.strip_dirs()
+    HG.controller.PrintProfile( summary, details )
     
-    stats.sort_stats( 'tottime' )
-    
-    output.write( 'Stats' )
-    output.write( os.linesep * 2 )
-    
-    stats.print_stats()
-    
-    output.write( 'Callers' )
-    output.write( os.linesep * 2 )
-    
-    stats.print_callers()
-    
-    output.seek( 0 )
-    
-    HG.controller.PrintProfile( summary, output.read() )
     
 def RandomPop( population ):
     
@@ -1291,9 +1342,13 @@ class Account( HydrusYAMLBase ):
     
     def MakeStale( self ): self._info[ 'fresh_timestamp' ] = 0
     
-    def RequestMade( self, num_bytes ):
+    def ReportDataUsed( self, num_bytes ):
         
         self._info[ 'used_bytes' ] += num_bytes
+        
+    
+    def ReportRequestUsed( self ):
+        
         self._info[ 'used_requests' ] += 1
         
     
@@ -1506,7 +1561,9 @@ class ContentUpdate( object ):
                 
             elif self._action == HC.CONTENT_UPDATE_ADD:
                 
-                hash = self._row[0]
+                ( file_info_manager, timestamp ) = self._row
+                
+                hash = file_info_manager.GetHash()
                 
                 hashes = { hash }
                 
@@ -1692,170 +1749,6 @@ class JobDatabase( object ):
         return self._type + ' ' + self._action
         
     
-class ServerToClientContentUpdatePackage( HydrusSerialisable.SerialisableBase ):
-    
-    SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_SERVER_TO_CLIENT_CONTENT_UPDATE_PACKAGE
-    SERIALISABLE_VERSION = 1
-    
-    def __init__( self ):
-        
-        HydrusSerialisable.SerialisableBase.__init__( self )
-        
-        self._content_data = {}
-        
-        self._hash_ids_to_hashes = {}
-        
-    
-    def _GetSerialisableInfo( self ):
-        
-        serialisable_content_data = []
-        
-        for ( data_type, actions_dict ) in self._content_data.items():
-            
-            serialisable_actions_dict = []
-            
-            for ( action, rows ) in actions_dict.items():
-                
-                serialisable_actions_dict.append( ( action, rows ) )
-                
-            
-            serialisable_content_data.append( ( data_type, serialisable_actions_dict ) )
-            
-        
-        serialisable_hashes = [ ( hash_id, hash.encode( 'hex' ) ) for ( hash_id, hash ) in self._hash_ids_to_hashes.items() ]
-        
-        return ( serialisable_content_data, serialisable_hashes )
-        
-    
-    def _InitialiseFromSerialisableInfo( self, serialisable_info ):
-        
-        ( serialisable_content_data, serialisable_hashes ) = serialisable_info
-        
-        self._content_data = {}
-        
-        for ( data_type, serialisable_actions_dict ) in serialisable_content_data:
-            
-            actions_dict = {}
-            
-            for ( action, rows ) in serialisable_actions_dict:
-                
-                actions_dict[ action ] = rows
-                
-            
-            self._content_data[ data_type ] = actions_dict
-            
-        
-        self._hash_ids_to_hashes = { hash_id : hash.decode( 'hex' ) for ( hash_id, hash ) in serialisable_hashes }
-        
-    
-    def AddContentData( self, data_type, action, rows, hash_ids_to_hashes ):
-        
-        if data_type not in self._content_data:
-            
-            self._content_data[ data_type ] = {}
-            
-        
-        if action not in self._content_data[ data_type ]:
-            
-            self._content_data[ data_type ][ action ] = []
-            
-        
-        self._content_data[ data_type ][ action ].extend( rows )
-        
-        self._hash_ids_to_hashes.update( hash_ids_to_hashes )
-        
-    
-    def GetContentDataIterator( self, data_type, action ):
-        
-        if data_type not in self._content_data or action not in self._content_data[ data_type ]: return ()
-        
-        data = self._content_data[ data_type ][ action ]
-        
-        if data_type == HC.CONTENT_TYPE_FILES:
-            
-            if action == HC.CONTENT_UPDATE_ADD: return ( ( self._hash_ids_to_hashes[ hash_id ], size, mime, timestamp, width, height, duration, num_frames, num_words ) for ( hash_id, size, mime, timestamp, width, height, duration, num_frames, num_words ) in data )
-            else: return ( ( self._hash_ids_to_hashes[ hash_id ], ) for hash_id in data )
-            
-        elif data_type == HC.CONTENT_TYPE_MAPPINGS: return ( ( tag, [ self._hash_ids_to_hashes[ hash_id ] for hash_id in hash_ids ] ) for ( tag, hash_ids ) in data )
-        else: return data.__iter__()
-        
-    
-    def GetNumRows( self ):
-        
-        num = 0
-        
-        for data_type in self._content_data:
-            
-            for action in self._content_data[ data_type ]:
-                
-                data = self._content_data[ data_type ][ action ]
-                
-                if data_type == HC.CONTENT_TYPE_MAPPINGS:
-                    
-                    for ( tag, hash_ids ) in data:
-                        
-                        num += len( hash_ids )
-                        
-                    
-                else: num += len( data )
-                
-            
-        
-        return num
-        
-    
-    def IterateContentUpdateChunks( self, chunk_weight = 1250 ):
-        
-        data_types = [ HC.CONTENT_TYPE_FILES, HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_TYPE_TAG_SIBLINGS, HC.CONTENT_TYPE_TAG_PARENTS ]
-        actions = [ HC.CONTENT_UPDATE_ADD, HC.CONTENT_UPDATE_DELETE ]
-        
-        content_updates = []
-        weight = 0
-        
-        for ( data_type, action ) in itertools.product( data_types, actions ):
-            
-            for row in self.GetContentDataIterator( data_type, action ):
-                
-                content_update = ContentUpdate( data_type, action, row )
-                
-                weight += content_update.GetWeight()
-                content_updates.append( content_update )
-                
-                if weight > chunk_weight:
-                    
-                    yield ( content_updates, weight )
-                    
-                    content_updates = []
-                    weight = 0
-                    
-                
-            
-        
-        if len( content_updates ) > 0:
-            
-            yield ( content_updates, weight )
-            
-        
-    
-    def GetHashes( self ): return set( self._hash_ids_to_hashes.values() )
-    
-    def GetTags( self ):
-        
-        tags = set()
-        
-        tags.update( ( tag for ( tag, hash_ids ) in self.GetContentDataIterator( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_STATUS_CURRENT ) ) )
-        tags.update( ( tag for ( tag, hash_ids ) in self.GetContentDataIterator( HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_STATUS_DELETED ) ) )
-        
-        tags.update( ( old_tag for ( old_tag, new_tag ) in self.GetContentDataIterator( HC.CONTENT_TYPE_TAG_PARENTS, HC.CONTENT_STATUS_CURRENT ) ) )
-        tags.update( ( new_tag for ( old_tag, new_tag ) in self.GetContentDataIterator( HC.CONTENT_TYPE_TAG_SIBLINGS, HC.CONTENT_STATUS_CURRENT ) ) )
-        tags.update( ( old_tag for ( old_tag, new_tag ) in self.GetContentDataIterator( HC.CONTENT_TYPE_TAG_PARENTS, HC.CONTENT_STATUS_DELETED ) ) )
-        tags.update( ( new_tag for ( old_tag, new_tag ) in self.GetContentDataIterator( HC.CONTENT_TYPE_TAG_SIBLINGS, HC.CONTENT_STATUS_DELETED ) ) )
-        
-        return tags
-        
-    
-HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_SERVER_TO_CLIENT_CONTENT_UPDATE_PACKAGE ] = ServerToClientContentUpdatePackage
-
 class ServiceUpdate( object ):
     
     def __init__( self, action, row = None ):

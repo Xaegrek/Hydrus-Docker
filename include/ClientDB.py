@@ -2,6 +2,7 @@ import ClientData
 import ClientDefaults
 import ClientImageHandling
 import ClientMedia
+import ClientNetworking
 import ClientRatings
 import ClientSearch
 import ClientServices
@@ -23,6 +24,7 @@ import HydrusPaths
 import HydrusSerialisable
 import HydrusTagArchive
 import HydrusTags
+import HydrusVideoHandling
 import ClientConstants as CC
 import os
 import psutil
@@ -43,6 +45,14 @@ YAML_DUMP_ID_EXPORT_FOLDER = 6
 YAML_DUMP_ID_SUBSCRIPTION = 7
 YAML_DUMP_ID_LOCAL_BOORU = 8
 
+# Sqlite can handle -( 2 ** 63 ) -> ( 2 ** 63 ) - 1, but the user won't be searching that distance, so np
+MIN_CACHED_INTEGER = -99999999
+MAX_CACHED_INTEGER = 99999999
+
+def CanCacheInteger( num ):
+    
+    return MIN_CACHED_INTEGER <= num and num <= MAX_CACHED_INTEGER
+    
 def ConvertWildcardToSQLiteLikeParameter( wildcard ):
     
     like_param = wildcard.replace( '*', '%' )
@@ -90,11 +100,13 @@ def GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id ):
     
     cache_current_mappings_table_name = 'external_caches.specific_current_mappings_cache_' + suffix
     
+    cache_deleted_mappings_table_name = 'external_caches.specific_deleted_mappings_cache_' + suffix
+    
     cache_pending_mappings_table_name = 'external_caches.specific_pending_mappings_cache_' + suffix
     
     ac_cache_table_name = 'external_caches.specific_ac_cache_' + suffix
     
-    return ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name )
+    return ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name )
     
 def report_content_speed_to_job_key( job_key, rows_done, total_rows, precise_timestamp, num_rows, row_name ):
     
@@ -449,7 +461,7 @@ class DB( HydrusDB.HydrusDB ):
         
         inserts = []
         
-        for ( update_index, update_hashes ) in metadata_slice.IterateUpdateIndicesAndHashes():
+        for ( update_index, update_hashes ) in metadata_slice.GetUpdateIndicesAndHashes():
             
             for update_hash in update_hashes:
                 
@@ -488,8 +500,6 @@ class DB( HydrusDB.HydrusDB ):
         
         job_key.SetVariable( 'popup_text_1', 'closing db' )
         
-        self._Commit()
-        
         self._CloseDBCursor()
         
         try:
@@ -497,6 +507,11 @@ class DB( HydrusDB.HydrusDB ):
             HydrusPaths.MakeSureDirectoryExists( path )
             
             for filename in self._db_filenames.values():
+                
+                if job_key.IsCancelled():
+                    
+                    continue
+                    
                 
                 job_key.SetVariable( 'popup_text_1', 'copying ' + filename )
                 
@@ -506,18 +521,24 @@ class DB( HydrusDB.HydrusDB ):
                 HydrusPaths.MirrorFile( source, dest )
                 
             
-            job_key.SetVariable( 'popup_text_1', 'copying files directory' )
+            def is_cancelled_hook():
+                
+                return job_key.IsCancelled()
+                
+            
+            def text_update_hook( text ):
+                
+                job_key.SetVariable( 'popup_text_1', text )
+                
             
             if os.path.exists( client_files_default ):
                 
-                HydrusPaths.MirrorTree( client_files_default, os.path.join( path, 'client_files' ) )
+                HydrusPaths.MirrorTree( client_files_default, os.path.join( path, 'client_files' ), text_update_hook = text_update_hook, is_cancelled_hook = is_cancelled_hook )
                 
             
         finally:
             
             self._InitDBCursor()
-            
-            self._BeginImmediate()
             
         
         job_key.SetVariable( 'popup_text_1', 'done!' )
@@ -945,14 +966,256 @@ class DB( HydrusDB.HydrusDB ):
         self._c.executemany( 'INSERT INTO shape_vptree ( phash_id, parent_id, radius, inner_id, inner_population, outer_id, outer_population ) VALUES ( ?, ?, ?, ?, ?, ?, ? );', insert_rows )
         
     
+    def _CacheSimilarFilesGetDuplicateHashes( self, file_service_key, hash, duplicate_type ):
+        
+        ( table_join, predicate_string ) = self._CacheSimilarFilesGetDuplicatePairsTableJoinInfo( file_service_key )
+        
+        if hash is None:
+            
+            potential_hash_ids = set()
+            
+            if duplicate_type in ( HC.DUPLICATE_BETTER, HC.DUPLICATE_WORSE ):
+                
+                if duplicate_type == HC.DUPLICATE_BETTER:
+                    
+                    smaller_search_duplicate_type = HC.DUPLICATE_SMALLER_BETTER
+                    larger_search_duplicate_type = HC.DUPLICATE_LARGER_BETTER
+                    
+                elif duplicate_type == HC.DUPLICATE_WORSE:
+                    
+                    smaller_search_duplicate_type = HC.DUPLICATE_LARGER_BETTER
+                    larger_search_duplicate_type = HC.DUPLICATE_SMALLER_BETTER
+                    
+                
+                potential_hash_ids.update( self._STI( self._c.execute( 'SELECT smaller_hash_id FROM ' + table_join + ' WHERE ' + predicate_string + ' AND duplicate_type = ?;', ( smaller_search_duplicate_type, ) ) ) )
+                potential_hash_ids.update( self._STI( self._c.execute( 'SELECT larger_hash_id FROM ' + table_join + ' WHERE ' + predicate_string + ' AND duplicate_type = ?;', ( larger_search_duplicate_type, ) ) ) )
+                
+            else:
+                
+                if duplicate_type == HC.DUPLICATE_BETTER_OR_WORSE:
+                    
+                    search_duplicate_types = ( HC.DUPLICATE_SMALLER_BETTER, HC.DUPLICATE_LARGER_BETTER )
+                    
+                else:
+                    
+                    search_duplicate_types = ( duplicate_type, )
+                    
+                
+                for ( smaller_hash_id, larger_hash_id ) in self._c.execute( 'SELECT smaller_hash_id, larger_hash_id FROM ' + table_join + ' WHERE ' + predicate_string + ' AND duplicate_type IN ' + HydrusData.SplayListForDB( search_duplicate_types ) + ';' ):
+                    
+                    potential_hash_ids.add( smaller_hash_id )
+                    potential_hash_ids.add( larger_hash_id )
+                    
+                
+            
+            if len( potential_hash_ids ) == 0:
+                
+                return set()
+                
+            
+            hash_id = random.choice( list( potential_hash_ids ) )
+            
+        else:
+            
+            hash_id = self._GetHashId( hash )
+            
+        
+        dupe_hash_ids = set()
+        
+        if duplicate_type in ( HC.DUPLICATE_BETTER, HC.DUPLICATE_WORSE ):
+            
+            if duplicate_type == HC.DUPLICATE_BETTER:
+                
+                smaller_search_duplicate_type = HC.DUPLICATE_SMALLER_BETTER
+                larger_search_duplicate_type = HC.DUPLICATE_LARGER_BETTER
+                
+            elif duplicate_type == HC.DUPLICATE_WORSE:
+                
+                smaller_search_duplicate_type = HC.DUPLICATE_LARGER_BETTER
+                larger_search_duplicate_type = HC.DUPLICATE_SMALLER_BETTER
+                
+            
+            dupe_hash_ids.add( hash_id )
+            
+            dupe_hash_ids.update( self._STI( self._c.execute( 'SELECT larger_hash_id FROM ' + table_join + ' WHERE ' + predicate_string + ' AND duplicate_type = ? AND smaller_hash_id = ?;', ( smaller_search_duplicate_type, hash_id ) ) ) )
+            dupe_hash_ids.update( self._STI( self._c.execute( 'SELECT smaller_hash_id FROM ' + table_join + ' WHERE ' + predicate_string + ' AND duplicate_type = ? AND larger_hash_id = ?;', ( larger_search_duplicate_type, hash_id ) ) ) )
+            
+        else:
+            
+            if duplicate_type == HC.DUPLICATE_BETTER_OR_WORSE:
+                
+                search_duplicate_types = ( HC.DUPLICATE_SMALLER_BETTER, HC.DUPLICATE_LARGER_BETTER )
+                
+            else:
+                
+                search_duplicate_types = ( duplicate_type, )
+                
+            
+            for ( smaller_hash_id, larger_hash_id ) in self._c.execute( 'SELECT smaller_hash_id, larger_hash_id FROM ' + table_join + ' WHERE ' + predicate_string + ' AND duplicate_type IN ' + HydrusData.SplayListForDB( search_duplicate_types ) + ' AND ( smaller_hash_id = ? OR larger_hash_id = ? );', ( hash_id, hash_id ) ):
+                
+                dupe_hash_ids.add( smaller_hash_id )
+                dupe_hash_ids.add( larger_hash_id )
+                
+            
+        
+        dupe_hashes = self._GetHashes( dupe_hash_ids )
+        
+        return dupe_hashes
+        
+    
     def _CacheSimilarFilesGetDuplicatePairsTableJoinInfo( self, file_service_key ):
         
-        service_id = self._GetServiceId( file_service_key )
-        
-        table_join = 'duplicate_pairs, current_files AS current_files_smaller, current_files AS current_files_larger ON ( smaller_hash_id = current_files_smaller.hash_id AND larger_hash_id = current_files_larger.hash_id )'
-        predicate_string = 'current_files_smaller.service_id = ' + str( service_id ) + ' AND current_files_larger.service_id = ' + str( service_id )
+        if file_service_key == CC.COMBINED_FILE_SERVICE_KEY:
+            
+            table_join = 'duplicate_pairs'
+            predicate_string = '1=1'
+            
+        else:
+            
+            service_id = self._GetServiceId( file_service_key )
+            
+            table_join = 'duplicate_pairs, current_files AS current_files_smaller, current_files AS current_files_larger ON ( smaller_hash_id = current_files_smaller.hash_id AND larger_hash_id = current_files_larger.hash_id )'
+            predicate_string = 'current_files_smaller.service_id = ' + str( service_id ) + ' AND current_files_larger.service_id = ' + str( service_id )
+            
         
         return ( table_join, predicate_string )
+        
+    
+    def _CacheSimilarFilesGetDupeStatusesToCounts( self, file_service_key, hash ):
+        
+        hash_id = self._GetHashId( hash )
+        
+        ( table_join, predicate_string ) = self._CacheSimilarFilesGetDuplicatePairsTableJoinInfo( file_service_key )
+        
+        counter = collections.Counter()
+        
+        for ( dupe_status, count ) in self._c.execute( 'SELECT duplicate_type, COUNT( * ) FROM ' + table_join + ' WHERE ' + predicate_string + ' AND smaller_hash_id = ? GROUP BY duplicate_type;', ( hash_id, ) ):
+            
+            if dupe_status == HC.DUPLICATE_SMALLER_BETTER:
+                
+                dupe_status = HC.DUPLICATE_BETTER
+                
+            elif dupe_status == HC.DUPLICATE_LARGER_BETTER:
+                
+                dupe_status = HC.DUPLICATE_WORSE
+                
+            
+            counter[ dupe_status ] += count
+            
+        
+        for ( dupe_status, count ) in self._c.execute( 'SELECT duplicate_type, COUNT( * ) FROM ' + table_join + ' WHERE ' + predicate_string + ' AND larger_hash_id = ? GROUP BY duplicate_type;', ( hash_id, ) ):
+            
+            if dupe_status == HC.DUPLICATE_SMALLER_BETTER:
+                
+                dupe_status = HC.DUPLICATE_WORSE
+                
+            elif dupe_status == HC.DUPLICATE_LARGER_BETTER:
+                
+                dupe_status = HC.DUPLICATE_BETTER
+                
+            
+            counter[ dupe_status ] += count
+            
+        
+        if HC.DUPLICATE_BETTER in counter and HC.DUPLICATE_WORSE in counter:
+            
+            counter[ HC.DUPLICATE_BETTER_OR_WORSE ] += counter[ HC.DUPLICATE_BETTER ] + counter[ HC.DUPLICATE_WORSE ]
+            
+        
+        return counter
+        
+    
+    def _CacheSimilarFilesGetHashIdsFromDuplicatePredicate( self, file_service_key, operator, num_relationships, dupe_type ):
+        
+        ( table_join, predicate_string ) = self._CacheSimilarFilesGetDuplicatePairsTableJoinInfo( file_service_key )
+        
+        hash_ids_to_counts = collections.Counter()
+        
+        if dupe_type == HC.DUPLICATE_BETTER_OR_WORSE:
+            
+            smaller_duplicate_predicate_string = 'duplicate_type IN ( ' + str( HC.DUPLICATE_SMALLER_BETTER ) + ', ' + str( HC.DUPLICATE_LARGER_BETTER ) + ' )'
+            larger_duplicate_predicate_string = smaller_duplicate_predicate_string
+            
+        elif dupe_type == HC.DUPLICATE_BETTER:
+            
+            smaller_duplicate_predicate_string = 'duplicate_type = ' + str( HC.DUPLICATE_SMALLER_BETTER )
+            larger_duplicate_predicate_string = 'duplicate_type = ' + str( HC.DUPLICATE_LARGER_BETTER )
+            
+        elif dupe_type == HC.DUPLICATE_WORSE:
+            
+            smaller_duplicate_predicate_string = 'duplicate_type = ' + str( HC.DUPLICATE_LARGER_BETTER )
+            larger_duplicate_predicate_string = 'duplicate_type = ' + str( HC.DUPLICATE_SMALLER_BETTER )
+            
+        else:
+            
+            smaller_duplicate_predicate_string = 'duplicate_type = ' + str( dupe_type )
+            larger_duplicate_predicate_string = 'duplicate_type = ' + str( dupe_type )
+            
+        
+        smaller_query = 'SELECT smaller_hash_id, COUNT( * ) FROM ' + table_join + ' WHERE ' + predicate_string + ' AND ' + smaller_duplicate_predicate_string + ' GROUP BY smaller_hash_id;'
+        larger_query = 'SELECT larger_hash_id, COUNT( * ) FROM ' + table_join + ' WHERE ' + predicate_string + ' AND ' + larger_duplicate_predicate_string + ' GROUP BY larger_hash_id;'
+        
+        for ( hash_id, count ) in self._c.execute( smaller_query ):
+            
+            hash_ids_to_counts[ hash_id ] += count
+            
+        
+        for ( hash_id, count ) in self._c.execute( larger_query ):
+            
+            hash_ids_to_counts[ hash_id ] += count
+            
+        
+        if operator == u'\u2248':
+            
+            lower_bound = 0.8 * num_relationships
+            upper_bound = 1.2 * num_relationships
+            
+            def filter_func( ( hash_id, count ) ):
+                
+                return lower_bound < count and count < upper_bound
+                
+            
+        elif operator == '<':
+            
+            def filter_func( ( hash_id, count ) ):
+                
+                return count < num_relationships
+                
+            
+        elif operator == '>':
+            
+            def filter_func( ( hash_id, count ) ):
+                
+                return count > num_relationships
+                
+            
+        elif operator == '=':
+            
+            def filter_func( ( hash_id, count ) ):
+                
+                return count == num_relationships
+                
+            
+        
+        hash_ids = { hash_id for ( hash_id, count ) in filter( filter_func, hash_ids_to_counts.items() ) }
+        
+        return hash_ids
+        
+    
+    def _CacheSimilarFilesGetMaintenanceStatus( self, file_service_key ):
+        
+        ( num_phashes_to_regen, ) = self._c.execute( 'SELECT COUNT( * ) FROM shape_maintenance_phash_regen;' ).fetchone()
+        ( num_branches_to_regen, ) = self._c.execute( 'SELECT COUNT( * ) FROM shape_maintenance_branch_regen;' ).fetchone()
+        
+        searched_distances_to_count = collections.Counter( dict( self._c.execute( 'SELECT searched_distance, COUNT( * ) FROM shape_search_cache GROUP BY searched_distance;' ) ) )
+        
+        ( table_join, predicate_string ) = self._CacheSimilarFilesGetDuplicatePairsTableJoinInfo( file_service_key )
+        
+        duplicate_types_to_count = collections.Counter( dict( self._c.execute( 'SELECT duplicate_type, COUNT( * ) FROM ' + table_join + ' WHERE ' + predicate_string + ' GROUP BY duplicate_type;' ) ) )
+        
+        duplicate_types_to_count[ HC.DUPLICATE_BETTER ] = duplicate_types_to_count[ HC.DUPLICATE_SMALLER_BETTER ] + duplicate_types_to_count[ HC.DUPLICATE_LARGER_BETTER ]
+        
+        return ( num_phashes_to_regen, num_branches_to_regen, searched_distances_to_count, duplicate_types_to_count )
         
     
     def _CacheSimilarFilesGetPHashId( self, phash ):
@@ -975,48 +1238,6 @@ class DB( HydrusDB.HydrusDB ):
         return phash_id
         
     
-    def _CacheSimilarFilesGetMaintenanceStatus( self, file_service_key ):
-        
-        ( num_phashes_to_regen, ) = self._c.execute( 'SELECT COUNT( * ) FROM shape_maintenance_phash_regen;' ).fetchone()
-        ( num_branches_to_regen, ) = self._c.execute( 'SELECT COUNT( * ) FROM shape_maintenance_branch_regen;' ).fetchone()
-        
-        searched_distances_to_count = collections.Counter( dict( self._c.execute( 'SELECT searched_distance, COUNT( * ) FROM shape_search_cache GROUP BY searched_distance;' ) ) )
-        
-        ( table_join, predicate_string ) = self._CacheSimilarFilesGetDuplicatePairsTableJoinInfo( file_service_key )
-        
-        duplicate_types_to_count = collections.Counter( dict( self._c.execute( 'SELECT duplicate_type, COUNT( * ) FROM ' + table_join + ' WHERE ' + predicate_string + ' GROUP BY duplicate_type;' ) ) )
-        
-        duplicate_types_to_count[ HC.DUPLICATE_BETTER ] = duplicate_types_to_count[ HC.DUPLICATE_SMALLER_BETTER ] + duplicate_types_to_count[ HC.DUPLICATE_LARGER_BETTER ]
-        
-        return ( num_phashes_to_regen, num_branches_to_regen, searched_distances_to_count, duplicate_types_to_count )
-        
-    
-    def _CacheSimilarFilesGetSomeDupes( self, file_service_key ):
-        
-        ( table_join, predicate_string ) = self._CacheSimilarFilesGetDuplicatePairsTableJoinInfo( file_service_key )
-        
-        result = self._c.execute( 'SELECT smaller_hash_id, larger_hash_id FROM ' + table_join + ' WHERE ' + predicate_string + ' AND duplicate_type = ? ORDER BY RANDOM() LIMIT 1;', ( HC.DUPLICATE_UNKNOWN, ) ).fetchone()
-        
-        if result is None:
-            
-            return set()
-            
-        
-        ( random_hash_id, ) = random.sample( result, 1 ) # either the smaller or larger
-        
-        dupe_hash_ids = set()
-        
-        for ( smaller_hash_id, larger_hash_id ) in self._c.execute( 'SELECT smaller_hash_id, larger_hash_id FROM ' + table_join + ' WHERE ' + predicate_string + ' AND duplicate_type = ? AND ( smaller_hash_id = ? OR larger_hash_id = ? );', ( HC.DUPLICATE_UNKNOWN, random_hash_id, random_hash_id ) ):
-            
-            dupe_hash_ids.add( smaller_hash_id )
-            dupe_hash_ids.add( larger_hash_id )
-            
-        
-        dupe_hashes = self._GetHashes( dupe_hash_ids )
-        
-        return dupe_hashes
-        
-    
     def _CacheSimilarFilesGetUniqueDuplicatePairs( self, service_key, duplicate_type ):
         
         # we need to batch non-intersecting decisions here to keep it simple at the gui-level
@@ -1029,7 +1250,7 @@ class DB( HydrusDB.HydrusDB ):
         existing_node_counter = collections.Counter()
         
         # note this doesn't use the table_join
-        result = self._c.execute( 'SELECT smaller_hash_id, larger_hash_id FROM duplicate_pairs WHERE duplicate_type IN ( ?, ?, ? ) ORDER BY RANDOM() LIMIT 10000;', ( HC.DUPLICATE_SMALLER_BETTER, HC.DUPLICATE_LARGER_BETTER, HC.DUPLICATE_SAME_FILE ) ).fetchall()
+        result = self._c.execute( 'SELECT smaller_hash_id, larger_hash_id FROM duplicate_pairs WHERE duplicate_type IN ( ?, ?, ? ) ORDER BY RANDOM() LIMIT 10000;', ( HC.DUPLICATE_SMALLER_BETTER, HC.DUPLICATE_LARGER_BETTER, HC.DUPLICATE_SAME_QUALITY ) ).fetchall()
         
         for ( smaller_hash_id, larger_hash_id ) in result:
             
@@ -1071,6 +1292,8 @@ class DB( HydrusDB.HydrusDB ):
                 continue
                 
             
+            seen_hash_ids_for_this_master_hash_id = set()
+            
             for pair in master_hash_ids_to_groups[ master_hash_id ]:
                 
                 ( smaller_hash_id, larger_hash_id ) = pair
@@ -1080,8 +1303,8 @@ class DB( HydrusDB.HydrusDB ):
                     continue
                     
                 
-                seen_hash_ids.add( smaller_hash_id )
-                seen_hash_ids.add( larger_hash_id )
+                seen_hash_ids_for_this_master_hash_id.add( smaller_hash_id )
+                seen_hash_ids_for_this_master_hash_id.add( larger_hash_id )
                 
                 pairs_of_hash_ids.append( pair )
                 
@@ -1090,6 +1313,8 @@ class DB( HydrusDB.HydrusDB ):
                     break
                     
                 
+            
+            seen_hash_ids.update( seen_hash_ids_for_this_master_hash_id )
             
             if len( pairs_of_hash_ids ) >= MAX_BATCH_SIZE:
                 
@@ -1163,12 +1388,12 @@ class DB( HydrusDB.HydrusDB ):
                     return
                     
                 
-                text = 'searched ' + HydrusData.ConvertValueRangeToPrettyString( total_done_previously + i, total_num_hash_ids_in_cache ) + ' files, found ' + HydrusData.ConvertIntToPrettyString( pairs_found ) + ' potential duplicate pairs'
-                
-                job_key.SetVariable( 'popup_text_1', text )
-                job_key.SetVariable( 'popup_gauge_1', ( total_done_previously + i, total_num_hash_ids_in_cache ) )
-                
-                if i % 100 == 0:
+                if i % 25 == 0:
+                    
+                    text = 'searched ' + HydrusData.ConvertValueRangeToPrettyString( total_done_previously + i, total_num_hash_ids_in_cache ) + ' files'
+                    
+                    job_key.SetVariable( 'popup_text_1', text )
+                    job_key.SetVariable( 'popup_gauge_1', ( total_done_previously + i, total_num_hash_ids_in_cache ) )
                     
                     HG.client_controller.pub( 'splash_set_status_text', text )
                     
@@ -1206,99 +1431,104 @@ class DB( HydrusDB.HydrusDB ):
             pub_job_key = True
             
         
-        ( total_num_hash_ids_in_cache, ) = self._c.execute( 'SELECT COUNT( * ) FROM shape_search_cache;' ).fetchone()
-        
-        hash_ids = [ hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM shape_maintenance_phash_regen;' ) ]
-        
-        client_files_manager = self._controller.GetClientFilesManager()
-        
-        total_done_previously = total_num_hash_ids_in_cache - len( hash_ids )
-        
-        for ( i, hash_id ) in enumerate( hash_ids ):
+        try:
             
-            job_key.SetVariable( 'popup_title', 'similar files metadata maintenance' )
+            ( total_num_hash_ids_in_cache, ) = self._c.execute( 'SELECT COUNT( * ) FROM shape_search_cache;' ).fetchone()
             
-            if pub_job_key and not job_key_pubbed:
-                
-                self._controller.pub( 'message', job_key )
-                
-                job_key_pubbed = True
-                
+            hash_ids = [ hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM shape_maintenance_phash_regen;' ) ]
             
-            ( i_paused, should_quit ) = job_key.WaitIfNeeded()
+            client_files_manager = self._controller.client_files_manager
             
-            should_stop = stop_time is not None and HydrusData.TimeHasPassed( stop_time )
+            total_done_previously = total_num_hash_ids_in_cache - len( hash_ids )
             
-            if should_quit or should_stop:
+            for ( i, hash_id ) in enumerate( hash_ids ):
                 
-                return
+                job_key.SetVariable( 'popup_title', 'similar files metadata maintenance' )
                 
-            
-            if i % 50 == 0:
-                
-                gc.collect()
-                
-            
-            text = 'regenerating similar file metadata - ' + HydrusData.ConvertValueRangeToPrettyString( total_done_previously + i, total_num_hash_ids_in_cache )
-            
-            HG.client_controller.pub( 'splash_set_status_text', text )
-            job_key.SetVariable( 'popup_text_1', text )
-            job_key.SetVariable( 'popup_gauge_1', ( total_done_previously + i, total_num_hash_ids_in_cache ) )
-            
-            try:
-                
-                hash = self._GetHash( hash_id )
-                mime = self._GetMime( hash_id )
-                
-                if mime in HC.MIMES_WE_CAN_PHASH:
+                if pub_job_key and not job_key_pubbed:
                     
-                    path = client_files_manager.GetFilePath( hash, mime )
+                    self._controller.pub( 'message', job_key )
                     
-                    if mime in ( HC.IMAGE_JPEG, HC.IMAGE_PNG ):
+                    job_key_pubbed = True
+                    
+                
+                ( i_paused, should_quit ) = job_key.WaitIfNeeded()
+                
+                should_stop = stop_time is not None and HydrusData.TimeHasPassed( stop_time )
+                
+                if should_quit or should_stop:
+                    
+                    return
+                    
+                
+                if i % 50 == 0:
+                    
+                    gc.collect()
+                    
+                
+                text = 'regenerating similar file metadata - ' + HydrusData.ConvertValueRangeToPrettyString( total_done_previously + i, total_num_hash_ids_in_cache )
+                
+                HG.client_controller.pub( 'splash_set_status_text', text )
+                job_key.SetVariable( 'popup_text_1', text )
+                job_key.SetVariable( 'popup_gauge_1', ( total_done_previously + i, total_num_hash_ids_in_cache ) )
+                
+                try:
+                    
+                    hash = self._GetHash( hash_id )
+                    mime = self._GetMime( hash_id )
+                    
+                    if mime in HC.MIMES_WE_CAN_PHASH:
                         
-                        try:
+                        path = client_files_manager.GetFilePath( hash, mime )
+                        
+                        if mime in ( HC.IMAGE_JPEG, HC.IMAGE_PNG ):
                             
-                            phashes = ClientImageHandling.GenerateShapePerceptualHashes( path )
-                            
-                        except Exception as e:
-                            
-                            HydrusData.Print( 'Could not generate phashes for ' + path )
-                            
-                            HydrusData.PrintException( e )
-                            
-                            phashes = []
+                            try:
+                                
+                                phashes = ClientImageHandling.GenerateShapePerceptualHashes( path )
+                                
+                            except Exception as e:
+                                
+                                HydrusData.Print( 'Could not generate phashes for ' + path )
+                                
+                                HydrusData.PrintException( e )
+                                
+                                phashes = []
+                                
                             
                         
+                    else:
+                        
+                        phashes = []
+                        
                     
-                else:
+                except HydrusExceptions.FileMissingException:
                     
                     phashes = []
                     
                 
-            except HydrusExceptions.FileMissingException:
+                existing_phash_ids = { phash_id for ( phash_id, ) in self._c.execute( 'SELECT phash_id FROM shape_perceptual_hash_map WHERE hash_id = ?;', ( hash_id, ) ) }
                 
-                phashes = []
+                correct_phash_ids = self._CacheSimilarFilesAssociatePHashes( hash_id, phashes )
                 
-            
-            existing_phash_ids = { phash_id for ( phash_id, ) in self._c.execute( 'SELECT phash_id FROM shape_perceptual_hash_map WHERE hash_id = ?;', ( hash_id, ) ) }
-            
-            correct_phash_ids = self._CacheSimilarFilesAssociatePHashes( hash_id, phashes )
-            
-            incorrect_phash_ids = existing_phash_ids.difference( correct_phash_ids )
-            
-            if len( incorrect_phash_ids ) > 0:
+                incorrect_phash_ids = existing_phash_ids.difference( correct_phash_ids )
                 
-                self._CacheSimilarFilesDisassociatePHashes( hash_id, incorrect_phash_ids )
+                if len( incorrect_phash_ids ) > 0:
+                    
+                    self._CacheSimilarFilesDisassociatePHashes( hash_id, incorrect_phash_ids )
+                    
+                
+                self._c.execute( 'DELETE FROM shape_maintenance_phash_regen WHERE hash_id = ?;', ( hash_id, ) )
                 
             
-            self._c.execute( 'DELETE FROM shape_maintenance_phash_regen WHERE hash_id = ?;', ( hash_id, ) )
+        finally:
             
-        
-        job_key.SetVariable( 'popup_text_1', 'done!' )
-        job_key.DeleteVariable( 'popup_gauge_1' )
-        
-        job_key.Finish()
-        job_key.Delete( 30 )
+            job_key.SetVariable( 'popup_text_1', 'done!' )
+            job_key.DeleteVariable( 'popup_gauge_1' )
+            
+            job_key.Finish()
+            job_key.Delete( 5 )
+            
         
     
     def _CacheSimilarFilesMaintainTree( self, job_key = None, stop_time = None, abandon_if_other_work_to_do = False ):
@@ -1323,56 +1553,61 @@ class DB( HydrusDB.HydrusDB ):
             pub_job_key = True
             
         
-        job_key.SetVariable( 'popup_title', 'similar files metadata maintenance' )
-        
-        rebalance_phash_ids = [ phash_id for ( phash_id, ) in self._c.execute( 'SELECT phash_id FROM shape_maintenance_branch_regen;' ) ]
-        
-        num_to_do = len( rebalance_phash_ids )
-        
-        while len( rebalance_phash_ids ) > 0:
+        try:
             
-            if pub_job_key and not job_key_pubbed:
-                
-                self._controller.pub( 'message', job_key )
-                
-                job_key_pubbed = True
-                
-            
-            ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-            
-            should_stop = stop_time is not None and HydrusData.TimeHasPassed( stop_time )
-            
-            if should_quit or should_stop:
-                
-                return
-                
-            
-            num_done = num_to_do - len( rebalance_phash_ids )
-            
-            text = 'rebalancing similar file metadata - ' + HydrusData.ConvertValueRangeToPrettyString( num_done, num_to_do )
-            
-            HG.client_controller.pub( 'splash_set_status_text', text )
-            job_key.SetVariable( 'popup_text_1', text )
-            job_key.SetVariable( 'popup_gauge_1', ( num_done, num_to_do ) )
-            
-            with HydrusDB.TemporaryIntegerTable( self._c, rebalance_phash_ids, 'phash_id' ) as temp_table_name:
-                
-                # can't turn this into selectfromlist due to the order clause. we need to do this all at once
-                
-                ( biggest_phash_id, ) = self._c.execute( 'SELECT phash_id FROM shape_vptree NATURAL JOIN ' + temp_table_name + ' ORDER BY inner_population + outer_population DESC;' ).fetchone()
-                
-            
-            self._CacheSimilarFilesRegenerateBranch( job_key, biggest_phash_id )
+            job_key.SetVariable( 'popup_title', 'similar files metadata maintenance' )
             
             rebalance_phash_ids = [ phash_id for ( phash_id, ) in self._c.execute( 'SELECT phash_id FROM shape_maintenance_branch_regen;' ) ]
             
-        
-        job_key.SetVariable( 'popup_text_1', 'done!' )
-        job_key.DeleteVariable( 'popup_gauge_1' )
-        job_key.DeleteVariable( 'popup_text_2' ) # used in the regenbranch call
-        
-        job_key.Finish()
-        job_key.Delete( 30 )
+            num_to_do = len( rebalance_phash_ids )
+            
+            while len( rebalance_phash_ids ) > 0:
+                
+                if pub_job_key and not job_key_pubbed:
+                    
+                    self._controller.pub( 'message', job_key )
+                    
+                    job_key_pubbed = True
+                    
+                
+                ( i_paused, should_quit ) = job_key.WaitIfNeeded()
+                
+                should_stop = stop_time is not None and HydrusData.TimeHasPassed( stop_time )
+                
+                if should_quit or should_stop:
+                    
+                    return
+                    
+                
+                num_done = num_to_do - len( rebalance_phash_ids )
+                
+                text = 'rebalancing similar file metadata - ' + HydrusData.ConvertValueRangeToPrettyString( num_done, num_to_do )
+                
+                HG.client_controller.pub( 'splash_set_status_text', text )
+                job_key.SetVariable( 'popup_text_1', text )
+                job_key.SetVariable( 'popup_gauge_1', ( num_done, num_to_do ) )
+                
+                with HydrusDB.TemporaryIntegerTable( self._c, rebalance_phash_ids, 'phash_id' ) as temp_table_name:
+                    
+                    # can't turn this into selectfromlist due to the order clause. we need to do this all at once
+                    
+                    ( biggest_phash_id, ) = self._c.execute( 'SELECT phash_id FROM shape_vptree NATURAL JOIN ' + temp_table_name + ' ORDER BY inner_population + outer_population DESC;' ).fetchone()
+                    
+                
+                self._CacheSimilarFilesRegenerateBranch( job_key, biggest_phash_id )
+                
+                rebalance_phash_ids = [ phash_id for ( phash_id, ) in self._c.execute( 'SELECT phash_id FROM shape_maintenance_branch_regen;' ) ]
+                
+            
+        finally:
+            
+            job_key.SetVariable( 'popup_text_1', 'done!' )
+            job_key.DeleteVariable( 'popup_gauge_1' )
+            job_key.DeleteVariable( 'popup_text_2' ) # used in the regenbranch call
+            
+            job_key.Finish()
+            job_key.Delete( 5 )
+            
         
     
     def _CacheSimilarFilesMaintenanceDue( self ):
@@ -1706,185 +1941,215 @@ class DB( HydrusDB.HydrusDB ):
         return similar_hash_ids
         
     
-    def _CacheSimilarFilesSetDuplicatePairStatus( self, duplicate_status, hash_a, hash_b, merge_options = None ):
+    def _CacheSimilarFilesSetDuplicatePairStatus( self, pair_info ):
         
-        if duplicate_status == HC.DUPLICATE_WORSE:
+        for ( duplicate_type, hash_a, hash_b, list_of_service_keys_to_content_updates ) in pair_info:
             
-            t = hash_a
-            hash_a = hash_b
-            hash_b = t
-            
-            duplicate_status = HC.DUPLICATE_BETTER
-            
-        
-        hash_id_a = self._GetHashId( hash_a )
-        hash_id_b = self._GetHashId( hash_b )
-        
-        self._CacheSimilarFilesSetDuplicatePairStatusSingleRow( duplicate_status, hash_id_a, hash_id_b, merge_options )
-        
-        if duplicate_status == HC.DUPLICATE_BETTER:
-            
-            # anything better than A is now better than B
-            # i.e. for all X for which X > A, set X > B
-            # anything worse than B is now worse than A
-            # i.e. for all X for which B > X, set A > X
-            
-            better_than_a = set()
-            
-            better_than_a.update( self._STI( self._c.execute( 'SELECT smaller_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND larger_hash_id = ?;', ( HC.DUPLICATE_SMALLER_BETTER, hash_id_a ) ) ) )
-            better_than_a.update( self._STI( self._c.execute( 'SELECT larger_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND smaller_hash_id = ?;', ( HC.DUPLICATE_LARGER_BETTER, hash_id_a ) ) ) )
-            
-            for better_than_a_hash_id in better_than_a:
+            for service_keys_to_content_updates in list_of_service_keys_to_content_updates:
                 
-                self._CacheSimilarFilesSetDuplicatePairStatusSingleRow( HC.DUPLICATE_BETTER, better_than_a_hash_id, hash_id_b, merge_options )
+                self._ProcessContentUpdates( service_keys_to_content_updates )
                 
             
-            worse_than_b = set()
-            
-            worse_than_b.update( self._STI( self._c.execute( 'SELECT smaller_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND larger_hash_id = ?;', ( HC.DUPLICATE_LARGER_BETTER, hash_id_b ) ) ) )
-            worse_than_b.update( self._STI( self._c.execute( 'SELECT larger_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND smaller_hash_id = ?;', ( HC.DUPLICATE_SMALLER_BETTER, hash_id_b ) ) ) )
-            
-            for worse_than_b_hash_id in worse_than_b:
+            if duplicate_type is None:
                 
-                self._CacheSimilarFilesSetDuplicatePairStatusSingleRow( HC.DUPLICATE_BETTER, hash_id_a, worse_than_b_hash_id, merge_options )
+                hash_id_a = self._GetHashId( hash_a )
+                hash_id_b = self._GetHashId( hash_b )
+                
+                smaller_hash_id = min( hash_id_a, hash_id_b )
+                larger_hash_id = max( hash_id_a, hash_id_b )
+                
+                self._c.execute( 'DELETE FROM duplicate_pairs WHERE smaller_hash_id = ? AND larger_hash_id = ?;', ( smaller_hash_id, larger_hash_id ) )
+                
+                return
                 
             
-        
-        # do a sync for better dupes that applies not_dupe and alternate relationships across better-than groups
-        
-        self._CacheSimilarFilesSyncSameFileDuplicates( hash_id_a, merge_options )
-        self._CacheSimilarFilesSyncSameFileDuplicates( hash_id_b, merge_options )
+            if duplicate_type == HC.DUPLICATE_WORSE:
+                
+                ( hash_a, hash_b ) = ( hash_b, hash_a )
+                
+                duplicate_type = HC.DUPLICATE_BETTER
+                
+            
+            hash_id_a = self._GetHashId( hash_a )
+            hash_id_b = self._GetHashId( hash_b )
+            
+            self._CacheSimilarFilesSetDuplicatePairStatusSingleRow( duplicate_type, hash_id_a, hash_id_b )
+            
+            if duplicate_type == HC.DUPLICATE_BETTER:
+                
+                # anything better than A is now better than B
+                # i.e. for all X for which X > A, set X > B
+                # anything worse than B is now worse than A
+                # i.e. for all X for which B > X, set A > X
+                
+                better_than_a = set()
+                
+                better_than_a.update( self._STI( self._c.execute( 'SELECT smaller_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND larger_hash_id = ?;', ( HC.DUPLICATE_SMALLER_BETTER, hash_id_a ) ) ) )
+                better_than_a.update( self._STI( self._c.execute( 'SELECT larger_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND smaller_hash_id = ?;', ( HC.DUPLICATE_LARGER_BETTER, hash_id_a ) ) ) )
+                
+                for better_than_a_hash_id in better_than_a:
+                    
+                    self._CacheSimilarFilesSetDuplicatePairStatusSingleRow( HC.DUPLICATE_BETTER, better_than_a_hash_id, hash_id_b )
+                    
+                
+                worse_than_b = set()
+                
+                worse_than_b.update( self._STI( self._c.execute( 'SELECT smaller_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND larger_hash_id = ?;', ( HC.DUPLICATE_LARGER_BETTER, hash_id_b ) ) ) )
+                worse_than_b.update( self._STI( self._c.execute( 'SELECT larger_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND smaller_hash_id = ?;', ( HC.DUPLICATE_SMALLER_BETTER, hash_id_b ) ) ) )
+                
+                for worse_than_b_hash_id in worse_than_b:
+                    
+                    self._CacheSimilarFilesSetDuplicatePairStatusSingleRow( HC.DUPLICATE_BETTER, hash_id_a, worse_than_b_hash_id )
+                    
+                
+            
+            if duplicate_type != HC.DUPLICATE_UNKNOWN:
+                
+                self._CacheSimilarFilesSyncSameQualityDuplicates( hash_id_a )
+                self._CacheSimilarFilesSyncSameQualityDuplicates( hash_id_b )
+                
+                self._CacheSimilarFilesSyncBetterWorseDuplicates( hash_id_a )
+                self._CacheSimilarFilesSyncBetterWorseDuplicates( hash_id_b )
+                
+            
         
     
-    def _CacheSimilarFilesSetDuplicatePairStatusSingleRow( self, duplicate_status, hash_id_a, hash_id_b, merge_options, only_update_given_previous_status = None ):
+    def _CacheSimilarFilesSetDuplicatePairStatusSingleRow( self, duplicate_type, hash_id_a, hash_id_b, only_update_given_previous_status = None ):
         
         smaller_hash_id = min( hash_id_a, hash_id_b )
         larger_hash_id = max( hash_id_a, hash_id_b )
         
-        if duplicate_status == HC.DUPLICATE_BETTER:
+        if duplicate_type == HC.DUPLICATE_BETTER:
             
             if smaller_hash_id == hash_id_a:
                 
-                duplicate_status = HC.DUPLICATE_SMALLER_BETTER
+                duplicate_type = HC.DUPLICATE_SMALLER_BETTER
                 
             else:
                 
-                duplicate_status = HC.DUPLICATE_LARGER_BETTER
+                duplicate_type = HC.DUPLICATE_LARGER_BETTER
                 
             
-        elif duplicate_status == HC.DUPLICATE_WORSE:
+        elif duplicate_type == HC.DUPLICATE_WORSE:
             
             if smaller_hash_id == hash_id_a:
                 
-                duplicate_status = HC.DUPLICATE_LARGER_BETTER
+                duplicate_type = HC.DUPLICATE_LARGER_BETTER
                 
             else:
                 
-                duplicate_status = HC.DUPLICATE_SMALLER_BETTER
+                duplicate_type = HC.DUPLICATE_SMALLER_BETTER
                 
             
-        
-        change_occured = False
         
         if only_update_given_previous_status is None:
             
-            result = self._c.execute( 'SELECT 1 FROM duplicate_pairs WHERE smaller_hash_id = ? AND larger_hash_id = ? AND duplicate_type = ?;', ( smaller_hash_id, larger_hash_id, duplicate_status ) ).fetchone()
+            result = self._c.execute( 'SELECT 1 FROM duplicate_pairs WHERE smaller_hash_id = ? AND larger_hash_id = ? AND duplicate_type = ?;', ( smaller_hash_id, larger_hash_id, duplicate_type ) ).fetchone()
             
             if result is None: # i.e. we are not needlessly overwriting
                 
-                self._c.execute( 'REPLACE INTO duplicate_pairs ( smaller_hash_id, larger_hash_id, duplicate_type ) VALUES ( ?, ?, ? );', ( smaller_hash_id, larger_hash_id, duplicate_status ) )
-                
-                change_occured = True
+                self._c.execute( 'REPLACE INTO duplicate_pairs ( smaller_hash_id, larger_hash_id, duplicate_type ) VALUES ( ?, ?, ? );', ( smaller_hash_id, larger_hash_id, duplicate_type ) )
                 
             
         else:
             
-            self._c.execute( 'UPDATE duplicate_pairs SET duplicate_type = ? WHERE smaller_hash_id = ? AND larger_hash_id = ? AND duplicate_type = ?;', ( duplicate_status, smaller_hash_id, larger_hash_id, only_update_given_previous_status ) )
-            
-            if self._GetRowCount() > 0:
-                
-                change_occured = True
-                
-            
-        
-        if change_occured and merge_options is not None:
-            
-            # follow merge_options
-            
-            # if better:
-            
-            # do tags
-            
-            # do ratings
-            
-            # delete file
-            
-            # if same:
-            
-            # do tags
-            
-            # do ratings
-            
-            pass
+            self._c.execute( 'UPDATE duplicate_pairs SET duplicate_type = ? WHERE smaller_hash_id = ? AND larger_hash_id = ? AND duplicate_type = ?;', ( duplicate_type, smaller_hash_id, larger_hash_id, only_update_given_previous_status ) )
             
         
     
-    def _CacheSimilarFilesSyncSameFileDuplicates( self, hash_id, merge_options ):
+    def _CacheSimilarFilesSyncBetterWorseDuplicates( self, hash_id ):
         
-        # for every known relationship our file has, that should be replicated to all of its 'same file' siblings
+        # better/worse files are inherantly 'the same' in some very close way, so 'not dupe' and 'alternate' relationships should apply to them all the same
+        # so, replicate all of our file's 'not dupe' and 'alternate' relationships to all of its 'better/worse' siblings
         
-        all_relationships = set()
+        applicable_relationships = set()
         
-        for ( smaller_hash_id, duplicate_status ) in self._c.execute( 'SELECT smaller_hash_id, duplicate_type FROM duplicate_pairs WHERE duplicate_type != ? AND larger_hash_id = ?;', ( HC.DUPLICATE_UNKNOWN, hash_id ) ):
+        for ( smaller_hash_id, duplicate_type ) in self._c.execute( 'SELECT smaller_hash_id, duplicate_type FROM duplicate_pairs WHERE duplicate_type IN ( ?, ? ) AND larger_hash_id = ?;', ( HC.DUPLICATE_NOT_DUPLICATE, HC.DUPLICATE_ALTERNATE, hash_id ) ):
             
-            if duplicate_status == HC.DUPLICATE_SMALLER_BETTER:
-                
-                duplicate_status = HC.DUPLICATE_WORSE
-                
-            elif duplicate_status == HC.DUPLICATE_LARGER_BETTER:
-                
-                duplicate_status = HC.DUPLICATE_BETTER
-                
-            
-            all_relationships.add( ( smaller_hash_id, duplicate_status ) )
+            applicable_relationships.add( ( smaller_hash_id, duplicate_type ) )
             
         
-        for ( larger_hash_id, duplicate_status ) in self._c.execute( 'SELECT larger_hash_id, duplicate_type FROM duplicate_pairs WHERE duplicate_type != ? AND smaller_hash_id = ?;', ( HC.DUPLICATE_UNKNOWN, hash_id ) ):
+        for ( larger_hash_id, duplicate_type ) in self._c.execute( 'SELECT larger_hash_id, duplicate_type FROM duplicate_pairs WHERE duplicate_type IN ( ?, ? ) AND smaller_hash_id = ?;', ( HC.DUPLICATE_NOT_DUPLICATE, HC.DUPLICATE_ALTERNATE, hash_id ) ):
             
-            if duplicate_status == HC.DUPLICATE_SMALLER_BETTER:
-                
-                duplicate_status = HC.DUPLICATE_BETTER
-                
-            elif duplicate_status == HC.DUPLICATE_LARGER_BETTER:
-                
-                duplicate_status = HC.DUPLICATE_WORSE
-                
-            
-            all_relationships.add( ( larger_hash_id, duplicate_status ) )
+            applicable_relationships.add( ( larger_hash_id, duplicate_type ) )
             
         
-        all_siblings = set()
+        all_better_worse_siblings = set()
         
-        all_siblings.update( self._STI( self._c.execute( 'SELECT smaller_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND larger_hash_id = ?;', ( HC.DUPLICATE_SAME_FILE, hash_id ) ) ) )
-        all_siblings.update( self._STI( self._c.execute( 'SELECT larger_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND smaller_hash_id = ?;', ( HC.DUPLICATE_SAME_FILE, hash_id ) ) ) )
+        all_better_worse_siblings.update( self._STI( self._c.execute( 'SELECT smaller_hash_id FROM duplicate_pairs WHERE duplicate_type IN ( ?, ? ) AND larger_hash_id = ?;', ( HC.DUPLICATE_SMALLER_BETTER, HC.DUPLICATE_LARGER_BETTER, hash_id ) ) ) )
+        all_better_worse_siblings.update( self._STI( self._c.execute( 'SELECT larger_hash_id FROM duplicate_pairs WHERE duplicate_type IN ( ?, ? ) AND smaller_hash_id = ?;', ( HC.DUPLICATE_SMALLER_BETTER, HC.DUPLICATE_LARGER_BETTER, hash_id ) ) ) )
         
-        for sibling_hash_id in all_siblings:
+        for sibling_hash_id in all_better_worse_siblings:
             
-            for ( other_hash_id, duplicate_status ) in all_relationships:
+            for ( other_hash_id, duplicate_type ) in applicable_relationships:
                 
                 if other_hash_id == sibling_hash_id:
                     
                     continue
                     
                 
-                self._CacheSimilarFilesSetDuplicatePairStatusSingleRow( duplicate_status, sibling_hash_id, other_hash_id, merge_options )
+                self._CacheSimilarFilesSetDuplicatePairStatusSingleRow( duplicate_type, sibling_hash_id, other_hash_id )
+                
+            
+        
+    
+    def _CacheSimilarFilesSyncSameQualityDuplicates( self, hash_id ):
+        
+        # exactly similar files should have exactly the same relationships with other files
+        # so, replicate all of our file's known relationships to all of its 'same file' siblings
+        
+        all_relationships = set()
+        
+        for ( smaller_hash_id, duplicate_type ) in self._c.execute( 'SELECT smaller_hash_id, duplicate_type FROM duplicate_pairs WHERE duplicate_type != ? AND larger_hash_id = ?;', ( HC.DUPLICATE_UNKNOWN, hash_id ) ):
+            
+            if duplicate_type == HC.DUPLICATE_SMALLER_BETTER:
+                
+                duplicate_type = HC.DUPLICATE_WORSE
+                
+            elif duplicate_type == HC.DUPLICATE_LARGER_BETTER:
+                
+                duplicate_type = HC.DUPLICATE_BETTER
+                
+            
+            all_relationships.add( ( smaller_hash_id, duplicate_type ) )
+            
+        
+        for ( larger_hash_id, duplicate_type ) in self._c.execute( 'SELECT larger_hash_id, duplicate_type FROM duplicate_pairs WHERE duplicate_type != ? AND smaller_hash_id = ?;', ( HC.DUPLICATE_UNKNOWN, hash_id ) ):
+            
+            if duplicate_type == HC.DUPLICATE_SMALLER_BETTER:
+                
+                duplicate_type = HC.DUPLICATE_BETTER
+                
+            elif duplicate_type == HC.DUPLICATE_LARGER_BETTER:
+                
+                duplicate_type = HC.DUPLICATE_WORSE
+                
+            
+            all_relationships.add( ( larger_hash_id, duplicate_type ) )
+            
+        
+        all_same_quality_siblings = set()
+        
+        all_same_quality_siblings.update( self._STI( self._c.execute( 'SELECT smaller_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND larger_hash_id = ?;', ( HC.DUPLICATE_SAME_QUALITY, hash_id ) ) ) )
+        all_same_quality_siblings.update( self._STI( self._c.execute( 'SELECT larger_hash_id FROM duplicate_pairs WHERE duplicate_type = ? AND smaller_hash_id = ?;', ( HC.DUPLICATE_SAME_QUALITY, hash_id ) ) ) )
+        
+        for sibling_hash_id in all_same_quality_siblings:
+            
+            for ( other_hash_id, duplicate_type ) in all_relationships:
+                
+                if other_hash_id == sibling_hash_id:
+                    
+                    continue
+                    
+                
+                self._CacheSimilarFilesSetDuplicatePairStatusSingleRow( duplicate_type, sibling_hash_id, other_hash_id )
                 
             
         
     
     def _CacheSpecificMappingsAddFiles( self, file_service_id, tag_service_id, hash_ids ):
         
-        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         self._c.executemany( 'INSERT OR IGNORE INTO ' + cache_files_table_name + ' VALUES ( ? );', ( ( hash_id, ) for hash_id in hash_ids ) )
         
@@ -1900,11 +2165,16 @@ class DB( HydrusDB.HydrusDB ):
             
             current_mapping_ids_dict = HydrusData.BuildKeyToSetDict( current_mapping_ids_raw )
             
+            deleted_mapping_ids_raw = self._c.execute( 'SELECT tag_id, hash_id FROM ' + deleted_mappings_table_name + ' WHERE hash_id IN ' + splayed_group_of_hash_ids + ';' ).fetchall()
+            
+            deleted_mapping_ids_dict = HydrusData.BuildKeyToSetDict( deleted_mapping_ids_raw )
+            
             pending_mapping_ids_raw = self._c.execute( 'SELECT tag_id, hash_id FROM ' + pending_mappings_table_name + ' WHERE hash_id IN ' + splayed_group_of_hash_ids + ';' ).fetchall()
             
             pending_mapping_ids_dict = HydrusData.BuildKeyToSetDict( pending_mapping_ids_raw )
             
             all_ids_seen = set( current_mapping_ids_dict.keys() )
+            all_ids_seen.update( deleted_mapping_ids_dict.keys() )
             all_ids_seen.update( pending_mapping_ids_dict.keys() )
             
             for tag_id in all_ids_seen:
@@ -1917,6 +2187,19 @@ class DB( HydrusDB.HydrusDB ):
                     
                     self._c.executemany( 'INSERT OR IGNORE INTO ' + cache_current_mappings_table_name + ' ( hash_id, tag_id ) VALUES ( ?, ? );', ( ( hash_id, tag_id ) for hash_id in current_hash_ids ) )
                     
+                
+                #
+                
+                deleted_hash_ids = deleted_mapping_ids_dict[ tag_id ]
+                
+                num_deleted = len( deleted_hash_ids )
+                
+                if num_deleted > 0:
+                    
+                    self._c.executemany( 'INSERT OR IGNORE INTO ' + cache_deleted_mappings_table_name + ' ( hash_id, tag_id ) VALUES ( ?, ? );', ( ( hash_id, tag_id ) for hash_id in deleted_hash_ids ) )
+                    
+                
+                #
                 
                 pending_hash_ids = pending_mapping_ids_dict[ tag_id ]
                 
@@ -1944,7 +2227,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsAddMappings( self, file_service_id, tag_service_id, mappings_ids ):
         
-        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         for ( tag_id, hash_ids ) in mappings_ids:
             
@@ -1973,16 +2256,22 @@ class DB( HydrusDB.HydrusDB ):
                     self._c.execute( 'UPDATE ' + ac_cache_table_name + ' SET current_count = current_count + ? WHERE tag_id = ?;', ( num_added, tag_id ) )
                     
                 
+                #
+                
+                self._c.executemany( 'DELETE FROM ' + cache_deleted_mappings_table_name + ' WHERE hash_id = ? AND tag_id = ?;', ( ( hash_id, tag_id ) for hash_id in hash_ids ) )
+                
             
         
     
     def _CacheSpecificMappingsDrop( self, file_service_id, tag_service_id ):
         
-        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         self._c.execute( 'DROP TABLE IF EXISTS ' + cache_files_table_name + ';' )
         
         self._c.execute( 'DROP TABLE IF EXISTS ' + cache_current_mappings_table_name + ';' )
+        
+        self._c.execute( 'DROP TABLE IF EXISTS ' + cache_deleted_mappings_table_name + ';' )
         
         self._c.execute( 'DROP TABLE IF EXISTS ' + cache_pending_mappings_table_name + ';' )
         
@@ -1991,7 +2280,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsDeleteFiles( self, file_service_id, tag_service_id, hash_ids ):
         
-        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         self._c.executemany( 'DELETE FROM ' + cache_files_table_name + ' WHERE hash_id = ?;', ( ( hash_id, ) for hash_id in hash_ids ) )
         
@@ -2005,11 +2294,16 @@ class DB( HydrusDB.HydrusDB ):
             
             current_mapping_ids_dict = HydrusData.BuildKeyToSetDict( current_mapping_ids_raw )
             
+            deleted_mapping_ids_raw = self._c.execute( 'SELECT tag_id, hash_id FROM ' + cache_deleted_mappings_table_name + ' WHERE hash_id IN ' + splayed_group_of_hash_ids + ';' ).fetchall()
+            
+            deleted_mapping_ids_dict = HydrusData.BuildKeyToSetDict( deleted_mapping_ids_raw )
+            
             pending_mapping_ids_raw = self._c.execute( 'SELECT tag_id, hash_id FROM ' + cache_pending_mappings_table_name + ' WHERE hash_id IN ' + splayed_group_of_hash_ids + ';' ).fetchall()
             
             pending_mapping_ids_dict = HydrusData.BuildKeyToSetDict( pending_mapping_ids_raw )
             
             all_ids_seen = set( current_mapping_ids_dict.keys() )
+            all_ids_seen.update( deleted_mapping_ids_dict.keys() )
             all_ids_seen.update( pending_mapping_ids_dict.keys() )
             
             for tag_id in all_ids_seen:
@@ -2022,6 +2316,19 @@ class DB( HydrusDB.HydrusDB ):
                     
                     self._c.executemany( 'DELETE FROM ' + cache_current_mappings_table_name + ' WHERE tag_id = ? AND hash_id = ?;', ( ( tag_id, hash_id ) for hash_id in current_hash_ids ) )
                     
+                
+                #
+                
+                deleted_hash_ids = deleted_mapping_ids_dict[ tag_id ]
+                
+                num_deleted = len( deleted_hash_ids )
+                
+                if num_deleted > 0:
+                    
+                    self._c.executemany( 'DELETE FROM ' + cache_deleted_mappings_table_name + ' WHERE tag_id = ? AND hash_id = ?;', ( ( tag_id, hash_id ) for hash_id in deleted_hash_ids ) )
+                    
+                
+                #
                 
                 pending_hash_ids = pending_mapping_ids_dict[ tag_id ]
                 
@@ -2046,7 +2353,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsDeleteMappings( self, file_service_id, tag_service_id, mappings_ids ):
         
-        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         for ( tag_id, hash_ids ) in mappings_ids:
             
@@ -2065,12 +2372,16 @@ class DB( HydrusDB.HydrusDB ):
                     self._c.execute( 'DELETE FROM ' + ac_cache_table_name + ' WHERE tag_id = ? AND current_count = ? AND pending_count = ?;', ( tag_id, 0, 0 ) )
                     
                 
+                #
+                
+                self._c.executemany( 'INSERT OR IGNORE INTO ' + cache_deleted_mappings_table_name + ' ( hash_id, tag_id ) VALUES ( ?, ? );', ( ( hash_id, tag_id ) for hash_id in hash_ids ) )
+                
             
         
     
     def _CacheSpecificMappingsFilterHashIds( self, file_service_id, tag_service_id, hash_ids ):
         
-        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         select_statement = 'SELECT hash_id FROM ' + cache_files_table_name + ' WHERE hash_id IN %s;'
         
@@ -2079,11 +2390,13 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsGenerate( self, file_service_id, tag_service_id ):
         
-        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         self._c.execute( 'CREATE TABLE ' + cache_files_table_name + ' ( hash_id INTEGER PRIMARY KEY );' )
         
         self._c.execute( 'CREATE TABLE ' + cache_current_mappings_table_name + ' ( hash_id INTEGER, tag_id INTEGER, PRIMARY KEY ( hash_id, tag_id ) ) WITHOUT ROWID;' )
+        
+        self._c.execute( 'CREATE TABLE ' + cache_deleted_mappings_table_name + ' ( hash_id INTEGER, tag_id INTEGER, PRIMARY KEY ( hash_id, tag_id ) ) WITHOUT ROWID;' )
         
         self._c.execute( 'CREATE TABLE ' + cache_pending_mappings_table_name + ' ( hash_id INTEGER, tag_id INTEGER, PRIMARY KEY ( hash_id, tag_id ) ) WITHOUT ROWID;' )
         
@@ -2101,7 +2414,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsGetAutocompleteCounts( self, file_service_id, tag_service_id, tag_ids ):
         
-        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         select_statement = 'SELECT tag_id, current_count, pending_count FROM ' + ac_cache_table_name + ' WHERE tag_id IN %s;'
         
@@ -2110,7 +2423,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsPendMappings( self, file_service_id, tag_service_id, mappings_ids ):
         
-        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         for ( tag_id, hash_ids ) in mappings_ids:
             
@@ -2135,7 +2448,7 @@ class DB( HydrusDB.HydrusDB ):
     
     def _CacheSpecificMappingsRescindPendingMappings( self, file_service_id, tag_service_id, mappings_ids ):
         
-        ( cache_files_table_name, cache_current_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
         
         for ( tag_id, hash_ids ) in mappings_ids:
             
@@ -2227,7 +2540,7 @@ class DB( HydrusDB.HydrusDB ):
         missing_count = 0
         deletee_hash_ids = []
         
-        client_files_manager = self._controller.GetClientFilesManager()
+        client_files_manager = self._controller.client_files_manager
         
         for ( i, ( hash_id, mime ) ) in enumerate( info ):
             
@@ -2330,17 +2643,6 @@ class DB( HydrusDB.HydrusDB ):
         
         HydrusPaths.MakeSureDirectoryExists( client_files_default )
         
-        HydrusDB.SetupDBCreatePragma( self._c, no_wal = self._no_wal )
-        
-        try:
-            
-            self._BeginImmediate()
-            
-        except Exception as e:
-            
-            raise HydrusExceptions.DBAccessException( HydrusData.ToUnicode( e ) )
-            
-        
         self._c.execute( 'CREATE TABLE services ( service_id INTEGER PRIMARY KEY AUTOINCREMENT, service_key BLOB_BYTES UNIQUE, service_type INTEGER, name TEXT, dictionary_string TEXT );' )
         
         # main
@@ -2376,11 +2678,6 @@ class DB( HydrusDB.HydrusDB ):
         self._c.execute( 'CREATE TABLE json_dumps ( dump_type INTEGER PRIMARY KEY, version INTEGER, dump BLOB_BYTES );' )
         self._c.execute( 'CREATE TABLE json_dumps_named ( dump_type INTEGER, dump_name TEXT, version INTEGER, dump BLOB_BYTES, PRIMARY KEY ( dump_type, dump_name ) );' )
         
-        self._c.execute( 'CREATE TABLE local_hashes ( hash_id INTEGER PRIMARY KEY, md5 BLOB_BYTES, sha1 BLOB_BYTES, sha512 BLOB_BYTES );' )
-        self._CreateIndex( 'local_hashes', [ 'md5' ] )
-        self._CreateIndex( 'local_hashes', [ 'sha1' ] )
-        self._CreateIndex( 'local_hashes', [ 'sha512' ] )
-        
         self._c.execute( 'CREATE TABLE local_ratings ( service_id INTEGER REFERENCES services ON DELETE CASCADE, hash_id INTEGER, rating REAL, PRIMARY KEY ( service_id, hash_id ) );' )
         self._CreateIndex( 'local_ratings', [ 'hash_id' ] )
         self._CreateIndex( 'local_ratings', [ 'rating' ] )
@@ -2414,8 +2711,8 @@ class DB( HydrusDB.HydrusDB ):
         
         self._c.execute( 'CREATE TABLE tag_sibling_petitions ( service_id INTEGER REFERENCES services ON DELETE CASCADE, bad_tag_id INTEGER, good_tag_id INTEGER, status INTEGER, reason_id INTEGER, PRIMARY KEY ( service_id, bad_tag_id, status ) );' )
         
-        self._c.execute( 'CREATE TABLE urls ( url TEXT PRIMARY KEY, hash_id INTEGER );' )
-        self._CreateIndex( 'urls', [ 'hash_id' ] )
+        self._c.execute( 'CREATE TABLE urls ( hash_id INTEGER, url TEXT, PRIMARY KEY ( hash_id, url ) );' )
+        self._CreateIndex( 'urls', [ 'url' ] )
         
         self._c.execute( 'CREATE TABLE vacuum_timestamps ( name TEXT, timestamp INTEGER );' )
         
@@ -2443,9 +2740,17 @@ class DB( HydrusDB.HydrusDB ):
         self._c.execute( 'CREATE TABLE external_caches.duplicate_pairs ( smaller_hash_id INTEGER, larger_hash_id INTEGER, duplicate_type INTEGER, PRIMARY KEY ( smaller_hash_id, larger_hash_id ) );' )
         self._CreateIndex( 'external_caches.duplicate_pairs', [ 'larger_hash_id', 'smaller_hash_id' ], unique = True )
         
+        self._c.execute( 'CREATE TABLE external_caches.integer_subtags ( subtag_id INTEGER PRIMARY KEY, integer_subtag INTEGER );' )
+        self._CreateIndex( 'external_caches.integer_subtags', [ 'integer_subtag' ] )
+        
         # master
         
         self._c.execute( 'CREATE TABLE IF NOT EXISTS external_master.hashes ( hash_id INTEGER PRIMARY KEY, hash BLOB_BYTES UNIQUE );' )
+        
+        self._c.execute( 'CREATE TABLE external_master.local_hashes ( hash_id INTEGER PRIMARY KEY, md5 BLOB_BYTES, sha1 BLOB_BYTES, sha512 BLOB_BYTES );' )
+        self._CreateIndex( 'external_master.local_hashes', [ 'md5' ] )
+        self._CreateIndex( 'external_master.local_hashes', [ 'sha1' ] )
+        self._CreateIndex( 'external_master.local_hashes', [ 'sha512' ] )
         
         self._c.execute( 'CREATE TABLE IF NOT EXISTS external_master.namespaces ( namespace_id INTEGER PRIMARY KEY, namespace TEXT UNIQUE );' )
         
@@ -2504,13 +2809,19 @@ class DB( HydrusDB.HydrusDB ):
             self._SetJSONDump( shortcuts )
             
         
+        bandwidth_manager = ClientDefaults.GetDefaultBandwidthManager()
+        
+        self._SetJSONDump( bandwidth_manager )
+        
+        session_manager = ClientNetworking.NetworkSessionManager()
+        
+        self._SetJSONDump( session_manager )
+        
         self._c.execute( 'INSERT INTO namespaces ( namespace_id, namespace ) VALUES ( ?, ? );', ( 1, '' ) )
         
         self._c.execute( 'INSERT INTO version ( version ) VALUES ( ? );', ( HC.SOFTWARE_VERSION, ) )
         
         self._c.executemany( 'INSERT INTO json_dumps_named VALUES ( ?, ?, ?, ? );', ClientDefaults.GetDefaultScriptRows() )
-        
-        self._Commit()
         
     
     def _DeleteFiles( self, service_id, hash_ids ):
@@ -2607,7 +2918,7 @@ class DB( HydrusDB.HydrusDB ):
             
             self._c.executemany( 'UPDATE service_info SET info = info + ? WHERE service_id = ? AND info_type = ?;', service_info_updates )
             
-            self.pub_after_commit( 'notify_new_pending' )
+            self.pub_after_job( 'notify_new_pending' )
             
         
         return valid_hash_ids
@@ -2669,10 +2980,10 @@ class DB( HydrusDB.HydrusDB ):
             self._c.execute( 'DELETE FROM file_petitions WHERE service_id = ?;', ( service_id, ) )
             
         
-        self.pub_after_commit( 'notify_new_pending' )
-        self.pub_after_commit( 'notify_new_siblings_data' )
-        self.pub_after_commit( 'notify_new_siblings_gui' )
-        self.pub_after_commit( 'notify_new_parents' )
+        self.pub_after_job( 'notify_new_pending' )
+        self.pub_after_job( 'notify_new_siblings_data' )
+        self.pub_after_job( 'notify_new_siblings_gui' )
+        self.pub_after_job( 'notify_new_parents' )
         
         self.pub_service_updates_after_commit( { service_key : [ HydrusData.ServiceUpdate( HC.SERVICE_UPDATE_DELETE_PENDING ) ] } )
         
@@ -2687,7 +2998,7 @@ class DB( HydrusDB.HydrusDB ):
         
         deletable_file_hash_ids = hash_ids.difference( potentially_pending_upload_hash_ids )
         
-        client_files_manager = self._controller.GetClientFilesManager()
+        client_files_manager = self._controller.client_files_manager
         
         if len( deletable_file_hash_ids ) > 0:
             
@@ -2783,7 +3094,7 @@ class DB( HydrusDB.HydrusDB ):
         
         self._c.execute( 'DELETE FROM service_info;' )
         
-        self.pub_after_commit( 'notify_new_pending' )
+        self.pub_after_job( 'notify_new_pending' )
         
     
     def _DeleteTagParents( self, service_id, pairs ):
@@ -3333,7 +3644,7 @@ class DB( HydrusDB.HydrusDB ):
         
         if service_type in ( HC.COMBINED_FILE, HC.COMBINED_TAG ):
             
-            predicates.extend( [ ClientSearch.Predicate( predicate_type, None ) for predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_EVERYTHING, HC.PREDICATE_TYPE_SYSTEM_UNTAGGED, HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS, HC.PREDICATE_TYPE_SYSTEM_LIMIT, HC.PREDICATE_TYPE_SYSTEM_HASH, HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE ] ] )
+            predicates.extend( [ ClientSearch.Predicate( predicate_type, None ) for predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_EVERYTHING, HC.PREDICATE_TYPE_SYSTEM_UNTAGGED, HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS, HC.PREDICATE_TYPE_SYSTEM_LIMIT, HC.PREDICATE_TYPE_SYSTEM_HASH, HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, HC.PREDICATE_TYPE_SYSTEM_DUPLICATE_RELATIONSHIPS ] ] )
             
         elif service_type in HC.TAG_SERVICES:
             
@@ -3343,7 +3654,7 @@ class DB( HydrusDB.HydrusDB ):
             
             predicates.append( ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_EVERYTHING, min_current_count = num_everything ) )
             
-            predicates.extend( [ ClientSearch.Predicate( predicate_type, None ) for predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_UNTAGGED, HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS, HC.PREDICATE_TYPE_SYSTEM_LIMIT, HC.PREDICATE_TYPE_SYSTEM_HASH, HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE ] ] )
+            predicates.extend( [ ClientSearch.Predicate( predicate_type, None ) for predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_UNTAGGED, HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS, HC.PREDICATE_TYPE_SYSTEM_LIMIT, HC.PREDICATE_TYPE_SYSTEM_HASH, HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, HC.PREDICATE_TYPE_SYSTEM_TAG_AS_NUMBER, HC.PREDICATE_TYPE_SYSTEM_DUPLICATE_RELATIONSHIPS ] ] )
             
         elif service_type in HC.FILE_SERVICES:
             
@@ -3394,7 +3705,7 @@ class DB( HydrusDB.HydrusDB ):
                 predicates.append( ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_RATING ) )
                 
             
-            predicates.extend( [ ClientSearch.Predicate( predicate_type ) for predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_SIMILAR_TO, HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE ] ] )
+            predicates.extend( [ ClientSearch.Predicate( predicate_type ) for predicate_type in [ HC.PREDICATE_TYPE_SYSTEM_SIMILAR_TO, HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE, HC.PREDICATE_TYPE_SYSTEM_TAG_AS_NUMBER, HC.PREDICATE_TYPE_SYSTEM_DUPLICATE_RELATIONSHIPS ] ] )
             
         
         return predicates
@@ -3505,17 +3816,74 @@ class DB( HydrusDB.HydrusDB ):
         
         for search_tag_service_id in search_tag_service_ids:
             
-            ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( search_tag_service_id )
-            
             if file_service_key == CC.COMBINED_FILE_SERVICE_KEY:
+                
+                ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( search_tag_service_id )
                 
                 current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id = ' + str( namespace_id ) + ';' )
                 pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id = ' + str( namespace_id ) + ';' )
                 
             else:
                 
-                current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN current_files NATURAL JOIN tags WHERE service_id = ' + str( file_service_id ) + ' AND namespace_id = ' + str( namespace_id ) + ';' )
-                pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN current_files NATURAL JOIN tags WHERE service_id = ' + str( file_service_id ) + ' AND namespace_id = ' + str( namespace_id ) + ';' )
+                ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, search_tag_service_id )
+                
+                current_selects.append( 'SELECT hash_id FROM ' + cache_current_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id = ' + str( namespace_id ) + ';' )
+                pending_selects.append( 'SELECT hash_id FROM ' + cache_pending_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id = ' + str( namespace_id ) + ';' )
+                
+            
+        
+        hash_ids = set()
+        
+        if include_current_tags:
+            
+            for current_select in current_selects:
+                
+                hash_ids.update( ( id for ( id, ) in self._c.execute( current_select ) ) )
+                
+            
+        
+        if include_pending_tags:
+            
+            for pending_select in pending_selects:
+                
+                hash_ids.update( ( id for ( id, ) in self._c.execute( pending_select ) ) )
+                
+            
+        
+        return hash_ids
+        
+    
+    def _GetHashIdsFromNamespaceIdsSubtagIds( self, file_service_key, tag_service_key, namespace_ids, subtag_ids, include_current_tags, include_pending_tags ):
+        
+        file_service_id = self._GetServiceId( file_service_key )
+        
+        if tag_service_key == CC.COMBINED_TAG_SERVICE_KEY:
+            
+            search_tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
+            
+        else:
+            
+            search_tag_service_ids = [ self._GetServiceId( tag_service_key ) ]
+            
+        
+        current_selects = []
+        pending_selects = []
+        
+        for search_tag_service_id in search_tag_service_ids:
+            
+            if file_service_key == CC.COMBINED_FILE_SERVICE_KEY:
+                
+                ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( search_tag_service_id )
+                
+                current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id IN ' + HydrusData.SplayListForDB( namespace_ids ) + ' AND subtag_id IN ' + HydrusData.SplayListForDB( subtag_ids ) + ';' )
+                pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id IN ' + HydrusData.SplayListForDB( namespace_ids ) + ' AND subtag_id IN ' + HydrusData.SplayListForDB( subtag_ids ) + ';' )
+                
+            else:
+                
+                ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, search_tag_service_id )
+                
+                current_selects.append( 'SELECT hash_id FROM ' + cache_current_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id IN ' + HydrusData.SplayListForDB( namespace_ids ) + ' AND subtag_id IN ' + HydrusData.SplayListForDB( subtag_ids ) + ';' )
+                pending_selects.append( 'SELECT hash_id FROM ' + cache_pending_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id IN ' + HydrusData.SplayListForDB( namespace_ids ) + ' AND subtag_id IN ' + HydrusData.SplayListForDB( subtag_ids ) + ';' )
                 
             
         
@@ -3851,6 +4219,35 @@ class DB( HydrusDB.HydrusDB ):
                 
             
         
+        for ( operator, num_relationships, dupe_type ) in system_predicates.GetDuplicateRelationshipsPredicates():
+            
+            only_do_zero = ( operator in ( '=', u'\u2248' ) and num_relationships == 0 ) or ( operator == '<' and num_relationships == 1 )
+            include_zero = operator == '<'
+            
+            if only_do_zero:
+                
+                nonzero_hash_ids = self._CacheSimilarFilesGetHashIdsFromDuplicatePredicate( file_service_key, '>', 0, dupe_type )
+                
+                query_hash_ids.difference_update( nonzero_hash_ids )
+                
+            elif include_zero:
+                
+                nonzero_hash_ids = self._CacheSimilarFilesGetHashIdsFromDuplicatePredicate( file_service_key, '>', 0, dupe_type )
+                
+                zero_hash_ids = query_hash_ids.difference( nonzero_hash_ids )
+                
+                accurate_except_zero_hash_ids = self._CacheSimilarFilesGetHashIdsFromDuplicatePredicate( file_service_key, operator, num_relationships, dupe_type )
+                
+                hash_ids = zero_hash_ids.union( accurate_except_zero_hash_ids )
+                
+                query_hash_ids.intersection_update( hash_ids )
+                
+            else:
+                
+                query_hash_ids.intersection_update( self._CacheSimilarFilesGetHashIdsFromDuplicatePredicate( file_service_key, operator, num_relationships, dupe_type ) )
+                
+            
+        
         #
         
         must_be_local = system_predicates.MustBeLocal() or system_predicates.MustBeArchive()
@@ -3971,6 +4368,26 @@ class DB( HydrusDB.HydrusDB ):
         
         #
         
+        if 'min_tag_as_number' in simple_preds:
+            
+            ( namespace, num ) = simple_preds[ 'min_tag_as_number' ]
+            
+            good_hash_ids = self._GetHashIdsThatHaveTagAsNum( file_service_key, tag_service_key, namespace, num, '>', include_current_tags, include_pending_tags )
+            
+            query_hash_ids.intersection_update( good_hash_ids )
+            
+        
+        if 'max_tag_as_number' in simple_preds:
+            
+            ( namespace, num ) = simple_preds[ 'max_tag_as_number' ]
+            
+            good_hash_ids = self._GetHashIdsThatHaveTagAsNum( file_service_key, tag_service_key, namespace, num, '<', include_current_tags, include_pending_tags )
+            
+            query_hash_ids.intersection_update( good_hash_ids )
+            
+        
+        #
+        
         limit = system_predicates.GetLimit()
         
         if limit is not None and limit <= len( query_hash_ids ):
@@ -3983,6 +4400,61 @@ class DB( HydrusDB.HydrusDB ):
             
         
         return query_hash_ids
+        
+    
+    def _GetHashIdsFromSubtagIds( self, file_service_key, tag_service_key, subtag_ids, include_current_tags, include_pending_tags ):
+        
+        file_service_id = self._GetServiceId( file_service_key )
+        
+        if tag_service_key == CC.COMBINED_TAG_SERVICE_KEY:
+            
+            search_tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
+            
+        else:
+            
+            search_tag_service_ids = [ self._GetServiceId( tag_service_key ) ]
+            
+        
+        current_selects = []
+        pending_selects = []
+        
+        for search_tag_service_id in search_tag_service_ids:
+            
+            if file_service_key == CC.COMBINED_FILE_SERVICE_KEY:
+                
+                ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( search_tag_service_id )
+                
+                current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN tags WHERE subtag_id IN ' + HydrusData.SplayListForDB( subtag_ids ) + ';' )
+                pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN tags WHERE subtag_id IN ' + HydrusData.SplayListForDB( subtag_ids ) + ';' )
+                
+            else:
+                
+                ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, search_tag_service_id )
+                
+                current_selects.append( 'SELECT hash_id FROM ' + cache_current_mappings_table_name + ' NATURAL JOIN tags WHERE subtag_id IN ' + HydrusData.SplayListForDB( subtag_ids ) + ';' )
+                pending_selects.append( 'SELECT hash_id FROM ' + cache_pending_mappings_table_name + ' NATURAL JOIN tags WHERE subtag_id IN ' + HydrusData.SplayListForDB( subtag_ids ) + ';' )
+                
+            
+        
+        hash_ids = set()
+        
+        if include_current_tags:
+            
+            for current_select in current_selects:
+                
+                hash_ids.update( ( id for ( id, ) in self._c.execute( current_select ) ) )
+                
+            
+        
+        if include_pending_tags:
+            
+            for pending_select in pending_selects:
+                
+                hash_ids.update( ( id for ( id, ) in self._c.execute( pending_select ) ) )
+                
+            
+        
+        return hash_ids
         
     
     def _GetHashIdsFromTag( self, file_service_key, tag_service_key, tag, include_current_tags, include_pending_tags ):
@@ -4023,17 +4495,19 @@ class DB( HydrusDB.HydrusDB ):
                 
                 for search_tag_service_id in search_tag_service_ids:
                     
-                    ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( search_tag_service_id )
-                    
                     if file_service_key == CC.COMBINED_FILE_SERVICE_KEY:
+                        
+                        ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( search_tag_service_id )
                         
                         current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id = ' + str( namespace_id ) + ' AND subtag_id = ' + str( subtag_id ) + ';' )
                         pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id = ' + str( namespace_id ) + ' AND subtag_id = ' + str( subtag_id ) + ';' )
                         
                     else:
                         
-                        current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN current_files NATURAL JOIN tags WHERE current_files.service_id = ' + str( file_service_id ) + ' AND namespace_id = ' + str( namespace_id ) + ' AND subtag_id = ' + str( subtag_id ) + ';' )
-                        pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN current_files NATURAL JOIN tags WHERE current_files.service_id = ' + str( file_service_id ) + ' AND namespace_id = ' + str( namespace_id ) + ' AND subtag_id = ' + str( subtag_id ) + ';' )
+                        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, search_tag_service_id )
+                        
+                        current_selects.append( 'SELECT hash_id FROM ' + cache_current_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id = ' + str( namespace_id ) + ' AND subtag_id = ' + str( subtag_id ) + ';' )
+                        pending_selects.append( 'SELECT hash_id FROM ' + cache_pending_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id = ' + str( namespace_id ) + ' AND subtag_id = ' + str( subtag_id ) + ';' )
                         
                     
                 
@@ -4048,17 +4522,19 @@ class DB( HydrusDB.HydrusDB ):
                 
                 for search_tag_service_id in search_tag_service_ids:
                     
-                    ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( search_tag_service_id )
-                    
                     if file_service_key == CC.COMBINED_FILE_SERVICE_KEY:
+                        
+                        ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( search_tag_service_id )
                         
                         current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN tags WHERE subtag_id = ' + str( subtag_id ) + ';' )
                         pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN tags WHERE subtag_id = ' + str( subtag_id ) + ';' )
                         
                     else:
                         
-                        current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN current_files NATURAL JOIN tags WHERE current_files.service_id = ' + str( file_service_id ) + ' AND subtag_id = ' + str( subtag_id ) + ';' )
-                        pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN current_files NATURAL JOIN tags WHERE current_files.service_id = ' + str( file_service_id ) + ' AND subtag_id = ' + str( subtag_id ) + ';' )
+                        ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, search_tag_service_id )
+                        
+                        current_selects.append( 'SELECT hash_id FROM ' + cache_current_mappings_table_name + ' NATURAL JOIN tags WHERE subtag_id = ' + str( subtag_id ) + ';' )
+                        pending_selects.append( 'SELECT hash_id FROM ' + cache_pending_mappings_table_name + ' NATURAL JOIN tags WHERE subtag_id = ' + str( subtag_id ) + ';' )
                         
                     
                 
@@ -4131,83 +4607,20 @@ class DB( HydrusDB.HydrusDB ):
                 
             
         
-        file_service_id = self._GetServiceId( file_service_key )
-        
-        if tag_service_key == CC.COMBINED_TAG_SERVICE_KEY:
-            
-            search_tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
-            
-        else:
-            
-            search_tag_service_ids = [ self._GetServiceId( tag_service_key ) ]
-            
-        
-        current_selects = []
-        pending_selects = []
-        
         ( namespace_wildcard, subtag_wildcard ) = HydrusTags.SplitTag( wildcard )
+        
+        possible_subtag_ids = GetSubtagIdsFromWildcard( subtag_wildcard )
         
         if namespace_wildcard != '':
             
             possible_namespace_ids = GetNamespaceIdsFromWildcard( namespace_wildcard )
-            possible_subtag_ids = GetSubtagIdsFromWildcard( subtag_wildcard )
             
-            for search_tag_service_id in search_tag_service_ids:
-                
-                ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( search_tag_service_id )
-                
-                if file_service_key == CC.COMBINED_FILE_SERVICE_KEY:
-                    
-                    current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id IN ' + HydrusData.SplayListForDB( possible_namespace_ids ) + ' AND subtag_id IN ' + HydrusData.SplayListForDB( possible_subtag_ids ) + ';' )
-                    pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN tags WHERE namespace_id IN ' + HydrusData.SplayListForDB( possible_namespace_ids ) + ' AND subtag_id IN ' + HydrusData.SplayListForDB( possible_subtag_ids ) + ';' )
-                    
-                else:
-                    
-                    current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN current_files NATURAL JOIN tags WHERE current_files.service_id = ' + str( file_service_id ) + ' AND namespace_id IN ' + HydrusData.SplayListForDB( possible_namespace_ids ) + ' AND subtag_id IN ' + HydrusData.SplayListForDB( possible_subtag_ids ) + ';' )
-                    pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN current_files NATURAL JOIN tags WHERE current_files.service_id = ' + str( file_service_id ) + ' AND namespace_id IN ' + HydrusData.SplayListForDB( possible_namespace_ids ) + ' AND subtag_id IN ' + HydrusData.SplayListForDB( possible_subtag_ids ) + ';' )
-                    
-                
+            return self._GetHashIdsFromNamespaceIdsSubtagIds( file_service_key, tag_service_key, possible_namespace_ids, possible_subtag_ids, include_current_tags, include_pending_tags )
             
         else:
             
-            possible_subtag_ids = GetSubtagIdsFromWildcard( subtag_wildcard )
+            return self._GetHashIdsFromSubtagIds( file_service_key, tag_service_key, possible_subtag_ids, include_current_tags, include_pending_tags )
             
-            for search_tag_service_id in search_tag_service_ids:
-                
-                ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( search_tag_service_id )
-                
-                if file_service_key == CC.COMBINED_FILE_SERVICE_KEY:
-                    
-                    current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN tags WHERE subtag_id IN ' + HydrusData.SplayListForDB( possible_subtag_ids ) + ';' )
-                    pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN tags WHERE subtag_id IN ' + HydrusData.SplayListForDB( possible_subtag_ids ) + ';' )
-                    
-                else:
-                    
-                    current_selects.append( 'SELECT hash_id FROM ' + current_mappings_table_name + ' NATURAL JOIN current_files NATURAL JOIN tags WHERE current_files.service_id = ' + str( file_service_id ) + ' AND subtag_id IN ' + HydrusData.SplayListForDB( possible_subtag_ids ) + ';' )
-                    pending_selects.append( 'SELECT hash_id FROM ' + pending_mappings_table_name + ' NATURAL JOIN current_files NATURAL JOIN tags WHERE current_files.service_id = ' + str( file_service_id ) + ' AND subtag_id IN ' + HydrusData.SplayListForDB( possible_subtag_ids ) + ';' )
-                    
-                
-            
-        
-        hash_ids = set()
-        
-        if include_current_tags:
-            
-            for current_select in current_selects:
-                
-                hash_ids.update( ( id for ( id, ) in self._c.execute( current_select ) ) )
-                
-            
-        
-        if include_pending_tags:
-            
-            for pending_select in pending_selects:
-                
-                hash_ids.update( ( id for ( id, ) in self._c.execute( pending_select ) ) )
-                
-            
-        
-        return hash_ids
         
     
     def _GetHashIdsTagCounts( self, tag_service_key, include_current, include_pending, hash_ids = None ):
@@ -4333,6 +4746,24 @@ class DB( HydrusDB.HydrusDB ):
         return nonzero_tag_hash_ids
         
     
+    def _GetHashIdsThatHaveTagAsNum( self, file_service_key, tag_service_key, namespace, num, operator, include_current_tags, include_pending_tags ):
+        
+        possible_subtag_ids = self._STS( self._c.execute( 'SELECT subtag_id FROM integer_subtags WHERE integer_subtag ' + operator + ' ' + str( num ) + ';' ) )
+        
+        if namespace == '':
+            
+            return self._GetHashIdsFromSubtagIds( file_service_key, tag_service_key, possible_subtag_ids, include_current_tags, include_pending_tags )
+            
+        else:
+            
+            namespace_id = self._GetNamespaceId( namespace )
+            
+            possible_namespace_ids = { namespace_id }
+            
+            return self._GetHashIdsFromNamespaceIdsSubtagIds( file_service_key, tag_service_key, possible_namespace_ids, possible_subtag_ids, include_current_tags, include_pending_tags )
+            
+        
+    
     def _GetHashIdsToHashes( self, hash_ids ):
         
         # this is actually a bit faster than saying "hash_id IN ( bigass_list )"
@@ -4355,14 +4786,18 @@ class DB( HydrusDB.HydrusDB ):
         
         if result is not None:
             
-            return ( CC.STATUS_DELETED, None )
+            hash = self._GetHash( hash_id )
+            
+            return ( CC.STATUS_DELETED, hash )
             
         
         result = self._c.execute( 'SELECT 1 FROM current_files WHERE service_id = ? AND hash_id = ?;', ( self._trash_service_id, hash_id ) ).fetchone()
         
         if result is not None:
             
-            return ( CC.STATUS_DELETED, None )
+            hash = self._GetHash( hash_id )
+            
+            return ( CC.STATUS_DELETED, hash )
             
         
         result = self._c.execute( 'SELECT 1 FROM current_files WHERE service_id = ? AND hash_id = ?;', ( self._combined_local_file_service_id, hash_id ) ).fetchone()
@@ -4389,7 +4824,16 @@ class DB( HydrusDB.HydrusDB ):
         
         for ( service_id, session_key, expires ) in results:
             
-            service = self._GetService( service_id )
+            try:
+                
+                service = self._GetService( service_id )
+                
+            except HydrusExceptions.DataMissing:
+                
+                self._c.execute( 'DELETE FROM hydrus_sessions WHERE service_id = ?;', ( service_id, ) )
+                
+                continue
+                
             
             service_key = service.GetServiceKey()
             
@@ -4481,7 +4925,7 @@ class DB( HydrusDB.HydrusDB ):
         
         hash_ids_to_hashes = self._GetHashIdsToHashes( hash_ids )
         
-        hash_ids_to_info = { hash_id : ( size, mime, width, height, duration, num_frames, num_words ) for ( hash_id, size, mime, width, height, duration, num_frames, num_words ) in self._SelectFromList( 'SELECT * FROM files_info WHERE hash_id IN %s;', hash_ids ) }
+        hash_ids_to_info = { hash_id : ClientMedia.FileInfoManager( hash_ids_to_hashes[ hash_id ], size, mime, width, height, duration, num_frames, num_words ) for ( hash_id, size, mime, width, height, duration, num_frames, num_words ) in self._SelectFromList( 'SELECT * FROM files_info WHERE hash_id IN %s;', hash_ids ) }
         
         hash_ids_to_current_file_service_ids_and_timestamps = HydrusData.BuildKeyToListDict( ( ( hash_id, ( service_id, timestamp ) ) for ( hash_id, service_id, timestamp ) in self._SelectFromList( 'SELECT hash_id, service_id, timestamp FROM current_files WHERE hash_id IN %s;', hash_ids ) ) )
         
@@ -4497,6 +4941,39 @@ class DB( HydrusDB.HydrusDB ):
         
         hash_ids_to_local_ratings = HydrusData.BuildKeyToListDict( ( ( hash_id, ( service_id, rating ) ) for ( service_id, hash_id, rating ) in self._SelectFromList( 'SELECT service_id, hash_id, rating FROM local_ratings WHERE hash_id IN %s;', hash_ids ) ) )
         
+        #
+        
+        # Let's figure out if there is a common specific file service to this batch
+        
+        file_service_id_counter = collections.Counter()
+        
+        for file_service_ids_and_timestamps in hash_ids_to_current_file_service_ids_and_timestamps.values():
+            
+            for ( file_service_id, timestamp ) in file_service_ids_and_timestamps:
+                
+                file_service_id_counter[ file_service_id ] += 1
+                
+            
+        
+        common_file_service_id = None
+        
+        for ( file_service_id, count ) in file_service_id_counter.items():
+            
+            if count == len( hash_ids ): # i.e. every hash has this file service
+                
+                ( file_service_type, ) = self._c.execute( 'SELECT service_type FROM services WHERE service_id = ?;', ( file_service_id, ) ).fetchone()
+                
+                if file_service_type in HC.AUTOCOMPLETE_CACHE_SPECIFIC_FILE_SERVICES:
+                    
+                    common_file_service_id = file_service_id
+                    
+                    break
+                    
+                
+            
+        
+        #
+        
         tag_data = []
         
         tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
@@ -4505,9 +4982,21 @@ class DB( HydrusDB.HydrusDB ):
             
             ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( tag_service_id )
             
-            tag_data.extend( ( hash_id, ( tag_service_id, HC.CONTENT_STATUS_CURRENT, tag_id ) ) for ( hash_id, tag_id ) in self._SelectFromList( 'SELECT hash_id, tag_id FROM ' + current_mappings_table_name + ' WHERE hash_id IN %s;', hash_ids ) )
-            tag_data.extend( ( hash_id, ( tag_service_id, HC.CONTENT_STATUS_DELETED, tag_id ) ) for ( hash_id, tag_id ) in self._SelectFromList( 'SELECT hash_id, tag_id FROM ' + deleted_mappings_table_name + ' WHERE hash_id IN %s;', hash_ids ) )
-            tag_data.extend( ( hash_id, ( tag_service_id, HC.CONTENT_STATUS_PENDING, tag_id ) ) for ( hash_id, tag_id ) in self._SelectFromList( 'SELECT hash_id, tag_id FROM ' + pending_mappings_table_name + ' WHERE hash_id IN %s;', hash_ids ) )
+            if common_file_service_id is None:
+                
+                tag_data.extend( ( hash_id, ( tag_service_id, HC.CONTENT_STATUS_CURRENT, tag_id ) ) for ( hash_id, tag_id ) in self._SelectFromList( 'SELECT hash_id, tag_id FROM ' + current_mappings_table_name + ' WHERE hash_id IN %s;', hash_ids ) )
+                tag_data.extend( ( hash_id, ( tag_service_id, HC.CONTENT_STATUS_DELETED, tag_id ) ) for ( hash_id, tag_id ) in self._SelectFromList( 'SELECT hash_id, tag_id FROM ' + deleted_mappings_table_name + ' WHERE hash_id IN %s;', hash_ids ) )
+                tag_data.extend( ( hash_id, ( tag_service_id, HC.CONTENT_STATUS_PENDING, tag_id ) ) for ( hash_id, tag_id ) in self._SelectFromList( 'SELECT hash_id, tag_id FROM ' + pending_mappings_table_name + ' WHERE hash_id IN %s;', hash_ids ) )
+                
+            else:
+                
+                ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( common_file_service_id, tag_service_id )
+                
+                tag_data.extend( ( hash_id, ( tag_service_id, HC.CONTENT_STATUS_CURRENT, tag_id ) ) for ( hash_id, tag_id ) in self._SelectFromList( 'SELECT hash_id, tag_id FROM ' + cache_current_mappings_table_name + ' WHERE hash_id IN %s;', hash_ids ) )
+                tag_data.extend( ( hash_id, ( tag_service_id, HC.CONTENT_STATUS_DELETED, tag_id ) ) for ( hash_id, tag_id ) in self._SelectFromList( 'SELECT hash_id, tag_id FROM ' + cache_deleted_mappings_table_name + ' WHERE hash_id IN %s;', hash_ids ) )
+                tag_data.extend( ( hash_id, ( tag_service_id, HC.CONTENT_STATUS_PENDING, tag_id ) ) for ( hash_id, tag_id ) in self._SelectFromList( 'SELECT hash_id, tag_id FROM ' + cache_pending_mappings_table_name + ' WHERE hash_id IN %s;', hash_ids ) )
+                
+            
             tag_data.extend( ( hash_id, ( tag_service_id, HC.CONTENT_STATUS_PETITIONED, tag_id ) ) for ( hash_id, tag_id ) in self._SelectFromList( 'SELECT hash_id, tag_id FROM ' + petitioned_mappings_table_name + ' WHERE hash_id IN %s;', hash_ids ) )
             
         
@@ -4528,10 +5017,6 @@ class DB( HydrusDB.HydrusDB ):
         for hash_id in hash_ids:
             
             hash = hash_ids_to_hashes[ hash_id ]
-            
-            #
-            
-            inbox = hash_id in self._inbox_hash_ids
             
             #
             
@@ -4559,6 +5044,8 @@ class DB( HydrusDB.HydrusDB ):
             
             petitioned_file_service_keys = { service_ids_to_service_keys[ service_id ] for service_id in hash_ids_to_petitioned_file_service_ids[ hash_id ] }
             
+            inbox = hash_id in self._inbox_hash_ids
+            
             urls = hash_ids_to_urls[ hash_id ]
             
             service_ids_to_filenames = HydrusData.BuildKeyToListDict( hash_ids_to_service_ids_and_filenames[ hash_id ] )
@@ -4567,7 +5054,7 @@ class DB( HydrusDB.HydrusDB ):
             
             current_file_service_keys_to_timestamps = { service_ids_to_service_keys[ service_id ] : timestamp for ( service_id, timestamp ) in hash_ids_to_current_file_service_ids_and_timestamps[ hash_id ] }
             
-            locations_manager = ClientMedia.LocationsManager( current_file_service_keys, deleted_file_service_keys, pending_file_service_keys, petitioned_file_service_keys, urls = urls, service_keys_to_filenames = service_keys_to_filenames, current_to_timestamps = current_file_service_keys_to_timestamps )
+            locations_manager = ClientMedia.LocationsManager( current_file_service_keys, deleted_file_service_keys, pending_file_service_keys, petitioned_file_service_keys, inbox, urls, service_keys_to_filenames, current_to_timestamps = current_file_service_keys_to_timestamps )
             
             #
             
@@ -4579,14 +5066,14 @@ class DB( HydrusDB.HydrusDB ):
             
             if hash_id in hash_ids_to_info:
                 
-                ( size, mime, width, height, duration, num_frames, num_words ) = hash_ids_to_info[ hash_id ]
+                file_info_manager = hash_ids_to_info[ hash_id ]
                 
             else:
                 
-                ( size, mime, width, height, duration, num_frames, num_words ) = ( None, HC.APPLICATION_UNKNOWN, None, None, None, None, None )
+                file_info_manager = ClientMedia.FileInfoManager( hash )
                 
             
-            media_results.append( ClientMedia.MediaResult( ( hash, inbox, size, mime, width, height, duration, num_frames, num_words, tags_manager, locations_manager, ratings_manager ) ) )
+            media_results.append( ClientMedia.MediaResult( file_info_manager, tags_manager, locations_manager, ratings_manager ) )
             
         
         return media_results
@@ -5022,7 +5509,7 @@ class DB( HydrusDB.HydrusDB ):
         
         needed_hashes = []
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
+        client_files_manager = HG.client_controller.client_files_manager
         
         for hash_id in needed_hash_ids:
             
@@ -5071,7 +5558,14 @@ class DB( HydrusDB.HydrusDB ):
             
         else:
             
-            ( service_key, service_type, name, dictionary_string ) = self._c.execute( 'SELECT service_key, service_type, name, dictionary_string FROM services WHERE service_id = ?;', ( service_id, ) ).fetchone()
+            result = self._c.execute( 'SELECT service_key, service_type, name, dictionary_string FROM services WHERE service_id = ?;', ( service_id, ) ).fetchone()
+            
+            if result is None:
+                
+                raise HydrusExceptions.DataMissing( 'That service does not exist!' )
+                
+            
+            ( service_key, service_type, name, dictionary_string ) = result
             
             dictionary = HydrusSerialisable.CreateFromString( dictionary_string )
             
@@ -5334,6 +5828,20 @@ class DB( HydrusDB.HydrusDB ):
             
             self._c.execute( 'REPLACE INTO subtags_fts4 ( docid, subtag ) VALUES ( ?, ? );', ( subtag_id, subtag_searchable ) )
             
+            try:
+                
+                integer_subtag = int( subtag )
+                
+                if CanCacheInteger( integer_subtag ):
+                    
+                    self._c.execute( 'INSERT OR IGNORE INTO integer_subtags ( subtag_id, integer_subtag ) VALUES ( ?, ? );', ( subtag_id, integer_subtag ) )
+                    
+                
+            except ValueError:
+                
+                pass
+                
+            
         else:
             
             ( subtag_id, ) = result
@@ -5451,7 +5959,17 @@ class DB( HydrusDB.HydrusDB ):
             
             for ( service_id, statuses_and_pair_ids ) in service_ids_to_statuses_and_pair_ids.items():
                 
-                service = self._GetService( service_id )
+                try:
+                    
+                    service = self._GetService( service_id )
+                    
+                except HydrusExceptions.DataMissing:
+                    
+                    self._c.execute( 'DELETE FROM tag_parents WHERE service_id = ?;', ( service_id, ) )
+                    self._c.execute( 'DELETE FROM tag_parent_petitions WHERE service_id = ?;', ( service_id, ) )
+                    
+                    continue
+                    
                 
                 service_key = service.GetServiceKey()
                 
@@ -5490,7 +6008,17 @@ class DB( HydrusDB.HydrusDB ):
             
             for ( service_id, statuses_and_pair_ids ) in service_ids_to_statuses_and_pair_ids.items():
                 
-                service = self._GetService( service_id )
+                try:
+                    
+                    service = self._GetService( service_id )
+                    
+                except HydrusExceptions.DataMissing:
+                    
+                    self._c.execute( 'DELETE FROM tag_siblings WHERE service_id = ?;', ( service_id, ) )
+                    self._c.execute( 'DELETE FROM tag_sibling_petitions WHERE service_id = ?;', ( service_id, ) )
+                    
+                    continue
+                    
                 
                 service_key = service.GetServiceKey()
                 
@@ -5603,18 +6131,21 @@ class DB( HydrusDB.HydrusDB ):
     
     def _GetURLStatus( self, url ):
         
-        result = self._c.execute( 'SELECT hash_id FROM urls WHERE url = ?;', ( url, ) ).fetchone()
+        search_urls = ClientData.GetSearchURLs( url )
         
-        if result is None:
+        for search_url in search_urls:
             
-            return ( CC.STATUS_NEW, None )
+            result = self._c.execute( 'SELECT hash_id FROM urls WHERE url = ?;', ( search_url, ) ).fetchone()
             
-        else:
+            if result is not None:
+                
+                ( hash_id, ) = result
+                
+                return self._GetHashIdStatus( hash_id )
+                
             
-            ( hash_id, ) = result
-            
-            return self._GetHashIdStatus( hash_id )
-            
+        
+        return ( CC.STATUS_NEW, None )
         
     
     def _GetWebSessions( self ):
@@ -5760,7 +6291,7 @@ class DB( HydrusDB.HydrusDB ):
             
             timestamp = HydrusData.GetNow()
             
-            client_files_manager = self._controller.GetClientFilesManager()
+            client_files_manager = self._controller.client_files_manager
             
             if mime in HC.MIMES_WITH_THUMBNAILS:
                 
@@ -5784,7 +6315,9 @@ class DB( HydrusDB.HydrusDB ):
             
             self._AddFiles( self._local_file_service_id, [ ( hash_id, timestamp ) ] )
             
-            content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_ADD, ( hash, size, mime, timestamp, width, height, duration, num_frames, num_words ) )
+            file_info_manager = ClientMedia.FileInfoManager( hash, size, mime, width, height, duration, num_frames, num_words )
+            
+            content_update = HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_ADD, ( file_info_manager, timestamp ) )
             
             self.pub_content_updates_after_commit( { CC.LOCAL_FILE_SERVICE_KEY : [ content_update ] } )
             
@@ -5855,7 +6388,7 @@ class DB( HydrusDB.HydrusDB ):
         num_frames = None
         num_words = None
         
-        client_files_manager = self._controller.GetClientFilesManager()
+        client_files_manager = self._controller.client_files_manager
         
         # lockless because this db call is made by the locked client files manager
         client_files_manager.LocklessAddFileFromString( update_hash, mime, update_network_string )
@@ -6140,6 +6673,648 @@ class DB( HydrusDB.HydrusDB ):
         for obj in objs:
             
             self._SetJSONDump( obj )
+            
+        
+    
+    def _ProcessContentUpdates( self, service_keys_to_content_updates, do_pubsubs = True ):
+        
+        notify_new_downloads = False
+        notify_new_pending = False
+        notify_new_parents = False
+        notify_new_siblings = False
+        
+        for ( service_key, content_updates ) in service_keys_to_content_updates.items():
+            
+            try:
+                
+                service_id = self._GetServiceId( service_key )
+                
+            except HydrusExceptions.DataMissing:
+                
+                continue
+                
+            
+            service = self._GetService( service_id )
+            
+            service_type = service.GetServiceType()
+            
+            ultimate_mappings_ids = []
+            ultimate_deleted_mappings_ids = []
+            
+            ultimate_pending_mappings_ids = []
+            ultimate_pending_rescinded_mappings_ids = []
+            
+            ultimate_petitioned_mappings_ids = []
+            ultimate_petitioned_rescinded_mappings_ids = []
+            
+            for content_update in content_updates:
+                
+                ( data_type, action, row ) = content_update.ToTuple()
+                
+                if service_type in HC.FILE_SERVICES:
+                    
+                    if data_type == HC.CONTENT_TYPE_FILES:
+                        
+                        if action == HC.CONTENT_UPDATE_ADVANCED:
+                            
+                            ( sub_action, sub_row ) = row
+                            
+                            if sub_action == 'delete_deleted':
+                                
+                                self._c.execute( 'DELETE FROM deleted_files WHERE service_id = ?;', ( service_id, ) )
+                                
+                            
+                            self._c.execute( 'DELETE FROM service_info WHERE service_id = ?;', ( service_id, ) )
+                            
+                        elif action == HC.CONTENT_UPDATE_ADD:
+                            
+                            if service_type in HC.LOCAL_FILE_SERVICES or service_type == HC.FILE_REPOSITORY:
+                                
+                                ( file_info_manager, timestamp ) = row
+                                
+                                ( hash, size, mime, width, height, duration, num_frames, num_words ) = file_info_manager.ToTuple()
+                                
+                                hash_id = self._GetHashId( hash )
+                                
+                                self._AddFilesInfo( [ ( hash_id, size, mime, width, height, duration, num_frames, num_words ) ] )
+                                
+                            elif service_type == HC.IPFS:
+                                
+                                ( hash, multihash ) = row
+                                
+                                hash_id = self._GetHashId( hash )
+                                
+                                self._SetServiceFilename( service_id, hash_id, multihash )
+                                
+                                timestamp = HydrusData.GetNow()
+                                
+                            
+                            self._AddFiles( service_id, [ ( hash_id, timestamp ) ] )
+                            
+                        elif action == HC.CONTENT_UPDATE_PEND:
+                            
+                            hashes = row
+                            
+                            hash_ids = self._GetHashIds( hashes )
+                            
+                            self._c.executemany( 'INSERT OR IGNORE INTO file_transfers ( service_id, hash_id ) VALUES ( ?, ? );', [ ( service_id, hash_id ) for hash_id in hash_ids ] )
+                            
+                            if service_key == CC.COMBINED_LOCAL_FILE_SERVICE_KEY: notify_new_downloads = True
+                            else: notify_new_pending = True
+                            
+                        elif action == HC.CONTENT_UPDATE_PETITION:
+                            
+                            ( hashes, reason ) = row
+                            
+                            hash_ids = self._GetHashIds( hashes )
+                            
+                            reason_id = self._GetTextId( reason )
+                            
+                            self._c.execute( 'DELETE FROM file_petitions WHERE service_id = ? AND hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) + ';', ( service_id, ) )
+                            
+                            self._c.executemany( 'INSERT OR IGNORE INTO file_petitions ( service_id, hash_id, reason_id ) VALUES ( ?, ?, ? );', [ ( service_id, hash_id, reason_id ) for hash_id in hash_ids ] )
+                            
+                            notify_new_pending = True
+                            
+                        elif action == HC.CONTENT_UPDATE_RESCIND_PEND:
+                            
+                            hashes = row
+                            
+                            hash_ids = self._GetHashIds( hashes )
+                            
+                            self._c.execute( 'DELETE FROM file_transfers WHERE service_id = ? AND hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) + ';', ( service_id, ) )
+                            
+                            notify_new_pending = True
+                            
+                        elif action == HC.CONTENT_UPDATE_RESCIND_PETITION:
+                            
+                            hashes = row
+                            
+                            hash_ids = self._GetHashIds( hashes )
+                            
+                            self._c.execute( 'DELETE FROM file_petitions WHERE service_id = ? AND hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) + ';', ( service_id, ) )
+                            
+                            notify_new_pending = True
+                            
+                        else:
+                            
+                            hashes = row
+                            
+                            hash_ids = self._GetHashIds( hashes )
+                            
+                            if action == HC.CONTENT_UPDATE_ARCHIVE:
+                                
+                                self._ArchiveFiles( hash_ids )
+                                
+                            elif action == HC.CONTENT_UPDATE_INBOX:
+                                
+                                self._InboxFiles( hash_ids )
+                                
+                            elif action == HC.CONTENT_UPDATE_DELETE:
+                                
+                                deleted_hash_ids = self._DeleteFiles( service_id, hash_ids )
+                                
+                                if service_id == self._trash_service_id:
+                                    
+                                    self._DeleteFiles( self._combined_local_file_service_id, deleted_hash_ids )
+                                    
+                                
+                            elif action == HC.CONTENT_UPDATE_UNDELETE:
+                                
+                                splayed_hash_ids = HydrusData.SplayListForDB( hash_ids )
+                                
+                                rows = self._c.execute( 'SELECT hash_id, timestamp FROM current_files WHERE service_id = ? AND hash_id IN ' + splayed_hash_ids + ';', ( self._combined_local_file_service_id, ) ).fetchall()
+                                
+                                self._AddFiles( self._local_file_service_id, rows )
+                                
+                            
+                        
+                    elif data_type == HC.CONTENT_TYPE_DIRECTORIES:
+                        
+                        if action == HC.CONTENT_UPDATE_ADD:
+                            
+                            ( hashes, dirname, note ) = row
+                            
+                            hash_ids = self._GetHashIds( hashes )
+                            
+                            self._SetServiceDirectory( service_id, hash_ids, dirname, note )
+                            
+                        elif action == HC.CONTENT_UPDATE_DELETE:
+                            
+                            dirname = row
+                            
+                            self._DeleteServiceDirectory( service_id, dirname )
+                            
+                        
+                    elif data_type == HC.CONTENT_TYPE_URLS:
+                        
+                        if action == HC.CONTENT_UPDATE_ADD:
+                            
+                            ( hash, urls ) = row
+                            
+                            hash_id = self._GetHashId( hash )
+                            
+                            self._c.executemany( 'INSERT OR IGNORE INTO urls ( hash_id, url ) VALUES ( ?, ? );', ( ( hash_id, url ) for url in urls ) )
+                            
+                        elif action == HC.CONTENT_UPDATE_DELETE:
+                            
+                            ( hash, urls ) = row
+                            
+                            hash_id = self._GetHashId( hash )
+                            
+                            self._c.executemany( 'DELETE FROM urls WHERE hash_id = ? AND url = ?;', ( ( hash_id, url ) for url in urls ) )
+                            
+                        
+                    
+                elif service_type in HC.TAG_SERVICES:
+                    
+                    if data_type == HC.CONTENT_TYPE_MAPPINGS:
+                        
+                        if action == HC.CONTENT_UPDATE_ADVANCED:
+                            
+                            ( sub_action, sub_row ) = row
+                            
+                            if sub_action in ( 'copy', 'delete', 'delete_deleted', 'delete_for_deleted_files' ):
+                                
+                                self._c.execute( 'CREATE TEMPORARY TABLE temp_operation ( job_id INTEGER PRIMARY KEY AUTOINCREMENT, tag_id INTEGER, hash_id INTEGER );' )
+                                
+                                ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( service_id )
+                                
+                                predicates = []
+                                
+                                if sub_action == 'copy':
+                                    
+                                    ( tag, hashes, service_key_target ) = sub_row
+                                    
+                                    source_table_name = current_mappings_table_name
+                                    
+                                elif sub_action == 'delete':
+                                    
+                                    ( tag, hashes ) = sub_row
+                                    
+                                    source_table_name = current_mappings_table_name
+                                    
+                                elif sub_action == 'delete_deleted':
+                                    
+                                    ( tag, hashes ) = sub_row
+                                    
+                                    source_table_name = deleted_mappings_table_name
+                                    
+                                elif sub_action == 'delete_for_deleted_files':
+                                    
+                                    ( tag, hashes ) = sub_row
+                                    
+                                    source_table_name = current_mappings_table_name + ' NATURAL JOIN deleted_files'
+                                    
+                                    predicates.append( 'deleted_files.service_id = ' + str( self._combined_local_file_service_id ) )
+                                    
+                                
+                                do_namespace_join = False
+                                
+                                if tag is not None:
+                                    
+                                    ( tag_type, tag ) = tag
+                                    
+                                    if tag_type == 'tag':
+                                        
+                                        tag_id = self._GetTagId( tag )
+                                        
+                                        predicates.append( 'tag_id = ' + str( tag_id ) )
+                                        
+                                    elif tag_type == 'namespace':
+                                        
+                                        do_namespace_join = True
+                                        
+                                        namespace = tag
+                                        
+                                        namespace_id = self._GetNamespaceId( namespace )
+                                        
+                                        predicates.append( 'namespace_id = ' + str( namespace_id ) )
+                                        
+                                    elif tag_type == 'namespaced':
+                                        
+                                        do_namespace_join = True
+                                        
+                                        predicates.append( 'namespace_id != ' + str( self._null_namespace_id ) )
+                                        
+                                    elif tag_type == 'unnamespaced':
+                                        
+                                        do_namespace_join = True
+                                        
+                                        predicates.append( 'namespace_id = ' + str( self._null_namespace_id ) )
+                                        
+                                    
+                                
+                                if do_namespace_join:
+                                    
+                                    source_table_name = source_table_name + ' NATURAL JOIN tags NATURAL JOIN namespaces'
+                                    
+                                
+                                if hashes is not None:
+                                    
+                                    hash_ids = self._GetHashIds( hashes )
+                                    
+                                    predicates.append( 'hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) )
+                                    
+                                
+                                if len( predicates ) == 0:
+                                    
+                                    self._c.execute( 'INSERT INTO temp_operation ( tag_id, hash_id ) SELECT tag_id, hash_id FROM ' + source_table_name + ';' )
+                                    
+                                else:
+                                    
+                                    self._c.execute( 'INSERT INTO temp_operation ( tag_id, hash_id ) SELECT tag_id, hash_id FROM ' + source_table_name + ' WHERE ' + ' AND '.join( predicates ) + ';' )
+                                    
+                                
+                                num_to_do = self._GetRowCount()
+                                
+                                i = 0
+                                
+                                block_size = 1000
+                                
+                                while i < num_to_do:
+                                    
+                                    advanced_mappings_ids_flat = self._c.execute( 'SELECT tag_id, hash_id FROM temp_operation WHERE job_id BETWEEN ? AND ?;', ( i, i + block_size - 1 ) )
+                                    
+                                    advanced_mappings_ids = HydrusData.BuildKeyToListDict( advanced_mappings_ids_flat ).items()
+                                    
+                                    if sub_action == 'copy':
+                                        
+                                        service_id_target = self._GetServiceId( service_key_target )
+                                        
+                                        service_target = self._GetService( service_id_target )
+                                        
+                                        if service_target.GetServiceType() == HC.LOCAL_TAG:
+                                            
+                                            kwarg = 'mappings_ids'
+                                            
+                                        else:
+                                            
+                                            kwarg = 'pending_mappings_ids'
+                                            
+                                        
+                                        kwargs = { kwarg : advanced_mappings_ids }
+                                        
+                                        self._UpdateMappings( service_id_target, **kwargs )
+                                        
+                                    elif sub_action in ( 'delete', 'delete_for_deleted_files' ):
+                                        
+                                        self._UpdateMappings( service_id, deleted_mappings_ids = advanced_mappings_ids )
+                                        
+                                    elif sub_action == 'delete_deleted':
+                                        
+                                        for ( tag_id, hash_ids ) in advanced_mappings_ids:
+                                            
+                                            self._c.execute( 'DELETE FROM ' + deleted_mappings_table_name + ' WHERE tag_id = ? AND hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) + ';', ( tag_id, ) )
+                                            
+                                        
+                                        self._c.execute( 'DELETE FROM service_info WHERE service_id = ?;', ( service_id, ) )
+                                        
+                                    
+                                    i += block_size
+                                    
+                                
+                                self._c.execute( 'DROP TABLE temp_operation;' )
+                                
+                                self.pub_after_job( 'notify_new_pending' )
+                                
+                            
+                        else:
+                            
+                            if action == HC.CONTENT_UPDATE_PETITION:
+                                
+                                ( tag, hashes, reason ) = row
+                                
+                            else:
+                                
+                                ( tag, hashes ) = row
+                                
+                            
+                            try:
+                                
+                                tag_id = self._GetTagId( tag )
+                                
+                            except HydrusExceptions.SizeException:
+                                
+                                continue
+                                
+                            
+                            hash_ids = self._GetHashIds( hashes )
+                            
+                            if action == HC.CONTENT_UPDATE_ADD:
+                                
+                                ultimate_mappings_ids.append( ( tag_id, hash_ids ) )
+                                
+                            elif action == HC.CONTENT_UPDATE_DELETE:
+                                
+                                ultimate_deleted_mappings_ids.append( ( tag_id, hash_ids ) )
+                                
+                            elif action == HC.CONTENT_UPDATE_PEND:
+                                
+                                ultimate_pending_mappings_ids.append( ( tag_id, hash_ids ) )
+                                
+                            elif action == HC.CONTENT_UPDATE_RESCIND_PEND:
+                                
+                                ultimate_pending_rescinded_mappings_ids.append( ( tag_id, hash_ids ) )
+                                
+                            elif action == HC.CONTENT_UPDATE_PETITION:
+                                
+                                reason_id = self._GetTextId( reason )
+                                
+                                ultimate_petitioned_mappings_ids.append( ( tag_id, hash_ids, reason_id ) )
+                                
+                            elif action == HC.CONTENT_UPDATE_RESCIND_PETITION:
+                                
+                                ultimate_petitioned_rescinded_mappings_ids.append( ( tag_id, hash_ids ) )
+                                
+                            
+                        
+                    elif data_type == HC.CONTENT_TYPE_TAG_PARENTS:
+                        
+                        if action in ( HC.CONTENT_UPDATE_ADD, HC.CONTENT_UPDATE_DELETE ):
+                            
+                            ( child_tag, parent_tag ) = row
+                            
+                            try:
+                                
+                                child_tag_id = self._GetTagId( child_tag )
+                                
+                                parent_tag_id = self._GetTagId( parent_tag )
+                                
+                            except HydrusExceptions.SizeException:
+                                
+                                continue
+                                
+                            
+                            pairs = ( ( child_tag_id, parent_tag_id ), )
+                            
+                            if action == HC.CONTENT_UPDATE_ADD:
+                                
+                                special_content_updates = self._AddTagParents( service_id, pairs, make_content_updates = True )
+                                
+                                self.pub_content_updates_after_commit( { service_key : special_content_updates } )
+                                
+                            elif action == HC.CONTENT_UPDATE_DELETE:
+                                
+                                self._DeleteTagParents( service_id, pairs )
+                                
+                            
+                        elif action in ( HC.CONTENT_UPDATE_PEND, HC.CONTENT_UPDATE_PETITION ):
+                            
+                            if action == HC.CONTENT_UPDATE_PEND:
+                                
+                                new_status = HC.CONTENT_STATUS_PENDING
+                                
+                            elif action == HC.CONTENT_UPDATE_PETITION:
+                                
+                                new_status = HC.CONTENT_STATUS_PETITIONED
+                                
+                            
+                            ( ( child_tag, parent_tag ), reason ) = row
+                            
+                            try:
+                                
+                                child_tag_id = self._GetTagId( child_tag )
+                                
+                                parent_tag_id = self._GetTagId( parent_tag )
+                                
+                            except HydrusExceptions.SizeException:
+                                
+                                continue
+                                
+                            
+                            reason_id = self._GetTextId( reason )
+                            
+                            self._c.execute( 'DELETE FROM tag_parent_petitions WHERE service_id = ? AND child_tag_id = ? AND parent_tag_id = ?;', ( service_id, child_tag_id, parent_tag_id ) )
+                            
+                            self._c.execute( 'INSERT OR IGNORE INTO tag_parent_petitions ( service_id, child_tag_id, parent_tag_id, reason_id, status ) VALUES ( ?, ?, ?, ?, ? );', ( service_id, child_tag_id, parent_tag_id, reason_id, new_status ) )
+                            
+                            notify_new_pending = True
+                            
+                        elif action in ( HC.CONTENT_UPDATE_RESCIND_PEND, HC.CONTENT_UPDATE_RESCIND_PETITION ):
+                            
+                            if action == HC.CONTENT_UPDATE_RESCIND_PEND:
+                                
+                                deletee_status = HC.CONTENT_STATUS_PENDING
+                                
+                            elif action == HC.CONTENT_UPDATE_RESCIND_PETITION:
+                                
+                                deletee_status = HC.CONTENT_STATUS_PETITIONED
+                                
+                            
+                            ( child_tag, parent_tag ) = row
+                            
+                            try:
+                                
+                                child_tag_id = self._GetTagId( child_tag )
+                                
+                                parent_tag_id = self._GetTagId( parent_tag )
+                                
+                            except HydrusExceptions.SizeException:
+                                
+                                continue
+                                
+                            
+                            self._c.execute( 'DELETE FROM tag_parent_petitions WHERE service_id = ? AND child_tag_id = ? AND parent_tag_id = ? AND status = ?;', ( service_id, child_tag_id, parent_tag_id, deletee_status ) )
+                            
+                            notify_new_pending = True
+                            
+                        
+                        notify_new_parents = True
+                        
+                    elif data_type == HC.CONTENT_TYPE_TAG_SIBLINGS:
+                        
+                        if action in ( HC.CONTENT_UPDATE_ADD, HC.CONTENT_UPDATE_DELETE ):
+                            
+                            ( bad_tag, good_tag ) = row
+                            
+                            try:
+                                
+                                bad_tag_id = self._GetTagId( bad_tag )
+                                
+                                good_tag_id = self._GetTagId( good_tag )
+                                
+                            except HydrusExceptions.SizeException:
+                                
+                                continue
+                                
+                            
+                            pairs = ( ( bad_tag_id, good_tag_id ), )
+                            
+                            if action == HC.CONTENT_UPDATE_ADD:
+                                
+                                self._AddTagSiblings( service_id, pairs )
+                                
+                            elif action == HC.CONTENT_UPDATE_DELETE:
+                                
+                                self._DeleteTagSiblings( service_id, pairs )
+                                
+                            
+                        elif action in ( HC.CONTENT_UPDATE_PEND, HC.CONTENT_UPDATE_PETITION ):
+                            
+                            if action == HC.CONTENT_UPDATE_PEND:
+                                
+                                new_status = HC.CONTENT_STATUS_PENDING
+                                
+                            elif action == HC.CONTENT_UPDATE_PETITION:
+                                
+                                new_status = HC.CONTENT_STATUS_PETITIONED
+                                
+                            
+                            ( ( bad_tag, good_tag ), reason ) = row
+                            
+                            try:
+                                
+                                bad_tag_id = self._GetTagId( bad_tag )
+                                
+                                good_tag_id = self._GetTagId( good_tag )
+                                
+                            except HydrusExceptions.SizeException:
+                                
+                                continue
+                                
+                            
+                            reason_id = self._GetTextId( reason )
+                            
+                            self._c.execute( 'DELETE FROM tag_sibling_petitions WHERE service_id = ? AND bad_tag_id = ?;', ( service_id, bad_tag_id ) )
+                            
+                            self._c.execute( 'INSERT OR IGNORE INTO tag_sibling_petitions ( service_id, bad_tag_id, good_tag_id, reason_id, status ) VALUES ( ?, ?, ?, ?, ? );', ( service_id, bad_tag_id, good_tag_id, reason_id, new_status ) )
+                            
+                            notify_new_pending = True
+                            
+                        elif action in ( HC.CONTENT_UPDATE_RESCIND_PEND, HC.CONTENT_UPDATE_RESCIND_PETITION ):
+                            
+                            if action == HC.CONTENT_UPDATE_RESCIND_PEND:
+                                
+                                deletee_status = HC.CONTENT_STATUS_PENDING
+                                
+                            elif action == HC.CONTENT_UPDATE_RESCIND_PETITION:
+                                
+                                deletee_status = HC.CONTENT_STATUS_PETITIONED
+                                
+                            
+                            ( bad_tag, good_tag ) = row
+                            
+                            try:
+                                
+                                bad_tag_id = self._GetTagId( bad_tag )
+                                
+                            except HydrusExceptions.SizeException:
+                                
+                                continue
+                                
+                            
+                            self._c.execute( 'DELETE FROM tag_sibling_petitions WHERE service_id = ? AND bad_tag_id = ? AND status = ?;', ( service_id, bad_tag_id, deletee_status ) )
+                            
+                            notify_new_pending = True
+                            
+                        
+                        notify_new_siblings = True
+                        
+                    
+                elif service_type in HC.RATINGS_SERVICES:
+                    
+                    if action == HC.CONTENT_UPDATE_ADD:
+                        
+                        ( rating, hashes ) = row
+                        
+                        hash_ids = self._GetHashIds( hashes )
+                        
+                        splayed_hash_ids = HydrusData.SplayListForDB( hash_ids )
+                        
+                        if service_type in ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ):
+                            
+                            ratings_added = 0
+                            
+                            self._c.execute( 'DELETE FROM local_ratings WHERE service_id = ? AND hash_id IN ' + splayed_hash_ids + ';', ( service_id, ) )
+                            
+                            ratings_added -= self._GetRowCount()
+                            
+                            if rating is not None:
+                                
+                                self._c.executemany( 'INSERT INTO local_ratings ( service_id, hash_id, rating ) VALUES ( ?, ?, ? );', [ ( service_id, hash_id, rating ) for hash_id in hash_ids ] )
+                                
+                                ratings_added += self._GetRowCount()
+                                
+                            
+                            self._c.execute( 'UPDATE service_info SET info = info + ? WHERE service_id = ? AND info_type = ?;', ( ratings_added, service_id, HC.SERVICE_INFO_NUM_FILES ) )
+                            
+                            # and then do a thing here where it looks up remote services links and then pends/rescinds pends appropriately
+                            
+                        
+                    
+                
+            
+            if len( ultimate_mappings_ids ) + len( ultimate_deleted_mappings_ids ) + len( ultimate_pending_mappings_ids ) + len( ultimate_pending_rescinded_mappings_ids ) + len( ultimate_petitioned_mappings_ids ) + len( ultimate_petitioned_rescinded_mappings_ids ) > 0:
+                
+                self._UpdateMappings( service_id, mappings_ids = ultimate_mappings_ids, deleted_mappings_ids = ultimate_deleted_mappings_ids, pending_mappings_ids = ultimate_pending_mappings_ids, pending_rescinded_mappings_ids = ultimate_pending_rescinded_mappings_ids, petitioned_mappings_ids = ultimate_petitioned_mappings_ids, petitioned_rescinded_mappings_ids = ultimate_petitioned_rescinded_mappings_ids )
+                
+                notify_new_pending = True
+                
+            
+        
+        if do_pubsubs:
+            
+            if notify_new_downloads:
+                
+                self.pub_after_job( 'notify_new_downloads' )
+                
+            if notify_new_pending:
+                
+                self.pub_after_job( 'notify_new_pending' )
+                
+            if notify_new_siblings:
+                
+                self.pub_after_job( 'notify_new_siblings_data' )
+                self.pub_after_job( 'notify_new_siblings_gui' )
+                self.pub_after_job( 'notify_new_parents' )
+                
+            elif notify_new_parents:
+                
+                self.pub_after_job( 'notify_new_parents' )
+                
+            
+            self.pub_content_updates_after_commit( service_keys_to_content_updates )
             
         
     
@@ -6450,640 +7625,6 @@ class DB( HydrusDB.HydrusDB ):
             
         
     
-    def _ProcessContentUpdates( self, service_keys_to_content_updates, do_pubsubs = True ):
-        
-        notify_new_downloads = False
-        notify_new_pending = False
-        notify_new_parents = False
-        notify_new_siblings = False
-        
-        for ( service_key, content_updates ) in service_keys_to_content_updates.items():
-            
-            try:
-                
-                service_id = self._GetServiceId( service_key )
-                
-            except HydrusExceptions.DataMissing:
-                
-                continue
-                
-            
-            service = self._GetService( service_id )
-            
-            service_type = service.GetServiceType()
-            
-            ultimate_mappings_ids = []
-            ultimate_deleted_mappings_ids = []
-            
-            ultimate_pending_mappings_ids = []
-            ultimate_pending_rescinded_mappings_ids = []
-            
-            ultimate_petitioned_mappings_ids = []
-            ultimate_petitioned_rescinded_mappings_ids = []
-            
-            for content_update in content_updates:
-                
-                ( data_type, action, row ) = content_update.ToTuple()
-                
-                if service_type in HC.FILE_SERVICES:
-                    
-                    if data_type == HC.CONTENT_TYPE_FILES:
-                        
-                        if action == HC.CONTENT_UPDATE_ADVANCED:
-                            
-                            ( sub_action, sub_row ) = row
-                            
-                            if sub_action == 'delete_deleted':
-                                
-                                self._c.execute( 'DELETE FROM deleted_files WHERE service_id = ?;', ( service_id, ) )
-                                
-                            
-                            self._c.execute( 'DELETE FROM service_info WHERE service_id = ?;', ( service_id, ) )
-                            
-                        elif action == HC.CONTENT_UPDATE_ADD:
-                            
-                            if service_type in HC.LOCAL_FILE_SERVICES or service_type == HC.FILE_REPOSITORY:
-                                
-                                ( hash, size, mime, timestamp, width, height, duration, num_frames, num_words ) = row
-                                
-                                hash_id = self._GetHashId( hash )
-                                
-                                self._AddFilesInfo( [ ( hash_id, size, mime, width, height, duration, num_frames, num_words ) ] )
-                                
-                            elif service_type == HC.IPFS:
-                                
-                                ( hash, multihash ) = row
-                                
-                                hash_id = self._GetHashId( hash )
-                                
-                                self._SetServiceFilename( service_id, hash_id, multihash )
-                                
-                                timestamp = HydrusData.GetNow()
-                                
-                            
-                            self._AddFiles( service_id, [ ( hash_id, timestamp ) ] )
-                            
-                        elif action == HC.CONTENT_UPDATE_PEND:
-                            
-                            hashes = row
-                            
-                            hash_ids = self._GetHashIds( hashes )
-                            
-                            self._c.executemany( 'INSERT OR IGNORE INTO file_transfers ( service_id, hash_id ) VALUES ( ?, ? );', [ ( service_id, hash_id ) for hash_id in hash_ids ] )
-                            
-                            if service_key == CC.COMBINED_LOCAL_FILE_SERVICE_KEY: notify_new_downloads = True
-                            else: notify_new_pending = True
-                            
-                        elif action == HC.CONTENT_UPDATE_PETITION:
-                            
-                            ( hashes, reason ) = row
-                            
-                            hash_ids = self._GetHashIds( hashes )
-                            
-                            reason_id = self._GetTextId( reason )
-                            
-                            self._c.execute( 'DELETE FROM file_petitions WHERE service_id = ? AND hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) + ';', ( service_id, ) )
-                            
-                            self._c.executemany( 'INSERT OR IGNORE INTO file_petitions ( service_id, hash_id, reason_id ) VALUES ( ?, ?, ? );', [ ( service_id, hash_id, reason_id ) for hash_id in hash_ids ] )
-                            
-                            notify_new_pending = True
-                            
-                        elif action == HC.CONTENT_UPDATE_RESCIND_PEND:
-                            
-                            hashes = row
-                            
-                            hash_ids = self._GetHashIds( hashes )
-                            
-                            self._c.execute( 'DELETE FROM file_transfers WHERE service_id = ? AND hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) + ';', ( service_id, ) )
-                            
-                            notify_new_pending = True
-                            
-                        elif action == HC.CONTENT_UPDATE_RESCIND_PETITION:
-                            
-                            hashes = row
-                            
-                            hash_ids = self._GetHashIds( hashes )
-                            
-                            self._c.execute( 'DELETE FROM file_petitions WHERE service_id = ? AND hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) + ';', ( service_id, ) )
-                            
-                            notify_new_pending = True
-                            
-                        else:
-                            
-                            hashes = row
-                            
-                            hash_ids = self._GetHashIds( hashes )
-                            
-                            if action == HC.CONTENT_UPDATE_ARCHIVE: self._ArchiveFiles( hash_ids )
-                            elif action == HC.CONTENT_UPDATE_INBOX: self._InboxFiles( hash_ids )
-                            elif action == HC.CONTENT_UPDATE_DELETE:
-                                
-                                deleted_hash_ids = self._DeleteFiles( service_id, hash_ids )
-                                
-                                if service_id == self._trash_service_id:
-                                    
-                                    self._DeleteFiles( self._combined_local_file_service_id, deleted_hash_ids )
-                                    
-                                
-                            elif action == HC.CONTENT_UPDATE_UNDELETE:
-                                
-                                splayed_hash_ids = HydrusData.SplayListForDB( hash_ids )
-                                
-                                rows = self._c.execute( 'SELECT hash_id, timestamp FROM current_files WHERE service_id = ? AND hash_id IN ' + splayed_hash_ids + ';', ( self._combined_local_file_service_id, ) ).fetchall()
-                                
-                                self._AddFiles( self._local_file_service_id, rows )
-                                
-                            
-                        
-                    elif data_type == HC.CONTENT_TYPE_DIRECTORIES:
-                        
-                        if action == HC.CONTENT_UPDATE_ADD:
-                            
-                            ( hashes, dirname, note ) = row
-                            
-                            hash_ids = self._GetHashIds( hashes )
-                            
-                            self._SetServiceDirectory( service_id, hash_ids, dirname, note )
-                            
-                        elif action == HC.CONTENT_UPDATE_DELETE:
-                            
-                            dirname = row
-                            
-                            self._DeleteServiceDirectory( service_id, dirname )
-                            
-                        
-                    elif data_type == HC.CONTENT_TYPE_URLS:
-                        
-                        if action == HC.CONTENT_UPDATE_ADD:
-                            
-                            ( hash, urls ) = row
-                            
-                            hash_id = self._GetHashId( hash )
-                            
-                            self._c.executemany( 'INSERT OR IGNORE INTO urls ( url, hash_id ) VALUES ( ?, ? );', ( ( url, hash_id ) for url in urls ) )
-                            
-                        elif action == HC.CONTENT_UPDATE_DELETE:
-                            
-                            ( hash, urls ) = row
-                            
-                            hash_id = self._GetHashId( hash )
-                            
-                            self._c.executemany( 'DELETE FROM urls WHERE hash_id = ? AND url = ?;', ( ( hash_id, url ) for url in urls ) )
-                            
-                        
-                    
-                elif service_type in HC.TAG_SERVICES:
-                    
-                    if data_type == HC.CONTENT_TYPE_MAPPINGS:
-                        
-                        if action == HC.CONTENT_UPDATE_ADVANCED:
-                            
-                            ( sub_action, sub_row ) = row
-                            
-                            if sub_action in ( 'copy', 'delete', 'delete_deleted', 'delete_for_deleted_files' ):
-                                
-                                self._c.execute( 'CREATE TEMPORARY TABLE temp_operation ( job_id INTEGER PRIMARY KEY AUTOINCREMENT, tag_id INTEGER, hash_id INTEGER );' )
-                                
-                                ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( service_id )
-                                
-                                predicates = []
-                                
-                                if sub_action == 'copy':
-                                    
-                                    ( tag, hashes, service_key_target ) = sub_row
-                                    
-                                    source_table_name = current_mappings_table_name
-                                    
-                                elif sub_action == 'delete':
-                                    
-                                    ( tag, hashes ) = sub_row
-                                    
-                                    source_table_name = current_mappings_table_name
-                                    
-                                elif sub_action == 'delete_deleted':
-                                    
-                                    ( tag, hashes ) = sub_row
-                                    
-                                    source_table_name = deleted_mappings_table_name
-                                    
-                                elif sub_action == 'delete_for_deleted_files':
-                                    
-                                    ( tag, hashes ) = sub_row
-                                    
-                                    source_table_name = current_mappings_table_name + ' NATURAL JOIN deleted_files'
-                                    
-                                    predicates.append( 'deleted_files.service_id = ' + str( self._combined_local_file_service_id ) )
-                                    
-                                
-                                do_namespace_join = False
-                                
-                                if tag is not None:
-                                    
-                                    ( tag_type, tag ) = tag
-                                    
-                                    if tag_type == 'tag':
-                                        
-                                        tag_id = self._GetTagId( tag )
-                                        
-                                        predicates.append( 'tag_id = ' + str( tag_id ) )
-                                        
-                                    elif tag_type == 'namespace':
-                                        
-                                        do_namespace_join = True
-                                        
-                                        namespace = tag
-                                        
-                                        namespace_id = self._GetNamespaceId( namespace )
-                                        
-                                        predicates.append( 'namespace_id = ' + str( namespace_id ) )
-                                        
-                                    elif tag_type == 'namespaced':
-                                        
-                                        do_namespace_join = True
-                                        
-                                        predicates.append( 'namespace_id != ' + str( self._null_namespace_id ) )
-                                        
-                                    elif tag_type == 'unnamespaced':
-                                        
-                                        do_namespace_join = True
-                                        
-                                        predicates.append( 'namespace_id = ' + str( self._null_namespace_id ) )
-                                        
-                                    
-                                
-                                if do_namespace_join:
-                                    
-                                    source_table_name = source_table_name + ' NATURAL JOIN namespaces'
-                                    
-                                
-                                if hashes is not None:
-                                    
-                                    hash_ids = self._GetHashIds( hashes )
-                                    
-                                    predicates.append( 'hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) )
-                                    
-                                
-                                if len( predicates ) == 0:
-                                    
-                                    self._c.execute( 'INSERT INTO temp_operation ( tag_id, hash_id ) SELECT tag_id, hash_id FROM ' + source_table_name + ';' )
-                                    
-                                else:
-                                    
-                                    self._c.execute( 'INSERT INTO temp_operation ( tag_id, hash_id ) SELECT tag_id, hash_id FROM ' + source_table_name + ' WHERE ' + ' AND '.join( predicates ) + ';' )
-                                    
-                                
-                                num_to_do = self._GetRowCount()
-                                
-                                i = 0
-                                
-                                block_size = 1000
-                                
-                                while i < num_to_do:
-                                    
-                                    advanced_mappings_ids_flat = self._c.execute( 'SELECT tag_id, hash_id FROM temp_operation WHERE job_id BETWEEN ? AND ?;', ( i, i + block_size - 1 ) )
-                                    
-                                    advanced_mappings_ids = HydrusData.BuildKeyToListDict( advanced_mappings_ids_flat ).items()
-                                    
-                                    if sub_action == 'copy':
-                                        
-                                        service_id_target = self._GetServiceId( service_key_target )
-                                        
-                                        service_target = self._GetService( service_id_target )
-                                        
-                                        if service_target.GetServiceType() == HC.LOCAL_TAG:
-                                            
-                                            kwarg = 'mappings_ids'
-                                            
-                                        else:
-                                            
-                                            kwarg = 'pending_mappings_ids'
-                                            
-                                        
-                                        kwargs = { kwarg : advanced_mappings_ids }
-                                        
-                                        self._UpdateMappings( service_id_target, **kwargs )
-                                        
-                                    elif sub_action in ( 'delete', 'delete_for_deleted_files' ):
-                                        
-                                        self._UpdateMappings( service_id, deleted_mappings_ids = advanced_mappings_ids )
-                                        
-                                    elif sub_action == 'delete_deleted':
-                                        
-                                        for ( tag_id, hash_ids ) in advanced_mappings_ids:
-                                            
-                                            self._c.execute( 'DELETE FROM ' + deleted_mappings_table_name + ' WHERE tag_id = ? AND hash_id IN ' + HydrusData.SplayListForDB( hash_ids ) + ';', ( tag_id, ) )
-                                            
-                                        
-                                        self._c.execute( 'DELETE FROM service_info WHERE service_id = ?;', ( service_id, ) )
-                                        
-                                    
-                                    i += block_size
-                                    
-                                
-                                self._c.execute( 'DROP TABLE temp_operation;' )
-                                
-                                self.pub_after_commit( 'notify_new_pending' )
-                                
-                            
-                        else:
-                            
-                            if action == HC.CONTENT_UPDATE_PETITION:
-                                
-                                ( tag, hashes, reason ) = row
-                                
-                            else:
-                                
-                                ( tag, hashes ) = row
-                                
-                            
-                            try:
-                                
-                                tag_id = self._GetTagId( tag )
-                                
-                            except HydrusExceptions.SizeException:
-                                
-                                continue
-                                
-                            
-                            hash_ids = self._GetHashIds( hashes )
-                            
-                            if action == HC.CONTENT_UPDATE_ADD:
-                                
-                                ultimate_mappings_ids.append( ( tag_id, hash_ids ) )
-                                
-                            elif action == HC.CONTENT_UPDATE_DELETE:
-                                
-                                ultimate_deleted_mappings_ids.append( ( tag_id, hash_ids ) )
-                                
-                            elif action == HC.CONTENT_UPDATE_PEND:
-                                
-                                ultimate_pending_mappings_ids.append( ( tag_id, hash_ids ) )
-                                
-                            elif action == HC.CONTENT_UPDATE_RESCIND_PEND:
-                                
-                                ultimate_pending_rescinded_mappings_ids.append( ( tag_id, hash_ids ) )
-                                
-                            elif action == HC.CONTENT_UPDATE_PETITION:
-                                
-                                reason_id = self._GetTextId( reason )
-                                
-                                ultimate_petitioned_mappings_ids.append( ( tag_id, hash_ids, reason_id ) )
-                                
-                            elif action == HC.CONTENT_UPDATE_RESCIND_PETITION:
-                                
-                                ultimate_petitioned_rescinded_mappings_ids.append( ( tag_id, hash_ids ) )
-                                
-                            
-                        
-                    elif data_type == HC.CONTENT_TYPE_TAG_PARENTS:
-                        
-                        if action in ( HC.CONTENT_UPDATE_ADD, HC.CONTENT_UPDATE_DELETE ):
-                            
-                            ( child_tag, parent_tag ) = row
-                            
-                            try:
-                                
-                                child_tag_id = self._GetTagId( child_tag )
-                                
-                                parent_tag_id = self._GetTagId( parent_tag )
-                                
-                            except HydrusExceptions.SizeException:
-                                
-                                continue
-                                
-                            
-                            pairs = ( ( child_tag_id, parent_tag_id ), )
-                            
-                            if action == HC.CONTENT_UPDATE_ADD:
-                                
-                                special_content_updates = self._AddTagParents( service_id, pairs, make_content_updates = True )
-                                
-                                self.pub_content_updates_after_commit( { service_key : special_content_updates } )
-                                
-                            elif action == HC.CONTENT_UPDATE_DELETE:
-                                
-                                self._DeleteTagParents( service_id, pairs )
-                                
-                            
-                        elif action in ( HC.CONTENT_UPDATE_PEND, HC.CONTENT_UPDATE_PETITION ):
-                            
-                            if action == HC.CONTENT_UPDATE_PEND:
-                                
-                                new_status = HC.CONTENT_STATUS_PENDING
-                                
-                            elif action == HC.CONTENT_UPDATE_PETITION:
-                                
-                                new_status = HC.CONTENT_STATUS_PETITIONED
-                                
-                            
-                            ( ( child_tag, parent_tag ), reason ) = row
-                            
-                            try:
-                                
-                                child_tag_id = self._GetTagId( child_tag )
-                                
-                                parent_tag_id = self._GetTagId( parent_tag )
-                                
-                            except HydrusExceptions.SizeException:
-                                
-                                continue
-                                
-                            
-                            reason_id = self._GetTextId( reason )
-                            
-                            self._c.execute( 'DELETE FROM tag_parent_petitions WHERE service_id = ? AND child_tag_id = ? AND parent_tag_id = ?;', ( service_id, child_tag_id, parent_tag_id ) )
-                            
-                            self._c.execute( 'INSERT OR IGNORE INTO tag_parent_petitions ( service_id, child_tag_id, parent_tag_id, reason_id, status ) VALUES ( ?, ?, ?, ?, ? );', ( service_id, child_tag_id, parent_tag_id, reason_id, new_status ) )
-                            
-                            notify_new_pending = True
-                            
-                        elif action in ( HC.CONTENT_UPDATE_RESCIND_PEND, HC.CONTENT_UPDATE_RESCIND_PETITION ):
-                            
-                            if action == HC.CONTENT_UPDATE_RESCIND_PEND:
-                                
-                                deletee_status = HC.CONTENT_STATUS_PENDING
-                                
-                            elif action == HC.CONTENT_UPDATE_RESCIND_PETITION:
-                                
-                                deletee_status = HC.CONTENT_STATUS_PETITIONED
-                                
-                            
-                            ( child_tag, parent_tag ) = row
-                            
-                            try:
-                                
-                                child_tag_id = self._GetTagId( child_tag )
-                                
-                                parent_tag_id = self._GetTagId( parent_tag )
-                                
-                            except HydrusExceptions.SizeException:
-                                
-                                continue
-                                
-                            
-                            self._c.execute( 'DELETE FROM tag_parent_petitions WHERE service_id = ? AND child_tag_id = ? AND parent_tag_id = ? AND status = ?;', ( service_id, child_tag_id, parent_tag_id, deletee_status ) )
-                            
-                            notify_new_pending = True
-                            
-                        
-                        notify_new_parents = True
-                        
-                    elif data_type == HC.CONTENT_TYPE_TAG_SIBLINGS:
-                        
-                        if action in ( HC.CONTENT_UPDATE_ADD, HC.CONTENT_UPDATE_DELETE ):
-                            
-                            ( bad_tag, good_tag ) = row
-                            
-                            try:
-                                
-                                bad_tag_id = self._GetTagId( bad_tag )
-                                
-                                good_tag_id = self._GetTagId( good_tag )
-                                
-                            except HydrusExceptions.SizeException:
-                                
-                                continue
-                                
-                            
-                            pairs = ( ( bad_tag_id, good_tag_id ), )
-                            
-                            if action == HC.CONTENT_UPDATE_ADD:
-                                
-                                self._AddTagSiblings( service_id, pairs )
-                                
-                            elif action == HC.CONTENT_UPDATE_DELETE:
-                                
-                                self._DeleteTagSiblings( service_id, pairs )
-                                
-                            
-                        elif action in ( HC.CONTENT_UPDATE_PEND, HC.CONTENT_UPDATE_PETITION ):
-                            
-                            if action == HC.CONTENT_UPDATE_PEND:
-                                
-                                new_status = HC.CONTENT_STATUS_PENDING
-                                
-                            elif action == HC.CONTENT_UPDATE_PETITION:
-                                
-                                new_status = HC.CONTENT_STATUS_PETITIONED
-                                
-                            
-                            ( ( bad_tag, good_tag ), reason ) = row
-                            
-                            try:
-                                
-                                bad_tag_id = self._GetTagId( bad_tag )
-                                
-                                good_tag_id = self._GetTagId( good_tag )
-                                
-                            except HydrusExceptions.SizeException:
-                                
-                                continue
-                                
-                            
-                            reason_id = self._GetTextId( reason )
-                            
-                            self._c.execute( 'DELETE FROM tag_sibling_petitions WHERE service_id = ? AND bad_tag_id = ?;', ( service_id, bad_tag_id ) )
-                            
-                            self._c.execute( 'INSERT OR IGNORE INTO tag_sibling_petitions ( service_id, bad_tag_id, good_tag_id, reason_id, status ) VALUES ( ?, ?, ?, ?, ? );', ( service_id, bad_tag_id, good_tag_id, reason_id, new_status ) )
-                            
-                            notify_new_pending = True
-                            
-                        elif action in ( HC.CONTENT_UPDATE_RESCIND_PEND, HC.CONTENT_UPDATE_RESCIND_PETITION ):
-                            
-                            if action == HC.CONTENT_UPDATE_RESCIND_PEND:
-                                
-                                deletee_status = HC.CONTENT_STATUS_PENDING
-                                
-                            elif action == HC.CONTENT_UPDATE_RESCIND_PETITION:
-                                
-                                deletee_status = HC.CONTENT_STATUS_PETITIONED
-                                
-                            
-                            ( bad_tag, good_tag ) = row
-                            
-                            try:
-                                
-                                bad_tag_id = self._GetTagId( bad_tag )
-                                
-                            except HydrusExceptions.SizeException:
-                                
-                                continue
-                                
-                            
-                            self._c.execute( 'DELETE FROM tag_sibling_petitions WHERE service_id = ? AND bad_tag_id = ? AND status = ?;', ( service_id, bad_tag_id, deletee_status ) )
-                            
-                            notify_new_pending = True
-                            
-                        
-                        notify_new_siblings = True
-                        
-                    
-                elif service_type in HC.RATINGS_SERVICES:
-                    
-                    if action == HC.CONTENT_UPDATE_ADD:
-                        
-                        ( rating, hashes ) = row
-                        
-                        hash_ids = self._GetHashIds( hashes )
-                        
-                        splayed_hash_ids = HydrusData.SplayListForDB( hash_ids )
-                        
-                        if service_type in ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ):
-                            
-                            ratings_added = 0
-                            
-                            self._c.execute( 'DELETE FROM local_ratings WHERE service_id = ? AND hash_id IN ' + splayed_hash_ids + ';', ( service_id, ) )
-                            
-                            ratings_added -= self._GetRowCount()
-                            
-                            if rating is not None:
-                                
-                                self._c.executemany( 'INSERT INTO local_ratings ( service_id, hash_id, rating ) VALUES ( ?, ?, ? );', [ ( service_id, hash_id, rating ) for hash_id in hash_ids ] )
-                                
-                                ratings_added += self._GetRowCount()
-                                
-                            
-                            self._c.execute( 'UPDATE service_info SET info = info + ? WHERE service_id = ? AND info_type = ?;', ( ratings_added, service_id, HC.SERVICE_INFO_NUM_FILES ) )
-                            
-                            # and then do a thing here where it looks up remote services links and then pends/rescinds pends appropriately
-                            
-                        
-                    
-                
-            
-            if len( ultimate_mappings_ids ) + len( ultimate_deleted_mappings_ids ) + len( ultimate_pending_mappings_ids ) + len( ultimate_pending_rescinded_mappings_ids ) + len( ultimate_petitioned_mappings_ids ) + len( ultimate_petitioned_rescinded_mappings_ids ) > 0:
-                
-                self._UpdateMappings( service_id, mappings_ids = ultimate_mappings_ids, deleted_mappings_ids = ultimate_deleted_mappings_ids, pending_mappings_ids = ultimate_pending_mappings_ids, pending_rescinded_mappings_ids = ultimate_pending_rescinded_mappings_ids, petitioned_mappings_ids = ultimate_petitioned_mappings_ids, petitioned_rescinded_mappings_ids = ultimate_petitioned_rescinded_mappings_ids )
-                
-                notify_new_pending = True
-                
-            
-        
-        if do_pubsubs:
-            
-            if notify_new_downloads:
-                
-                self.pub_after_commit( 'notify_new_downloads' )
-                
-            if notify_new_pending:
-                
-                self.pub_after_commit( 'notify_new_pending' )
-                
-            if notify_new_siblings:
-                
-                self.pub_after_commit( 'notify_new_siblings_data' )
-                self.pub_after_commit( 'notify_new_siblings_gui' )
-                self.pub_after_commit( 'notify_new_parents' )
-                
-            elif notify_new_parents:
-                
-                self.pub_after_commit( 'notify_new_parents' )
-                
-            
-            self.pub_content_updates_after_commit( service_keys_to_content_updates )
-            
-        
-    
     def _ProcessRepositoryUpdates( self, service_key, only_when_idle = False, stop_time = None ):
         
         service_id = self._GetServiceId( service_key )
@@ -7091,6 +7632,17 @@ class DB( HydrusDB.HydrusDB ):
         ( name, ) = self._c.execute( 'SELECT name FROM services WHERE service_id = ?;', ( service_id, ) ).fetchone()
         
         repository_updates_table_name = GenerateRepositoryRepositoryUpdatesTableName( service_id )
+        
+        result = self._c.execute( 'SELECT 1 FROM ' + repository_updates_table_name + ' WHERE processed = ?;', ( True, ) ).fetchone()
+        
+        if result is None:
+            
+            this_is_first_sync = True
+            
+        else:
+            
+            this_is_first_sync = False
+            
         
         update_indices_to_unprocessed_hash_ids = HydrusData.BuildKeyToSetDict( self._c.execute( 'SELECT update_index, hash_id FROM ' + repository_updates_table_name + ' WHERE processed = ?;', ( False, ) ) )
         
@@ -7141,15 +7693,11 @@ class DB( HydrusDB.HydrusDB ):
                 
                 stop_time = HydrusData.GetNow() + min( 5 + ( num_updates_to_do * 2 ), 30 )
                 
-                self._Commit()
-                
                 self._LoadIntoDiskCache( stop_time = stop_time )
-                
-                self._BeginImmediate()
                 
                 num_updates_done = 0
                 
-                client_files_manager = self._controller.GetClientFilesManager()
+                client_files_manager = self._controller.client_files_manager
                 
                 select_statement = 'SELECT hash_id FROM files_info WHERE mime = ' + str( HC.APPLICATION_HYDRUS_UPDATE_DEFINITIONS ) + ' AND hash_id IN %s;'
                 
@@ -7202,6 +7750,17 @@ class DB( HydrusDB.HydrusDB ):
                             
                             total_definitions_rows += num_rows
                             
+                        
+                        # let's atomically save our progress here to avoid the desync issue some people had.
+                        # the desync issue was that after a power-cut during big sync commits, the master db would sometimes not commit but the mappings _would_
+                        # hence there would be missing definitions
+                        # so, let's lock-in definitions here, while we can, before we add anything that could rely on them
+                        
+                        # this is an issue with WAL journalling, which isn't currently global-atomic with attached dbs, wew lad
+                        
+                        self._Commit()
+                        
+                        self._BeginImmediate()
                         
                     finally:
                         
@@ -7270,7 +7829,14 @@ class DB( HydrusDB.HydrusDB ):
                         
                     
                 
+                self._AnalyzeStaleBigTables()
+                
             finally:
+                
+                if this_is_first_sync:
+                    
+                    self._AnalyzeStaleBigTables()
+                    
                 
                 job_key.SetVariable( 'popup_text_1', 'finished' )
                 job_key.DeleteVariable( 'popup_gauge_1' )
@@ -7312,6 +7878,8 @@ class DB( HydrusDB.HydrusDB ):
         if action == 'autocomplete_predicates': result = self._GetAutocompletePredicates( *args, **kwargs )
         elif action == 'client_files_locations': result = self._GetClientFilesLocations( *args, **kwargs )
         elif action == 'downloads': result = self._GetDownloads( *args, **kwargs )
+        elif action == 'duplicate_hashes': result = self._CacheSimilarFilesGetDuplicateHashes( *args, **kwargs )
+        elif action == 'duplicate_types_to_counts': result = self._CacheSimilarFilesGetDupeStatusesToCounts( *args, **kwargs )
         elif action == 'unique_duplicate_pairs': result = self._CacheSimilarFilesGetUniqueDuplicatePairs( *args, **kwargs )
         elif action == 'file_hashes': result = self._GetFileHashes( *args, **kwargs )
         elif action == 'file_query_ids': result = self._GetHashIdsFromQuery( *args, **kwargs )
@@ -7348,7 +7916,6 @@ class DB( HydrusDB.HydrusDB ):
         elif action == 'service_info': result = self._GetServiceInfo( *args, **kwargs )
         elif action == 'services': result = self._GetServices( *args, **kwargs )
         elif action == 'similar_files_maintenance_status': result = self._CacheSimilarFilesGetMaintenanceStatus( *args, **kwargs )
-        elif action == 'some_dupes': result = self._CacheSimilarFilesGetSomeDupes( *args, **kwargs )
         elif action == 'related_tags': result = self._GetRelatedTags( *args, **kwargs )
         elif action == 'tag_censorship': result = self._GetTagCensorship( *args, **kwargs )
         elif action == 'tag_parents': result = self._GetTagParents( *args, **kwargs )
@@ -7358,6 +7925,46 @@ class DB( HydrusDB.HydrusDB ):
         else: raise Exception( 'db received an unknown read command: ' + action )
         
         return result
+        
+    
+    def _RecheckVideoMetadata( self, hashes ):
+        
+        job_key = ClientThreading.JobKey()
+        
+        job_key.SetVariable( 'popup_title', 'rechecking video metadata' )
+        
+        self._controller.pub( 'message', job_key )
+        
+        client_files_manager = self._controller.client_files_manager
+        
+        num_to_do = len( hashes )
+        
+        for ( i, hash ) in enumerate( hashes ):
+            
+            job_key.SetVariable( 'popup_text_1', 'processing ' + HydrusData.ConvertValueRangeToPrettyString( i + 1, num_to_do ) )
+            job_key.SetVariable( 'popup_gauge_1', ( i + 1, num_to_do ) )
+            
+            hash_id = self._GetHashId( hash )
+            
+            try:
+                
+                mime = self._GetMime( hash_id )
+                
+            except HydrusExceptions.FileMissingException:
+                
+                continue
+                
+            
+            path = client_files_manager.LocklessGetFilePath( hash, mime )
+            
+            ( ( w, h ), duration, num_frames ) = HydrusVideoHandling.GetFFMPEGVideoProperties( path, count_frames_manually = True )
+            
+            self._c.execute( 'UPDATE files_info SET width = ?, height = ?, duration = ?, num_frames = ? WHERE hash_id = ?;', ( w, h, duration, num_frames, hash_id ) )
+            
+        
+        job_key.SetVariable( 'popup_text_1', 'done!' )
+        
+        job_key.DeleteVariable( 'popup_gauge_1' )
         
     
     def _RelocateClientFiles( self, prefix, source, dest ):
@@ -7432,11 +8039,6 @@ class DB( HydrusDB.HydrusDB ):
         
         self._Commit()
         
-        if not self._fast_big_transaction_wal:
-            
-            self._c.execute( 'PRAGMA journal_mode = TRUNCATE;' )
-            
-        
         self._c.execute( 'PRAGMA foreign_keys = ON;' )
         
         self._BeginImmediate()
@@ -7459,18 +8061,16 @@ class DB( HydrusDB.HydrusDB ):
         
         self._AddService( service_key, service_type, name, dictionary )
         
-        self.pub_after_commit( 'notify_unknown_accounts' )
-        self.pub_after_commit( 'notify_new_pending' )
-        self.pub_after_commit( 'notify_new_services_data' )
-        self.pub_after_commit( 'notify_new_services_gui' )
+        self.pub_after_job( 'notify_unknown_accounts' )
+        self.pub_after_job( 'notify_new_pending' )
+        self.pub_after_job( 'notify_new_services_data' )
+        self.pub_after_job( 'notify_new_services_gui' )
         
         job_key.SetVariable( 'popup_text_1', prefix + ': done!' )
         
-        self._Commit()
+        self._CloseDBCursor()
         
         self._InitDBCursor()
-        
-        self._BeginImmediate()
         
         job_key.Finish()
         
@@ -7510,10 +8110,10 @@ class DB( HydrusDB.HydrusDB ):
         
         if resize_thumbs:
             
-            self.pub_after_commit( 'thumbnail_resize' )
+            self.pub_after_job( 'thumbnail_resize' )
             
         
-        self.pub_after_commit( 'notify_new_options' )
+        self.pub_after_job( 'notify_new_options' )
         
     
     def _SetJSONDump( self, obj ):
@@ -7635,7 +8235,7 @@ class DB( HydrusDB.HydrusDB ):
             self._c.execute( 'INSERT OR IGNORE INTO tag_censorship ( service_id, blacklist, tags ) VALUES ( ?, ?, ? );', ( service_id, blacklist, tags ) )
             
         
-        self.pub_after_commit( 'notify_new_tag_censorship' )
+        self.pub_after_job( 'notify_new_tag_censorship' )
         
     
     def _SetYAMLDump( self, dump_type, dump_name, data ):
@@ -7726,8 +8326,14 @@ class DB( HydrusDB.HydrusDB ):
                     
                     if adding:
                         
-                        if tag_service_key == CC.LOCAL_TAG_SERVICE_KEY: action = HC.CONTENT_UPDATE_ADD
-                        else: action = HC.CONTENT_UPDATE_PEND
+                        if tag_service_key == CC.LOCAL_TAG_SERVICE_KEY:
+                            
+                            action = HC.CONTENT_UPDATE_ADD
+                            
+                        else:
+                            
+                            action = HC.CONTENT_UPDATE_PEND
+                            
                         
                     else: action = HC.CONTENT_UPDATE_DELETE
                     
@@ -8102,8 +8708,6 @@ class DB( HydrusDB.HydrusDB ):
             
             self._controller.pub( 'splash_set_status_text', 'committing to disk' )
             
-            self._Commit()
-            
             self._CloseDBCursor()
             
             try:
@@ -8131,8 +8735,6 @@ class DB( HydrusDB.HydrusDB ):
             finally:
                 
                 self._InitDBCursor()
-                
-                self._BeginImmediate()
                 
             
             for schema in [ 'main', 'external_caches', 'external_master', 'external_mappings' ]:
@@ -8893,6 +9495,174 @@ class DB( HydrusDB.HydrusDB ):
                 
             
         
+        if version == 260:
+            
+            self._controller.pub( 'splash_set_status_text', 'generating some new tag search data' )
+            
+            self._c.execute( 'CREATE TABLE external_caches.integer_subtags ( subtag_id INTEGER PRIMARY KEY, integer_subtag INTEGER );' )
+            
+            existing_subtag_data = self._c.execute( 'SELECT subtag_id, subtag FROM subtags;' ).fetchall()
+            
+            inserts = []
+            
+            for ( subtag_id, subtag ) in existing_subtag_data:
+                
+                try:
+                    
+                    integer_subtag = int( subtag )
+                    
+                    if CanCacheInteger( integer_subtag ):
+                        
+                        inserts.append( ( subtag_id, integer_subtag ) )
+                        
+                    
+                except ValueError:
+                    
+                    pass
+                    
+                
+            
+            self._c.executemany( 'INSERT OR IGNORE INTO integer_subtags ( subtag_id, integer_subtag ) VALUES ( ?, ? );', inserts )
+            
+            self._CreateIndex( 'external_caches.integer_subtags', [ 'integer_subtag' ] )
+            
+            #
+            
+            do_the_message = False
+            
+            subscriptions = self._GetJSONDumpNamed( HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION )
+            
+            for subscription in subscriptions:
+                
+                g_i = subscription._gallery_identifier
+                
+                if g_i.GetSiteType() == HC.SITE_TYPE_TUMBLR:
+                    
+                    do_the_message = True
+                    
+                    break
+                    
+                
+            
+            if do_the_message:
+                
+                message = 'The tumblr downloader can now produce \'raw\' urls for images that have >1280px width. It is possible some of your tumblr subscriptions\' urls are resizes, so at some point you may want to reset their url caches. I recommend you not do it yet--wait for the upcoming downloader overhaul, which will provide other benefits such as associating the \'post\' url with the image, rather than the ugly API url.'
+                
+                self.pub_initial_message( message )
+                
+            
+        
+        if version == 262:
+            
+            self._controller.pub( 'splash_set_status_text', 'moving some hash data' )
+            
+            self._c.execute( 'CREATE TABLE IF NOT EXISTS external_master.hashes ( hash_id INTEGER PRIMARY KEY, hash BLOB_BYTES UNIQUE );' )
+            
+            self._c.execute( 'CREATE TABLE external_master.local_hashes ( hash_id INTEGER PRIMARY KEY, md5 BLOB_BYTES, sha1 BLOB_BYTES, sha512 BLOB_BYTES );' )
+            self._CreateIndex( 'external_master.local_hashes', [ 'md5' ] )
+            self._CreateIndex( 'external_master.local_hashes', [ 'sha1' ] )
+            self._CreateIndex( 'external_master.local_hashes', [ 'sha512' ] )
+            
+            self._c.execute( 'INSERT INTO external_master.local_hashes SELECT * FROM main.local_hashes;' )
+            
+            self._c.execute( 'DROP TABLE main.local_hashes;' )
+            
+            self._c.execute( 'ANALYZE external_master.local_hashes;' )
+            
+            self._CloseDBCursor()
+            
+            self._controller.pub( 'splash_set_status_text', 'vacuuming main db ' )
+            
+            db_path = os.path.join( self._db_dir, 'client.db' )
+            
+            try:
+                
+                if HydrusDB.CanVacuum( db_path ):
+                    
+                    HydrusDB.VacuumDB( db_path )
+                    
+                
+            except Exception as e:
+                
+                HydrusData.Print( 'Vacuum failed!' )
+                HydrusData.PrintException( e )
+                
+            
+            self._InitDBCursor()
+            
+            #
+            
+            bandwidth_manager = ClientDefaults.GetDefaultBandwidthManager()
+            
+            self._SetJSONDump( bandwidth_manager )
+            
+            session_manager = ClientNetworking.NetworkSessionManager()
+            
+            self._SetJSONDump( session_manager )
+            
+            #
+            
+            self._controller.pub( 'splash_set_status_text', 'generating deleted tag cache' )
+            
+            tag_service_ids = self._GetServiceIds( HC.TAG_SERVICES )
+            file_service_ids = self._GetServiceIds( HC.AUTOCOMPLETE_CACHE_SPECIFIC_FILE_SERVICES )
+            
+            for ( file_service_id, tag_service_id ) in itertools.product( file_service_ids, tag_service_ids ):
+                
+                ( cache_files_table_name, cache_current_mappings_table_name, cache_deleted_mappings_table_name, cache_pending_mappings_table_name, ac_cache_table_name ) = GenerateSpecificMappingsCacheTableNames( file_service_id, tag_service_id )
+                
+                self._c.execute( 'CREATE TABLE IF NOT EXISTS ' + cache_deleted_mappings_table_name + ' ( hash_id INTEGER, tag_id INTEGER, PRIMARY KEY ( hash_id, tag_id ) ) WITHOUT ROWID;' )
+                
+                hash_ids = [ hash_id for ( hash_id, ) in self._c.execute( 'SELECT hash_id FROM current_files WHERE service_id = ?;', ( file_service_id, ) ) ]
+                
+                if len( hash_ids ) > 0:
+                    
+                    ( current_mappings_table_name, deleted_mappings_table_name, pending_mappings_table_name, petitioned_mappings_table_name ) = GenerateMappingsTableNames( tag_service_id )
+                    
+                    for group_of_hash_ids in HydrusData.SplitListIntoChunks( hash_ids, 100 ):
+                        
+                        splayed_group_of_hash_ids = HydrusData.SplayListForDB( group_of_hash_ids )
+                        
+                        deleted_mapping_ids_raw = self._c.execute( 'SELECT tag_id, hash_id FROM ' + deleted_mappings_table_name + ' WHERE hash_id IN ' + splayed_group_of_hash_ids + ';' ).fetchall()
+                        
+                        deleted_mapping_ids_dict = HydrusData.BuildKeyToSetDict( deleted_mapping_ids_raw )
+                        
+                        all_ids_seen = set( deleted_mapping_ids_dict.keys() )
+                        
+                        for tag_id in all_ids_seen:
+                            
+                            deleted_hash_ids = deleted_mapping_ids_dict[ tag_id ]
+                            
+                            num_deleted = len( deleted_hash_ids )
+                            
+                            if num_deleted > 0:
+                                
+                                self._c.executemany( 'INSERT OR IGNORE INTO ' + cache_deleted_mappings_table_name + ' ( hash_id, tag_id ) VALUES ( ?, ? );', ( ( hash_id, tag_id ) for hash_id in deleted_hash_ids ) )
+                                
+                            
+                        
+                    
+                
+                self._c.execute( 'ANALYZE ' + cache_deleted_mappings_table_name + ';' )
+                
+            
+        
+        if version == 263:
+            
+            self._controller.pub( 'splash_set_status_text', 'rebuilding urls table' )
+            
+            self._c.execute( 'ALTER TABLE urls RENAME TO urls_old;' )
+            
+            self._c.execute( 'CREATE TABLE urls ( hash_id INTEGER, url TEXT, PRIMARY KEY ( hash_id, url ) );' )
+            self._CreateIndex( 'urls', [ 'url' ] )
+            
+            self._c.execute( 'INSERT INTO urls SELECT hash_id, url FROM urls_old;' )
+            
+            self._c.execute( 'DROP TABLE urls_old;' )
+            
+            self._c.execute( 'ANALYZE urls;' )
+            
+        
         self._controller.pub( 'splash_set_title_text', 'updated db to v' + str( version + 1 ) )
         
         self._c.execute( 'UPDATE version SET version = ?;', ( version + 1, ) )
@@ -9210,10 +9980,10 @@ class DB( HydrusDB.HydrusDB ):
             self._DeleteService( service_id )
             
         
-        self.pub_after_commit( 'notify_unknown_accounts' )
-        self.pub_after_commit( 'notify_new_services_data' )
-        self.pub_after_commit( 'notify_new_services_gui' )
-        self.pub_after_commit( 'notify_new_pending' )
+        self.pub_after_job( 'notify_unknown_accounts' )
+        self.pub_after_job( 'notify_new_services_data' )
+        self.pub_after_job( 'notify_new_services_gui' )
+        self.pub_after_job( 'notify_new_pending' )
         
     
     def _UpdateService( self, service ):
@@ -9264,8 +10034,8 @@ class DB( HydrusDB.HydrusDB ):
             
             if old_port != new_port:
                 
-                self.pub_after_commit( 'restart_booru' )
-                self.pub_after_commit( 'notify_new_upnp_mappings' )
+                self.pub_after_job( 'restart_booru' )
+                self.pub_after_job( 'notify_new_upnp_mappings' )
                 
             else:
                 
@@ -9274,7 +10044,7 @@ class DB( HydrusDB.HydrusDB ):
                 
                 if old_upnp != new_upnp:
                     
-                    self.pub_after_commit( 'notify_new_upnp_mappings' )
+                    self.pub_after_job( 'notify_new_upnp_mappings' )
                     
                 
             
@@ -9293,11 +10063,6 @@ class DB( HydrusDB.HydrusDB ):
     def _UpdateServices( self, services ):
         
         self._Commit()
-        
-        if not self._fast_big_transaction_wal:
-            
-            self._c.execute( 'PRAGMA journal_mode = TRUNCATE;' )
-            
         
         self._c.execute( 'PRAGMA foreign_keys = ON;' )
         
@@ -9333,16 +10098,14 @@ class DB( HydrusDB.HydrusDB ):
                 
             
         
-        self.pub_after_commit( 'notify_unknown_accounts' )
-        self.pub_after_commit( 'notify_new_services_data' )
-        self.pub_after_commit( 'notify_new_services_gui' )
-        self.pub_after_commit( 'notify_new_pending' )
+        self.pub_after_job( 'notify_unknown_accounts' )
+        self.pub_after_job( 'notify_new_services_data' )
+        self.pub_after_job( 'notify_new_services_gui' )
+        self.pub_after_job( 'notify_new_pending' )
         
-        self._Commit()
+        self._CloseDBCursor()
         
         self._InitDBCursor()
-        
-        self._BeginImmediate()
         
     
     def _Vacuum( self, stop_time = None, force_vacuum = False ):
@@ -9372,8 +10135,6 @@ class DB( HydrusDB.HydrusDB ):
             
         
         if len( due_names ) > 0:
-            
-            self._Commit()
             
             job_key_pubbed = False
             
@@ -9434,8 +10195,6 @@ class DB( HydrusDB.HydrusDB ):
                         
                         self._InitDBCursor()
                         
-                        self._BeginImmediate()
-                        
                         new_options.SetNoneableInteger( 'maintenance_vacuum_period_days', None )
                         
                         self._SaveOptions( HC.options )
@@ -9449,8 +10208,6 @@ class DB( HydrusDB.HydrusDB ):
             finally:
                 
                 self._InitDBCursor()
-                
-                self._BeginImmediate()
                 
                 self._c.executemany( 'DELETE FROM vacuum_timestamps WHERE name = ?;', ( ( name, ) for name in names_done ) )
                 
@@ -9492,6 +10249,7 @@ class DB( HydrusDB.HydrusDB ):
         elif action == 'maintain_similar_files_tree': result = self._CacheSimilarFilesMaintainTree( *args, **kwargs )
         elif action == 'process_repository': result = self._ProcessRepositoryUpdates( *args, **kwargs )
         elif action == 'push_recent_tags': result = self._PushRecentTags( *args, **kwargs )
+        elif action == 'recheck_video_metadata': result = self._RecheckVideoMetadata( *args, **kwargs )
         elif action == 'regenerate_ac_cache': result = self._RegenerateACCache( *args, **kwargs )
         elif action == 'regenerate_similar_files': result = self._CacheSimilarFilesRegenerateTree( *args, **kwargs )
         elif action == 'relocate_client_files': result = self._RelocateClientFiles( *args, **kwargs )
@@ -9516,8 +10274,8 @@ class DB( HydrusDB.HydrusDB ):
     
     def pub_content_updates_after_commit( self, service_keys_to_content_updates ):
         
-        self.pub_after_commit( 'content_updates_data', service_keys_to_content_updates )
-        self.pub_after_commit( 'content_updates_gui', service_keys_to_content_updates )
+        self.pub_after_job( 'content_updates_data', service_keys_to_content_updates )
+        self.pub_after_job( 'content_updates_gui', service_keys_to_content_updates )
         
     
     def pub_initial_message( self, message ):
@@ -9527,8 +10285,13 @@ class DB( HydrusDB.HydrusDB ):
     
     def pub_service_updates_after_commit( self, service_keys_to_service_updates ):
         
-        self.pub_after_commit( 'service_updates_data', service_keys_to_service_updates )
-        self.pub_after_commit( 'service_updates_gui', service_keys_to_service_updates )
+        self.pub_after_job( 'service_updates_data', service_keys_to_service_updates )
+        self.pub_after_job( 'service_updates_gui', service_keys_to_service_updates )
+        
+    
+    def publish_status_update( self ):
+        
+        self._controller.pubimmediate( 'refresh_status' )
         
     
     def GetInitialMessages( self ):

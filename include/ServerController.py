@@ -167,7 +167,7 @@ class Controller( HydrusController.HydrusController ):
     
     def _InitDB( self ):
         
-        return ServerDB.DB( self, self._db_dir, 'server', no_wal = self._no_wal )
+        return ServerDB.DB( self, self.db_dir, 'server', no_wal = self._no_wal )
         
     
     def StartService( self, service ):
@@ -209,9 +209,11 @@ class Controller( HydrusController.HydrusController ):
                             return
                             
                         
-                        ( ssl_cert_path, ssl_key_path ) = self._db.GetSSLPaths()
+                        ( ssl_cert_path, ssl_key_path ) = self.db.GetSSLPaths()
                         
-                        context_factory = twisted.internet.ssl.DefaultOpenSSLContextFactory( ssl_key_path, ssl_cert_path )
+                        sslmethod = twisted.internet.ssl.SSL.TLSv1_2_METHOD
+                        
+                        context_factory = twisted.internet.ssl.DefaultOpenSSLContextFactory( ssl_key_path, ssl_cert_path, sslmethod )
                         
                         self._service_keys_to_connected_ports[ service_key ] = reactor.listenSSL( port, http_factory, context_factory )
                         
@@ -270,17 +272,22 @@ class Controller( HydrusController.HydrusController ):
         
         self.ShutdownModel()
         
-        HydrusData.CleanRunningFile( self._db_dir, 'server' )
+        HydrusData.CleanRunningFile( self.db_dir, 'server' )
         
     
     def GetFilesDir( self ):
         
-        return self._db.GetFilesDir()
+        return self.db.GetFilesDir()
         
     
     def GetServerSessionManager( self ):
         
         return self._server_session_manager
+        
+    
+    def GetServices( self ):
+        
+        return list( self._services )
         
     
     def InitModel( self ):
@@ -339,7 +346,10 @@ class Controller( HydrusController.HydrusController ):
             
         
     
-    def JustWokeFromSleep( self ): return False
+    def JustWokeFromSleep( self ):
+        
+        return False
+        
     
     def MaintainDB( self, stop_time = None ):
         
@@ -353,14 +363,19 @@ class Controller( HydrusController.HydrusController ):
         self.CallToThread( self.ProcessPubSub )
         
     
-    def RequestMade( self, num_bytes ):
+    def ReportDataUsed( self, num_bytes ):
         
-        self._admin_service.ServerRequestMade( num_bytes )
+        self._admin_service.ServerReportDataUsed( num_bytes )
+        
+    
+    def ReportRequestUsed( self ):
+        
+        self._admin_service.ServerReportRequestUsed()
         
     
     def Run( self ):
         
-        HydrusData.RecordRunningStart( self._db_dir, 'server' )
+        HydrusData.RecordRunningStart( self.db_dir, 'server' )
         
         HydrusData.Print( u'Initialising db\u2026' )
         
@@ -421,12 +436,14 @@ class Controller( HydrusController.HydrusController ):
             
         
     
-    def ServerBandwidthOk( self ):
+    def ServerBandwidthOK( self ):
         
-        return self._admin_service.ServerBandwidthOk()
+        return self._admin_service.ServerBandwidthOK()
         
     
     def SetServices( self, services ):
+        
+        # doesn't need the dirty_object_lock because the caller takes it
         
         self._services = services
         
@@ -487,7 +504,3 @@ class Controller( HydrusController.HydrusController ):
             
         
     
-    def UpdateAccounts( self, service_key, accounts ):
-        
-        self._server_session_manager.UpdateAccounts( service_key, accounts )
-        

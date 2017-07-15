@@ -1,5 +1,6 @@
 import ClientCaches
 import ClientConstants as CC
+import ClientData
 import ClientGUICommon
 import ClientGUIDialogs
 import ClientGUIMenus
@@ -160,7 +161,7 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
             
             self._bandwidth_type.Bind( wx.EVT_CHOICE, self.EventBandwidth )
             
-            self._time_delta = ClientGUICommon.TimeDeltaButton( self, min = 3600, days = True, hours = True, monthly_allowed = True )
+            self._time_delta = ClientGUICommon.TimeDeltaButton( self, min = 1, days = True, hours = True, minutes = True, seconds = True, monthly_allowed = True )
             
             self._max_allowed = wx.SpinCtrl( self, min = 1, max = 1024 * 1024 * 1024 )
             
@@ -345,191 +346,165 @@ class EditStringToStringDictControl( wx.Panel ):
         return value_dict
         
     
-class SeedCacheControl( ClientGUICommon.SaneListCtrlForSingleObject ):
+class NetworkJobControl( wx.Panel ):
     
-    def __init__( self, parent, seed_cache ):
+    def __init__( self, parent ):
         
-        height = 300
-        columns = [ ( 'source', -1 ), ( 'status', 90 ), ( 'added', 150 ), ( 'last modified', 150 ), ( 'note', 200 ) ]
+        wx.Panel.__init__( self, parent, style = wx.BORDER_DOUBLE )
         
-        ClientGUICommon.SaneListCtrlForSingleObject.__init__( self, parent, height, columns )
+        self._network_job = None
+        self._download_started = False
         
-        self._seed_cache = seed_cache
+        self._left_text = ClientGUICommon.BetterStaticText( self )
+        self._right_text = ClientGUICommon.BetterStaticText( self, style = wx.ALIGN_RIGHT )
         
-        for seed in self._seed_cache.GetSeeds():
-            
-            self._AddSeed( seed )
-            
+        # 512/768KB - 200KB/s
+        right_width = ClientData.ConvertTextToPixelWidth( self._right_text, 20 )
         
-        self.Bind( wx.EVT_MENU, self.EventMenu )
-        self.Bind( wx.EVT_RIGHT_DOWN, self.EventShowMenu )
+        self._right_text.SetMinSize( ( right_width, -1 ) )
         
-        HG.client_controller.sub( self, 'NotifySeedUpdated', 'seed_cache_seed_updated' )
+        self._gauge = ClientGUICommon.Gauge( self )
+        
+        self._cancel_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.stop, self.Cancel )
+        
+        #
+        
+        self._Update()
+        
+        #
+        
+        st_hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        st_hbox.AddF( self._left_text, CC.FLAGS_EXPAND_BOTH_WAYS )
+        st_hbox.AddF( self._right_text, CC.FLAGS_VCENTER )
+        
+        left_vbox = wx.BoxSizer( wx.VERTICAL )
+        
+        left_vbox.AddF( st_hbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        left_vbox.AddF( self._gauge, CC.FLAGS_EXPAND_PERPENDICULAR )
+        
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        hbox.AddF( left_vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        hbox.AddF( self._cancel_button, CC.FLAGS_VCENTER )
+        
+        self.SetSizer( hbox )
+        
+        #
+        
+        self.Bind( wx.EVT_TIMER, self.TIMEREventUpdate )
+        
+        self._move_hide_timer = wx.Timer( self )
+        
+        self._move_hide_timer.Start( 250, wx.TIMER_CONTINUOUS )
         
     
-    def _AddSeed( self, seed ):
+    def _Update( self ):
         
-        sort_tuple = self._seed_cache.GetSeedInfo( seed )
-        
-        ( display_tuple, sort_tuple ) = self._GetListCtrlTuples( seed )
-        
-        self.Append( display_tuple, sort_tuple, seed )
-        
-    
-    def _GetListCtrlTuples( self, seed ):
-        
-        sort_tuple = self._seed_cache.GetSeedInfo( seed )
-        
-        ( seed, status, added_timestamp, last_modified_timestamp, note ) = sort_tuple
-        
-        pretty_seed = HydrusData.ToUnicode( seed )
-        pretty_status = CC.status_string_lookup[ status ]
-        pretty_added = HydrusData.ConvertTimestampToPrettyAgo( added_timestamp )
-        pretty_modified = HydrusData.ConvertTimestampToPrettyAgo( last_modified_timestamp )
-        pretty_note = note.split( os.linesep )[0]
-        
-        display_tuple = ( pretty_seed, pretty_status, pretty_added, pretty_modified, pretty_note )
-        
-        return ( display_tuple, sort_tuple )
-        
-    
-    def _CopySelectedNotes( self ):
-        
-        notes = []
-        
-        for seed in self.GetObjects( only_selected = True ):
+        if self._network_job is None:
             
-            ( seed, status, added_timestamp, last_modified_timestamp, note ) = self._seed_cache.GetSeedInfo( seed )
+            self._left_text.SetLabelText( '' )
+            self._right_text.SetLabelText( '' )
+            self._gauge.SetRange( 1 )
+            self._gauge.SetValue( 0 )
             
-            if note != '':
+            can_cancel = False
+            
+        else:
+            
+            if self._network_job.IsDone():
                 
-                notes.append( note )
-                
-            
-        
-        if len( notes ) > 0:
-            
-            separator = os.linesep * 2
-            
-            text = separator.join( notes )
-            
-            HG.client_controller.pub( 'clipboard', 'text', text )
-            
-        
-    
-    def _CopySelectedSeeds( self ):
-        
-        seeds = self.GetObjects( only_selected = True )
-        
-        if len( seeds ) > 0:
-            
-            separator = os.linesep * 2
-            
-            text = separator.join( seeds )
-            
-            HG.client_controller.pub( 'clipboard', 'text', text )
-            
-        
-    
-    def _DeleteSelected( self ):
-        
-        seeds_to_delete = self.GetObjects( only_selected = True )
-        
-        for seed in seeds_to_delete:
-            
-            self._seed_cache.RemoveSeed( seed )
-            
-        
-    
-    def _SetSelected( self, status_to_set ):
-        
-        seeds_to_reset = self.GetObjects( only_selected = True )
-        
-        for seed in seeds_to_reset:
-            
-            self._seed_cache.UpdateSeedStatus( seed, status_to_set )
-            
-        
-    
-    def EventMenu( self, event ):
-        
-        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
-        
-        if action is not None:
-            
-            ( command, data ) = action
-            
-            if command == 'copy_seed_notes': self._CopySelectedNotes()
-            elif command == 'copy_seeds': self._CopySelectedSeeds()
-            elif command == 'delete_seeds':
-                
-                message = 'Are you sure you want to delete all the selected entries?'
-                
-                with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
-                    
-                    if dlg.ShowModal() == wx.ID_YES:
-                        
-                        self._DeleteSelected()
-                        
-                    
-                
-            elif command == 'set_seed_unknown': self._SetSelected( CC.STATUS_UNKNOWN )
-            elif command == 'set_seed_skipped': self._SetSelected( CC.STATUS_SKIPPED )
-            else: event.Skip()
-            
-        
-    
-    def _ShowMenuIfNeeded( self ):
-        
-        if self.GetSelectedItemCount() > 0:
-            
-            menu = wx.Menu()
-            
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'copy_seeds' ), 'copy sources' )
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'copy_seed_notes' ), 'copy notes' )
-            
-            ClientGUIMenus.AppendSeparator( menu )
-            
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'set_seed_unknown' ), 'try again' )
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'set_seed_skipped' ), 'skip' )
-            menu.Append( ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'delete_seeds' ), 'delete' )
-            
-            HG.client_controller.PopupMenu( self, menu )
-            
-        
-    
-    def EventShowMenu( self, event ):
-        
-        wx.CallAfter( self._ShowMenuIfNeeded )
-        
-        event.Skip() # let the right click event go through before doing menu, in case selection should happen
-        
-    
-    def NotifySeedUpdated( self, seed ):
-        
-        if self._seed_cache.HasSeed( seed ):
-            
-            if self.HasObject( seed ):
-                
-                index = self.GetIndexFromObject( seed )
-                
-                ( display_tuple, sort_tuple ) = self._GetListCtrlTuples( seed )
-                
-                self.UpdateRow( index, display_tuple, sort_tuple, seed )
+                can_cancel = False
                 
             else:
                 
-                self._AddSeed( seed )
+                can_cancel = True
+                
+            
+            ( status_text, current_speed, bytes_read, bytes_to_read ) = self._network_job.GetStatus()
+            
+            self._left_text.SetLabelText( status_text )
+            
+            if not self._download_started and current_speed > 0:
+                
+                self._download_started = True
+                
+            
+            if self._download_started and not self._network_job.HasError():
+                
+                speed_text = ''
+                
+                if bytes_read is not None:
+                    
+                    if bytes_to_read is not None and bytes_read != bytes_to_read:
+                        
+                        speed_text += HydrusData.ConvertValueRangeToBytes( bytes_read, bytes_to_read )
+                        
+                    else:
+                        
+                        speed_text += HydrusData.ConvertIntToBytes( bytes_read )
+                        
+                    
+                
+                if current_speed != bytes_to_read: # if it is a real quick download, just say its size
+                    
+                    speed_text += ' ' + HydrusData.ConvertIntToBytes( current_speed ) + '/s'
+                    
+                
+                self._right_text.SetLabelText( speed_text )
+                
+            else:
+                
+                self._right_text.SetLabelText( '' )
+                
+            
+            self._gauge.SetRange( bytes_to_read )
+            self._gauge.SetValue( bytes_read )
+            
+        
+        if can_cancel:
+            
+            if not self._cancel_button.IsEnabled():
+                
+                self._cancel_button.Enable()
                 
             
         else:
             
-            if self.HasObject( seed ):
+            if self._cancel_button.IsEnabled():
                 
-                index = self.GetIndexFromObject( seed )
-                
-                self.DeleteItem( index )
+                self._cancel_button.Disable()
                 
             
         
     
+    def Cancel( self ):
+        
+        if self._network_job is not None:
+            
+            self._network_job.Cancel()
+            
+        
+    
+    def ClearNetworkJob( self ):
+        
+        self._Update()
+        
+        self._network_job = None
+        
+        self._move_hide_timer.Start( 250, wx.TIMER_CONTINUOUS )
+        
+    
+    def SetNetworkJob( self, network_job ):
+        
+        self._network_job = network_job
+        self._download_started = False
+        
+    
+    def TIMEREventUpdate( self, event ):
+        
+        if self.IsShown():
+            
+            self._Update()
+            
+        

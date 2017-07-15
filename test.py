@@ -19,12 +19,14 @@ from include import TestClientConstants
 from include import TestClientDaemons
 from include import TestClientDownloading
 from include import TestClientListBoxes
+from include import TestClientNetworking
 from include import TestConstants
 from include import TestDialogs
 from include import TestDB
 from include import TestFunctions
 from include import TestClientImageHandling
 from include import TestHydrusNATPunch
+from include import TestHydrusNetworking
 from include import TestHydrusSerialisable
 from include import TestHydrusServer
 from include import TestHydrusSessions
@@ -51,14 +53,14 @@ class Controller( object ):
     
     def __init__( self ):
         
-        self._db_dir = tempfile.mkdtemp()
+        self.db_dir = tempfile.mkdtemp()
         
-        TestConstants.DB_DIR = self._db_dir
+        TestConstants.DB_DIR = self.db_dir
         
-        self._server_files_dir = os.path.join( self._db_dir, 'server_files' )
-        self._updates_dir = os.path.join( self._db_dir, 'test_updates' )
+        self._server_files_dir = os.path.join( self.db_dir, 'server_files' )
+        self._updates_dir = os.path.join( self.db_dir, 'test_updates' )
         
-        client_files_default = os.path.join( self._db_dir, 'client_files' )
+        client_files_default = os.path.join( self.db_dir, 'client_files' )
         
         HydrusPaths.MakeSureDirectoryExists( self._server_files_dir )
         HydrusPaths.MakeSureDirectoryExists( self._updates_dir )
@@ -71,7 +73,7 @@ class Controller( object ):
         
         self._pubsub = HydrusPubSub.HydrusPubSub( self )
         
-        self._new_options = ClientData.ClientOptions( self._db_dir )
+        self._new_options = ClientData.ClientOptions( self.db_dir )
         
         def show_text( text ): pass
         
@@ -124,8 +126,8 @@ class Controller( object ):
         
         self._managers = {}
         
-        self._services_manager = ClientCaches.ServicesManager( self )
-        self._client_files_manager = ClientCaches.ClientFilesManager( self )
+        self.services_manager = ClientCaches.ServicesManager( self )
+        self.client_files_manager = ClientCaches.ClientFilesManager( self )
         self._client_session_manager = ClientCaches.HydrusSessionManager( self )
         
         self._managers[ 'tag_censorship' ] = ClientCaches.TagCensorshipManager( self )
@@ -194,11 +196,6 @@ class Controller( object ):
     
     def DoHTTP( self, *args, **kwargs ): return self._http.Request( *args, **kwargs )
     
-    def GetClientFilesManager( self ):
-        
-        return self._client_files_manager
-        
-    
     def GetClientSessionManager( self ):
         
         return self._client_session_manager
@@ -221,11 +218,9 @@ class Controller( object ):
         return HC.options
         
     
-    def GetManager( self, manager_type ): return self._managers[ manager_type ]
-    
-    def GetServicesManager( self ):
+    def GetManager( self, manager_type ):
         
-        return self._services_manager
+        return self._managers[ manager_type ]
         
     
     def GetServerSessionManager( self ):
@@ -240,6 +235,11 @@ class Controller( object ):
         del self._writes[ name ]
         
         return write
+        
+    
+    def IsBooted( self ):
+        
+        return True
         
     
     def IsFirstStart( self ):
@@ -257,7 +257,12 @@ class Controller( object ):
         return self._reads[ name ]
         
     
-    def RequestMade( self, num_bytes ):
+    def ReportDataUsed( self, num_bytes ):
+        
+        pass
+        
+    
+    def ReportRequestUsed( self ):
         
         pass
         
@@ -281,7 +286,11 @@ class Controller( object ):
             suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusSessions ) )
             suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusTags ) )
         if run_all or only_run == 'db': suites.append( unittest.TestLoader().loadTestsFromModule( TestDB ) )
-        if run_all or only_run == 'downloading': suites.append( unittest.TestLoader().loadTestsFromModule( TestClientDownloading ) )
+        if run_all or only_run == 'downloading':
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestClientDownloading ) )
+        if run_all or only_run == 'networking':
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestClientNetworking ) )
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusNetworking ) )
         if run_all or only_run == 'gui':
             suites.append( unittest.TestLoader().loadTestsFromModule( TestDialogs ) )
             suites.append( unittest.TestLoader().loadTestsFromModule( TestClientListBoxes ) )
@@ -306,7 +315,7 @@ class Controller( object ):
         
         time.sleep( 2 )
         
-        HydrusPaths.DeletePath( self._db_dir )
+        HydrusPaths.DeletePath( self.db_dir )
         
     
     def ViewIsShutdown( self ):

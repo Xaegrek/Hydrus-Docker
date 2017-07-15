@@ -5,6 +5,7 @@ import HydrusGlobals as HG
 import os
 import psutil
 import send2trash
+import shlex
 import shutil
 import stat
 import subprocess
@@ -315,14 +316,20 @@ def LaunchDirectory( path ):
             
         else:
             
-            if HC.PLATFORM_OSX: cmd = [ 'open' ]
-            elif HC.PLATFORM_LINUX: cmd = [ 'xdg-open' ]
+            if HC.PLATFORM_OSX:
+                
+                cmd = 'open'
+                
+            elif HC.PLATFORM_LINUX:
+                
+                cmd = 'xdg-open'
+                
             
-            cmd.append( path )
+            cmd += ' "' + path + '"'
             
             # setsid call un-childs this new process
             
-            process = subprocess.Popen( cmd, preexec_fn = os.setsid, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+            process = subprocess.Popen( shlex.split( cmd ), preexec_fn = os.setsid, startupinfo = HydrusData.GetHideTerminalSubprocessStartupInfo() )
             
             process.wait()
             
@@ -346,14 +353,20 @@ def LaunchFile( path ):
             
         else:
             
-            if HC.PLATFORM_OSX: cmd = [ 'open' ]
-            elif HC.PLATFORM_LINUX: cmd = [ 'xdg-open' ]
+            if HC.PLATFORM_OSX:
+                
+                cmd = 'open'
+                
+            elif HC.PLATFORM_LINUX:
+                
+                cmd = 'xdg-open'
+                
             
-            cmd.append( path )
+            cmd += ' "' + path + '"'
             
             # setsid call un-childs this new process
             
-            process = subprocess.Popen( cmd, preexec_fn = os.setsid, startupinfo = HydrusData.GetSubprocessStartupInfo() )
+            process = subprocess.Popen( shlex.split( cmd ), preexec_fn = os.setsid, startupinfo = HydrusData.GetHideTerminalSubprocessStartupInfo() )
             
             process.wait()
             
@@ -501,7 +514,7 @@ def MirrorFile( source, dest ):
     
     return True
     
-def MirrorTree( source, dest ):
+def MirrorTree( source, dest, text_update_hook = None, is_cancelled_hook = None ):
     
     pauser = HydrusData.BigJobPauser()
     
@@ -510,6 +523,16 @@ def MirrorTree( source, dest ):
     num_errors = 0
     
     for ( root, dirnames, filenames ) in os.walk( source ):
+        
+        if is_cancelled_hook is not None and is_cancelled_hook():
+            
+            return
+            
+        
+        if text_update_hook is not None:
+            
+            text_update_hook( 'Copying ' + root + '.' )
+            
         
         dest_root = root.replace( source, dest )
         
@@ -559,6 +582,36 @@ def MirrorTree( source, dest ):
             DeletePath( dest_path )
             
         
+    
+def OpenFileLocation( path ):
+    
+    def do_it():
+        
+        if HC.PLATFORM_WINDOWS:
+            
+            cmd = 'explorer /select, "' + path + '"'
+            
+        elif HC.PLATFORM_OSX:
+            
+            cmd = 'open -R "' + path + '"'
+            
+        elif HC.PLATFORM_LINUX:
+            
+            raise NotImplementedError()
+            
+        
+        process = subprocess.Popen( shlex.split( cmd ) )
+        
+        process.wait()
+        
+        process.communicate()
+        
+    
+    thread = threading.Thread( target = do_it )
+    
+    thread.daemon = True
+    
+    thread.start()
     
 def PathsHaveSameSizeAndDate( path1, path2 ):
     

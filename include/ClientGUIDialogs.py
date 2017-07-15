@@ -61,7 +61,7 @@ def SelectServiceKey( service_types = HC.ALL_SERVICES, service_keys = None, unal
     
     if service_keys is None:
         
-        services = HG.client_controller.GetServicesManager().GetServices( service_types )
+        services = HG.client_controller.services_manager.GetServices( service_types )
         
         service_keys = [ service.GetServiceKey() for service in services ]
         
@@ -83,7 +83,7 @@ def SelectServiceKey( service_types = HC.ALL_SERVICES, service_keys = None, unal
         
     else:
         
-        services = { HG.client_controller.GetServicesManager().GetService( service_key ) for service_key in service_keys }
+        services = { HG.client_controller.services_manager.GetService( service_key ) for service_key in service_keys }
         
         list_of_tuples = [ ( service.GetName(), service.GetServiceKey() ) for service in services ]
         
@@ -361,7 +361,7 @@ class DialogGenerateNewAccounts( Dialog ):
         
         self._lifetime = ClientGUICommon.BetterChoice( self )
         
-        self._ok = wx.Button( self, label = 'Ok' )
+        self._ok = wx.Button( self, label = 'OK' )
         self._ok.Bind( wx.EVT_BUTTON, self.EventOK )
         self._ok.SetForegroundColour( ( 0, 128, 0 ) )
         
@@ -372,7 +372,7 @@ class DialogGenerateNewAccounts( Dialog ):
         
         self._num.SetValue( 1 )
         
-        service = HG.client_controller.GetServicesManager().GetService( service_key )
+        service = HG.client_controller.services_manager.GetService( service_key )
         
         response = service.Request( HC.GET, 'account_types' )
         
@@ -439,7 +439,7 @@ class DialogGenerateNewAccounts( Dialog ):
             expires = HydrusData.GetNow() + lifetime
             
         
-        service = HG.client_controller.GetServicesManager().GetService( self._service_key )
+        service = HG.client_controller.services_manager.GetService( self._service_key )
         
         try:
             
@@ -529,24 +529,48 @@ class DialogInputFileSystemPredicates( Dialog ):
         
         pred_classes = []
         
-        if predicate_type == HC.PREDICATE_TYPE_SYSTEM_AGE: pred_classes.append( ClientGUIPredicates.PanelPredicateSystemAge )
-        if predicate_type == HC.PREDICATE_TYPE_SYSTEM_DIMENSIONS:
+        if predicate_type == HC.PREDICATE_TYPE_SYSTEM_AGE:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemAge )
+            
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_DIMENSIONS:
             
             pred_classes.append( ClientGUIPredicates.PanelPredicateSystemHeight )
             pred_classes.append( ClientGUIPredicates.PanelPredicateSystemWidth )
             pred_classes.append( ClientGUIPredicates.PanelPredicateSystemRatio )
             pred_classes.append( ClientGUIPredicates.PanelPredicateSystemNumPixels )
             
-        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_DURATION: pred_classes.append( ClientGUIPredicates.PanelPredicateSystemDuration )
-        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE: pred_classes.append( ClientGUIPredicates.PanelPredicateSystemFileService )
-        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_HASH: pred_classes.append( ClientGUIPredicates.PanelPredicateSystemHash )
-        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_LIMIT: pred_classes.append( ClientGUIPredicates.PanelPredicateSystemLimit )
-        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_MIME: pred_classes.append( ClientGUIPredicates.PanelPredicateSystemMime )
-        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS: pred_classes.append( ClientGUIPredicates.PanelPredicateSystemNumTags )
-        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_NUM_WORDS: pred_classes.append( ClientGUIPredicates.PanelPredicateSystemNumWords )
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_DURATION:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemDuration )
+            
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_FILE_SERVICE:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemFileService )
+            
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_HASH:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemHash )
+            
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_LIMIT:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemLimit )
+            
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_MIME:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemMime )
+            
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_NUM_TAGS:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemNumTags )
+            
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_NUM_WORDS:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemNumWords )
+            
         elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_RATING:
             
-            services_manager = HG.client_controller.GetServicesManager()
+            services_manager = HG.client_controller.services_manager
             
             ratings_services = services_manager.GetServices( ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
             
@@ -555,8 +579,22 @@ class DialogInputFileSystemPredicates( Dialog ):
                 pred_classes.append( ClientGUIPredicates.PanelPredicateSystemRating )
                 
             
-        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_SIMILAR_TO: pred_classes.append( ClientGUIPredicates.PanelPredicateSystemSimilarTo )
-        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_SIZE: pred_classes.append( ClientGUIPredicates.PanelPredicateSystemSize )
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_SIMILAR_TO:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemSimilarTo )
+            
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_SIZE:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemSize )
+            
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_TAG_AS_NUMBER:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemTagAsNumber )
+            
+        elif predicate_type == HC.PREDICATE_TYPE_SYSTEM_DUPLICATE_RELATIONSHIPS:
+            
+            pred_classes.append( ClientGUIPredicates.PanelPredicateSystemDuplicateRelationships )
+            
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
@@ -593,7 +631,7 @@ class DialogInputFileSystemPredicates( Dialog ):
             
             self._predicate_panel = predicate_class( self )
             
-            self._ok = wx.Button( self, id = wx.ID_OK, label = 'Ok' )
+            self._ok = wx.Button( self, id = wx.ID_OK, label = 'OK' )
             self._ok.Bind( wx.EVT_BUTTON, self.EventOK )
             self._ok.SetForegroundColour( ( 0, 128, 0 ) )
             
@@ -740,7 +778,7 @@ class DialogInputLocalBooruShare( Dialog ):
     
     def EventCopyExternalShareURL( self, event ):
         
-        self._service = HG.client_controller.GetServicesManager().GetService( CC.LOCAL_BOORU_SERVICE_KEY )
+        self._service = HG.client_controller.services_manager.GetService( CC.LOCAL_BOORU_SERVICE_KEY )
         
         external_ip = HydrusNATPunch.GetExternalIP() # eventually check for optional host replacement here
         
@@ -758,7 +796,7 @@ class DialogInputLocalBooruShare( Dialog ):
     
     def EventCopyInternalShareURL( self, event ):
         
-        self._service = HG.client_controller.GetServicesManager().GetService( CC.LOCAL_BOORU_SERVICE_KEY )
+        self._service = HG.client_controller.services_manager.GetService( CC.LOCAL_BOORU_SERVICE_KEY )
         
         internal_ip = '127.0.0.1'
         
@@ -790,7 +828,7 @@ class DialogInputLocalFiles( Dialog ):
         
         Dialog.__init__( self, parent, 'importing files' )
         
-        self.SetDropTarget( ClientDragDrop.FileDropTarget( self._AddPathsToList ) )
+        self.SetDropTarget( ClientDragDrop.FileDropTarget( self._AddPathsToList, None ) )
         
         self._paths_list = ClientGUICommon.SaneListCtrl( self, 120, [ ( 'path', -1 ), ( 'guessed mime', 110 ), ( 'size', 60 ) ], delete_key_callback = self.RemovePaths )
         
@@ -1207,7 +1245,7 @@ class DialogInputNamespaceRegex( Dialog ):
         self._regex_intro_link = wx.HyperlinkCtrl( self, id = -1, label = 'a good regex introduction', url = 'http://www.aivosto.com/vbtips/regex.html' )
         self._regex_practise_link = wx.HyperlinkCtrl( self, id = -1, label = 'regex practise', url = 'http://regexr.com/3cvmf' )
         
-        self._ok = wx.Button( self, id = wx.ID_OK, label = 'Ok' )
+        self._ok = wx.Button( self, id = wx.ID_OK, label = 'OK' )
         self._ok.Bind( wx.EVT_BUTTON, self.EventOK )
         self._ok.SetForegroundColour( ( 0, 128, 0 ) )
         
@@ -1306,7 +1344,7 @@ class DialogInputNewFormField( Dialog ):
         
         self._editable = wx.CheckBox( self )
         
-        self._ok = wx.Button( self, id = wx.ID_OK, label = 'Ok' )
+        self._ok = wx.Button( self, id = wx.ID_OK, label = 'OK' )
         self._ok.SetForegroundColour( ( 0, 128, 0 ) )
         
         self._cancel = wx.Button( self, id = wx.ID_CANCEL, label = 'Cancel' )   
@@ -1379,9 +1417,9 @@ class DialogInputTags( Dialog ):
         
         expand_parents = True
         
-        self._tag_box = ClientGUIACDropdown.AutoCompleteDropdownTagsWrite( self, self.EnterTags, expand_parents, CC.LOCAL_FILE_SERVICE_KEY, service_key, null_entry_callable = self.Ok )
+        self._tag_box = ClientGUIACDropdown.AutoCompleteDropdownTagsWrite( self, self.EnterTags, expand_parents, CC.LOCAL_FILE_SERVICE_KEY, service_key, null_entry_callable = self.OK )
         
-        self._ok = wx.Button( self, id= wx.ID_OK, label = 'Ok' )
+        self._ok = wx.Button( self, id= wx.ID_OK, label = 'OK' )
         self._ok.SetForegroundColour( ( 0, 128, 0 ) )
         
         self._cancel = wx.Button( self, id = wx.ID_CANCEL, label = 'Cancel' )
@@ -1440,7 +1478,7 @@ class DialogInputTags( Dialog ):
         return self._tags.GetTags()
         
     
-    def Ok( self ):
+    def OK( self ):
         
         self.EndModal( wx.ID_OK )
         
@@ -1453,7 +1491,7 @@ class DialogInputTimeDelta( Dialog ):
         
         self._time_delta = ClientGUICommon.TimeDeltaCtrl( self, min = min, days = days, hours = hours, minutes = minutes, seconds = seconds, monthly_allowed = monthly_allowed )
         
-        self._ok = wx.Button( self, id = wx.ID_OK, label = 'Ok' )
+        self._ok = wx.Button( self, id = wx.ID_OK, label = 'OK' )
         self._ok.SetForegroundColour( ( 0, 128, 0 ) )
         
         self._cancel = wx.Button( self, id = wx.ID_CANCEL, label = 'Cancel' )
@@ -1504,7 +1542,7 @@ class DialogInputUPnPMapping( Dialog ):
         self._description = wx.TextCtrl( self )
         self._duration = wx.SpinCtrl( self, min = 0, max = 86400 )
         
-        self._ok = wx.Button( self, id = wx.ID_OK, label = 'Ok' )
+        self._ok = wx.Button( self, id = wx.ID_OK, label = 'OK' )
         self._ok.SetForegroundColour( ( 0, 128, 0 ) )
         
         self._cancel = wx.Button( self, id = wx.ID_CANCEL, label = 'Cancel' )
@@ -1568,7 +1606,7 @@ class DialogModifyAccounts( Dialog ):
         
         Dialog.__init__( self, parent, 'modify account' )
         
-        self._service = HG.client_controller.GetServicesManager().GetService( service_key )
+        self._service = HG.client_controller.services_manager.GetService( service_key )
         self._subject_identifiers = list( subject_identifiers )
         
         #
@@ -1583,7 +1621,7 @@ class DialogModifyAccounts( Dialog ):
         
         self._account_types = wx.Choice( self._account_types_panel )
         
-        self._account_types_ok = wx.Button( self._account_types_panel, label = 'Ok' )
+        self._account_types_ok = wx.Button( self._account_types_panel, label = 'OK' )
         self._account_types_ok.Bind( wx.EVT_BUTTON, self.EventChangeAccountType )
         
         #
@@ -1592,12 +1630,12 @@ class DialogModifyAccounts( Dialog ):
         
         self._add_to_expires = wx.Choice( self._expiration_panel )
         
-        self._add_to_expires_ok = wx.Button( self._expiration_panel, label = 'Ok' )
+        self._add_to_expires_ok = wx.Button( self._expiration_panel, label = 'OK' )
         self._add_to_expires_ok.Bind( wx.EVT_BUTTON, self.EventAddToExpires )
         
         self._set_expires = wx.Choice( self._expiration_panel )
         
-        self._set_expires_ok = wx.Button( self._expiration_panel, label = 'Ok' )
+        self._set_expires_ok = wx.Button( self._expiration_panel, label = 'OK' )
         self._set_expires_ok.Bind( wx.EVT_BUTTON, self.EventSetExpires )
         
         #
@@ -1790,7 +1828,7 @@ class DialogPageChooser( Dialog ):
         
         self.SetInitialSize( ( 420, 210 ) )
         
-        self._services = HG.client_controller.GetServicesManager().GetServices()
+        self._services = HG.client_controller.services_manager.GetServices()
         
         repository_petition_permissions = [ ( content_type, HC.PERMISSION_ACTION_OVERRULE ) for content_type in HC.REPOSITORY_CONTENT_TYPES ]
         
@@ -1824,7 +1862,7 @@ class DialogPageChooser( Dialog ):
             
         elif entry_type in ( 'page_query', 'page_petitions' ):
             
-            name = HG.client_controller.GetServicesManager().GetService( obj ).GetName()
+            name = HG.client_controller.services_manager.GetService( obj ).GetName()
             
             button.SetLabelText( name )
             
@@ -2081,7 +2119,7 @@ class DialogPathsToTags( Dialog ):
         
         #
         
-        services = HG.client_controller.GetServicesManager().GetServices( ( HC.TAG_REPOSITORY, ) )
+        services = HG.client_controller.services_manager.GetServices( ( HC.TAG_REPOSITORY, ) )
         
         for service in services:
             
@@ -2477,7 +2515,20 @@ class DialogPathsToTags( Dialog ):
                         
                         result = re.findall( regex, path )
                         
-                        for match in result: tags.append( match )
+                        for match in result:
+                            
+                            if isinstance( match, tuple ):
+                                
+                                for submatch in match:
+                                    
+                                    tags.append( submatch )
+                                    
+                                
+                            else:
+                                
+                                tags.append( match )
+                                
+                            
                         
                     except: pass
                     
@@ -2488,7 +2539,20 @@ class DialogPathsToTags( Dialog ):
                         
                         result = re.findall( regex, path )
                         
-                        for match in result: tags.append( namespace + ':' + match )
+                        for match in result:
+                            
+                            if isinstance( match, tuple ):
+                                
+                                for submatch in match:
+                                    
+                                    tags.append( namespace + ':' + submatch )
+                                    
+                                
+                            else:
+                                
+                                tags.append( namespace + ':' + match )
+                                
+                            
                         
                     except: pass
                     
@@ -3124,26 +3188,25 @@ class DialogSelectImageboard( Dialog ):
     
     def GetImageboard( self ): return self._tree.GetItemData( self._tree.GetSelection() ).GetData()
     
-class DialogCheckFromListOfStrings( Dialog ):
+class DialogCheckFromList( Dialog ):
     
-    def __init__( self, parent, title, list_of_strings, checked_strings = None ):
+    def __init__( self, parent, title, list_of_tuples ):
         
         Dialog.__init__( self, parent, title )
         
-        if checked_strings is None: checked_strings = []
-        
-        self._strings = wx.CheckListBox( self )
+        self._check_list_box = ClientGUICommon.BetterCheckListBox( self )
         
         self._ok = wx.Button( self, id = wx.ID_OK, label = 'ok' )
         self._cancel = wx.Button( self, id = wx.ID_CANCEL, label = 'cancel' )
         
-        for s in list_of_strings: self._strings.Append( s )
-        
-        for s in checked_strings:
+        for ( index, ( text, data, selected ) ) in enumerate( list_of_tuples ):
             
-            i = self._strings.FindString( s )
+            self._check_list_box.Append( text, data )
             
-            if i != wx.NOT_FOUND: self._strings.Check( i, True )
+            if selected:
+                
+                self._check_list_box.Check( index )
+                
             
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
@@ -3153,7 +3216,7 @@ class DialogCheckFromListOfStrings( Dialog ):
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._strings, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.AddF( self._check_list_box, CC.FLAGS_EXPAND_BOTH_WAYS )
         vbox.AddF( hbox, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
@@ -3165,7 +3228,10 @@ class DialogCheckFromListOfStrings( Dialog ):
         self.SetInitialSize( ( x, y ) )
         
     
-    def GetChecked( self ): return self._strings.GetCheckedStrings()
+    def GetChecked( self ):
+        
+        return self._check_list_box.GetChecked()
+        
     
 class DialogSelectFromList( Dialog ):
     
@@ -3323,9 +3389,13 @@ class DialogSetupExport( Dialog ):
         
         Dialog.__init__( self, parent, 'setup export' )
         
+        new_options = HG.client_controller.GetNewOptions()
+        
         self._tags_box = ClientGUICommon.StaticBoxSorterForListBoxTags( self, 'files\' tags' )
         
-        self._tag_txt_tag_services = []
+        services_manager = HG.client_controller.services_manager
+        
+        self._neighbouring_txt_tag_service_keys = services_manager.FilterValidServiceKeys( new_options.GetKeyList( 'default_neighbouring_txt_tag_service_keys' ) )
         
         t = ClientGUIListBoxes.ListBoxTagsSelection( self._tags_box, include_counts = True, collapse_siblings = True )
         
@@ -3356,7 +3426,7 @@ class DialogSetupExport( Dialog ):
         
         text = 'This will export all the files\' tags, newline separated, into .txts beside the files themselves.'
         
-        self._export_tag_txts = wx.CheckBox( self, label = 'export tags in .txt files?' )
+        self._export_tag_txts = wx.CheckBox( self, label = 'export tags to .txt files?' )
         self._export_tag_txts.SetToolTipString( text )
         self._export_tag_txts.Bind( wx.EVT_CHECKBOX, self.EventExportTagTxtsChanged )
         
@@ -3381,11 +3451,14 @@ class DialogSetupExport( Dialog ):
         
         self._directory_picker.SetPath( export_path )
         
-        new_options = HG.client_controller.GetNewOptions()
-        
         phrase = new_options.GetString( 'export_phrase' )
         
         self._pattern.SetValue( phrase )
+        
+        if len( self._neighbouring_txt_tag_service_keys ) > 0:
+            
+            self._export_tag_txts.SetValue( True )
+            
         
         #
         
@@ -3501,11 +3574,13 @@ class DialogSetupExport( Dialog ):
         
         new_options = HG.client_controller.GetNewOptions()
         
+        new_options.SetKeyList( 'default_neighbouring_txt_tag_service_keys', self._neighbouring_txt_tag_service_keys )
+        
         new_options.SetString( 'export_phrase', pattern )
         
         terms = ClientExporting.ParseExportPhrase( pattern )
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
+        client_files_manager = HG.client_controller.client_files_manager
         
         self._export.Disable()
         
@@ -3529,7 +3604,7 @@ class DialogSetupExport( Dialog ):
                         
                         tags = set()
                         
-                        for service_key in self._tag_txt_tag_services:
+                        for service_key in self._neighbouring_txt_tag_service_keys:
                             
                             tags.update( tags_manager.GetCurrent( service_key ) )
                             
@@ -3575,32 +3650,32 @@ class DialogSetupExport( Dialog ):
     
     def EventExportTagTxtsChanged( self, event ):
         
-        if self._export_tag_txts.GetValue() == True:
+        services_manager = HG.client_controller.services_manager
+        
+        tag_services = services_manager.GetServices( HC.TAG_SERVICES )
+        
+        list_of_tuples = [ ( service.GetName(), service.GetServiceKey(), service.GetServiceKey() in self._neighbouring_txt_tag_service_keys ) for service in tag_services ]
+        
+        list_of_tuples.sort()
+        
+        with DialogCheckFromList( self, 'select tag services', list_of_tuples ) as dlg:
             
-            services_manager = HG.client_controller.GetServicesManager()
-            
-            tag_services = services_manager.GetServices( HC.TAG_SERVICES )
-            
-            names_to_service_keys = { service.GetName() : service.GetServiceKey() for service in tag_services }
-            
-            service_keys_to_names = { service_key : name for ( name, service_key ) in names_to_service_keys.items() }
-            
-            tag_service_names = names_to_service_keys.keys()
-            
-            tag_service_names.sort()
-            
-            with DialogCheckFromListOfStrings( self, 'select tag services', tag_service_names, self._tag_txt_tag_services ) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
                 
-                if dlg.ShowModal() == wx.ID_OK:
-                    
-                    selected_names = dlg.GetChecked()
-                    
-                    self._tag_txt_tag_services = [ names_to_service_keys[ name ] for name in selected_names ]
-                    
-                else:
+                self._neighbouring_txt_tag_service_keys = dlg.GetChecked()
+                
+                if len( self._neighbouring_txt_tag_service_keys ) == 0:
                     
                     self._export_tag_txts.SetValue( False )
                     
+                else:
+                    
+                    self._export_tag_txts.SetValue( True )
+                    
+                
+            else:
+                
+                self._export_tag_txts.SetValue( False )
                 
             
         
@@ -3803,3 +3878,74 @@ class DialogYesNo( Dialog ):
         wx.CallAfter( self._yes.SetFocus )
         
     
+class DialogYesYesNo( Dialog ):
+    
+    def __init__( self, parent, message, title = 'Are you sure?', yes_tuples = None, no_label = 'no' ):
+        
+        if yes_tuples is None:
+            
+            yes_tuples = [ ( 'yes', 'yes' ) ]
+            
+        
+        Dialog.__init__( self, parent, title, position = 'center' )
+        
+        self._value = None
+        
+        yes_buttons = []
+        
+        for ( label, data ) in yes_tuples:
+            
+            yes_button = ClientGUICommon.BetterButton( self, label, self._DoYes, data )
+            yes_button.SetForegroundColour( ( 0, 128, 0 ) )
+            
+            yes_buttons.append( yes_button )
+            
+        
+        self._no = wx.Button( self, id = wx.ID_NO )
+        self._no.SetForegroundColour( ( 128, 0, 0 ) )
+        self._no.SetLabelText( no_label )
+        
+        self._hidden_cancel = wx.Button( self, id = wx.ID_CANCEL, size = ( 0, 0 ) )
+        
+        #
+        
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        for yes_button in yes_buttons:
+            
+            hbox.AddF( yes_button, CC.FLAGS_SMALL_INDENT )
+            
+        
+        hbox.AddF( self._no, CC.FLAGS_SMALL_INDENT )
+        
+        vbox = wx.BoxSizer( wx.VERTICAL )
+        
+        text = ClientGUICommon.BetterStaticText( self, message )
+        
+        text.Wrap( 480 )
+        
+        vbox.AddF( text, CC.FLAGS_BIG_INDENT )
+        vbox.AddF( hbox, CC.FLAGS_BUTTON_SIZER )
+        
+        self.SetSizer( vbox )
+        
+        ( x, y ) = self.GetEffectiveMinSize()
+        
+        x = max( x, 250 )
+        
+        self.SetInitialSize( ( x, y ) )
+        
+        wx.CallAfter( yes_buttons[0].SetFocus )
+        
+    
+    def _DoYes( self, value ):
+        
+        self._value = value
+        
+        self.EndModal( wx.ID_YES )
+        
+    
+    def GetValue( self ):
+        
+        return self._value
+        

@@ -18,6 +18,9 @@ BLANK_PHASH = '\x80\x00\x00\x00\x00\x00\x00\x00' # first bit 1 but everything el
 
 CAN_HIDE_MOUSE = True
 
+CENSOR_WHITELIST = 0
+CENSOR_BLACKLIST = 1
+
 # Hue is generally 200, Sat and Lum changes based on need
 COLOUR_LIGHT_SELECTED = wx.Colour( 235, 248, 255 )
 COLOUR_SELECTED = wx.Colour( 217, 242, 255 )
@@ -192,6 +195,7 @@ media_viewer_capabilities = {}
 
 media_viewer_capabilities[ HC.IMAGE_JPEG ] = static_full_support
 media_viewer_capabilities[ HC.IMAGE_PNG ] = static_full_support
+media_viewer_capabilities[ HC.IMAGE_APNG ] = animated_full_support
 media_viewer_capabilities[ HC.IMAGE_GIF ] = animated_full_support
 
 if HC.PLATFORM_WINDOWS:
@@ -228,6 +232,43 @@ media_viewer_scale_string_lookup = {}
 media_viewer_scale_string_lookup[ MEDIA_VIEWER_SCALE_100 ] = 'show at 100%'
 media_viewer_scale_string_lookup[ MEDIA_VIEWER_SCALE_MAX_REGULAR ] = 'scale to the largest regular zoom that fits'
 media_viewer_scale_string_lookup[ MEDIA_VIEWER_SCALE_TO_CANVAS ] = 'scale to the canvas size'
+
+NEW_PAGE_GOES_FAR_LEFT = 0
+NEW_PAGE_GOES_LEFT_OF_CURRENT = 1
+NEW_PAGE_GOES_RIGHT_OF_CURRENT = 2
+NEW_PAGE_GOES_FAR_RIGHT = 3
+
+new_page_goes_string_lookup = {}
+
+new_page_goes_string_lookup[ NEW_PAGE_GOES_FAR_LEFT ] = 'go far left'
+new_page_goes_string_lookup[ NEW_PAGE_GOES_LEFT_OF_CURRENT ] = 'go left of current page tab'
+new_page_goes_string_lookup[ NEW_PAGE_GOES_RIGHT_OF_CURRENT ] = 'go right of current page tab'
+new_page_goes_string_lookup[ NEW_PAGE_GOES_FAR_RIGHT ] = 'go far right'
+
+NETWORK_CONTEXT_GLOBAL = 0
+NETWORK_CONTEXT_HYDRUS = 1
+NETWORK_CONTEXT_DOMAIN = 2
+NETWORK_CONTEXT_DOWNLOADER = 3
+NETWORK_CONTEXT_DOWNLOADER_QUERY = 4
+NETWORK_CONTEXT_SUBSCRIPTION = 5
+
+network_context_type_string_lookup = {}
+
+network_context_type_string_lookup[ NETWORK_CONTEXT_GLOBAL ] = 'global'
+network_context_type_string_lookup[ NETWORK_CONTEXT_HYDRUS ] = 'hydrus service'
+network_context_type_string_lookup[ NETWORK_CONTEXT_DOMAIN ] = 'web domain'
+network_context_type_string_lookup[ NETWORK_CONTEXT_DOWNLOADER ] = 'downloader'
+network_context_type_string_lookup[ NETWORK_CONTEXT_DOWNLOADER_QUERY ] = 'downloader query instance'
+network_context_type_string_lookup[ NETWORK_CONTEXT_SUBSCRIPTION ] = 'subscription'
+
+network_context_type_description_lookup = {}
+
+network_context_type_description_lookup[ NETWORK_CONTEXT_GLOBAL ] = 'All network traffic, no matter the source or destination.'
+network_context_type_description_lookup[ NETWORK_CONTEXT_HYDRUS ] = 'Network traffic going to or from this hydrus service.'
+network_context_type_description_lookup[ NETWORK_CONTEXT_DOMAIN ] = 'Network traffic going to or from this domain (or a subdomain).'
+network_context_type_description_lookup[ NETWORK_CONTEXT_DOWNLOADER ] = 'Network traffic going through this downloader.'
+network_context_type_description_lookup[ NETWORK_CONTEXT_DOWNLOADER_QUERY ] = 'Network traffic going through this single downloader query (you probably shouldn\'t be able to see this!)'
+network_context_type_description_lookup[ NETWORK_CONTEXT_SUBSCRIPTION ] = 'Network traffic going through this subscription.'
 
 SHORTCUT_MODIFIER_CTRL = 0
 SHORTCUT_MODIFIER_ALT = 1
@@ -488,6 +529,7 @@ class GlobalBMPs( object ):
         GlobalBMPs.inbox = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'inbox.png' ) )
         GlobalBMPs.trash = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'trash.png' ) )
         
+        GlobalBMPs.refresh = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'refresh.png' ) )
         GlobalBMPs.archive = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'archive.png' ) )
         GlobalBMPs.to_inbox = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'to_inbox.png' ) )
         GlobalBMPs.delete = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'trash.png' ) )

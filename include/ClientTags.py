@@ -70,13 +70,15 @@ def ImportFromHTA( parent, hta_path, tag_service_key, hashes ):
     
     hta = HydrusTagArchive.HydrusTagArchive( hta_path )
     
-    potential_namespaces = hta.GetNamespaces()
+    potential_namespaces = list( hta.GetNamespaces() )
+    
+    potential_namespaces.sort()
     
     hash_type = hta.GetHashType() # this tests if the hta can produce a hashtype
     
     del hta
     
-    service = HG.client_controller.GetServicesManager().GetService( tag_service_key )
+    service = HG.client_controller.services_manager.GetService( tag_service_key )
     
     service_type = service.GetServiceType()
     
@@ -117,11 +119,13 @@ def ImportFromHTA( parent, hta_path, tag_service_key, hashes ):
     if adding: text += 'add.'
     else: text += 'delete.'
     
-    with ClientGUIDialogs.DialogCheckFromListOfStrings( parent, text, HydrusData.ConvertUglyNamespacesToPrettyStrings( potential_namespaces ) ) as dlg_namespaces:
+    list_of_tuples = [ ( HydrusData.ConvertUglyNamespaceToPrettyString( namespace ), namespace, False ) for namespace in potential_namespaces ]
+    
+    with ClientGUIDialogs.DialogCheckFromList( parent, text, list_of_tuples ) as dlg_namespaces:
         
         if dlg_namespaces.ShowModal() == wx.ID_OK:
             
-            namespaces = HydrusData.ConvertPrettyStringsToUglyNamespaces( dlg_namespaces.GetChecked() )
+            namespaces = dlg_namespaces.GetChecked()
             
             if hash_type == HydrusTagArchive.HASH_TYPE_SHA256:
                 
@@ -162,7 +166,7 @@ def ImportFromHTA( parent, hta_path, tag_service_key, hashes ):
             text += os.linesep.join( HydrusData.ConvertUglyNamespacesToPrettyStrings( namespaces ) )
             text += os.linesep * 2
             
-            file_service = HG.client_controller.GetServicesManager().GetService( file_service_key )
+            file_service = HG.client_controller.services_manager.GetService( file_service_key )
             
             text += 'For '
             

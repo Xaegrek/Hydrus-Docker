@@ -1,4 +1,5 @@
 import bs4
+import ClientData
 import ClientNetworking
 import HydrusConstants as HC
 import HydrusExceptions
@@ -9,7 +10,9 @@ import lxml # to force import for later bs4 stuff
 import os
 import pafy
 import re
+import requests
 import threading
+import time
 import urllib
 import urlparse
 import HydrusData
@@ -135,7 +138,7 @@ def GetImageboardFileURL( thread_url, filename, ext ):
     
     if is_4chan:
         
-        return 'http://i.4cdn.org/' + board + '/' + filename + ext
+        return 'https://i.4cdn.org/' + board + '/' + filename + ext
         
     elif is_8chan:
         
@@ -149,7 +152,7 @@ def GetImageboardFileURL( thread_url, filename, ext ):
                 
                 try:
                     
-                    html_url = 'http://8ch.net/' + board + '/res/' + thread_id + '.html'
+                    html_url = 'https://8ch.net/' + board + '/res/' + thread_id + '.html'
                     
                     response = ClientNetworking.RequestsGet( html_url )
                     
@@ -180,7 +183,7 @@ def GetImageboardFileURL( thread_url, filename, ext ):
             
             media_host = _8CHAN_BOARDS_TO_MEDIA_HOSTS[ board ]
         
-            return 'http://' + media_host + '/' + board + '/src/' + filename + ext
+            return 'https://' + media_host + '/' + board + '/src/' + filename + ext
             
         
     
@@ -192,18 +195,18 @@ def GetImageboardThreadJSONURL( thread_url ):
     is_8chan = '8ch.net' in host
     
     # 4chan
-    # http://a.4cdn.org/asp/thread/382059.json
+    # https://a.4cdn.org/asp/thread/382059.json
     
     # 8chan
-    # http://8ch.net/v/res/406061.json
+    # https://8ch.net/v/res/406061.json
     
     if is_4chan:
         
-        return 'http://a.4cdn.org/' + board + '/thread/' + thread_id + '.json'
+        return 'https://a.4cdn.org/' + board + '/thread/' + thread_id + '.json'
         
     elif is_8chan:
         
-        return 'http://8ch.net/' + board + '/res/' + thread_id + '.json'
+        return 'https://8ch.net/' + board + '/res/' + thread_id + '.json'
         
     
 def GetSoup( html ):
@@ -212,7 +215,10 @@ def GetSoup( html ):
     
 def GetYoutubeFormats( youtube_url ):
     
-    try: p = pafy.new( youtube_url )
+    try:
+        
+        p = pafy.new( youtube_url )
+        
     except Exception as e:
         
         raise Exception( 'Could not fetch video info from youtube!' + os.linesep + HydrusData.ToUnicode( e ) )
@@ -240,7 +246,7 @@ def THREADDownloadURL( job_key, url, url_string ):
         
         job_key.SetVariable( 'popup_text_1', 'importing' )
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
+        client_files_manager = HG.client_controller.client_files_manager
         
         ( result, hash ) = client_files_manager.ImportFile( temp_path )
         
@@ -331,7 +337,7 @@ def THREADDownloadURLs( job_key, urls, title ):
                 
                 job_key.SetVariable( 'popup_text_2', 'importing' )
                 
-                client_files_manager = HG.client_controller.GetClientFilesManager()
+                client_files_manager = HG.client_controller.client_files_manager
                 
                 ( result, hash ) = client_files_manager.ImportFile( temp_path )
                 
@@ -852,6 +858,59 @@ class GalleryBooru( Gallery ):
                 
             
         
+        if 'gelbooru.com' in url_base:
+            
+            # they now use redirect urls for thumbs, wew lad
+            
+            bad_urls = urls
+            
+            urls = []
+            
+            session = requests.Session()
+            
+            for bad_url in bad_urls:
+                
+                # turns out the garbage after the redirect is the redirect in base64, so let's not waste time doing this
+                
+                #url = ClientNetworking.RequestsGetRedirectURL( bad_url, session )
+                #
+                #urls.append( url )
+                #
+                #time.sleep( 0.5 )
+                
+                # https://gelbooru.com/redirect.php?s=Ly9nZWxib29ydS5jb20vaW5kZXgucGhwP3BhZ2U9cG9zdCZzPXZpZXcmaWQ9MzY5NDEyMg==
+                
+                if 'redirect.php' in bad_url:
+                    
+                    try:
+                        
+                        encoded_location = bad_url.split( '?s=' )[1]
+                        
+                        location = encoded_location.decode( 'base64' )
+                        
+                        url = urlparse.urljoin( bad_url, location )
+                        
+                        urls.append( url )
+                        
+                    except Exception as e:
+                        
+                        HydrusData.ShowText( 'gelbooru parsing problem!' )
+                        HydrusData.ShowException( e )
+                        
+                        url = ClientNetworking.RequestsGetRedirectURL( bad_url, session )
+                        
+                        urls.append( url )
+                        
+                        time.sleep( 0.5 )
+                        
+                    
+                else:
+                    
+                    urls.append( url )
+                    
+                
+            
+        
         return ( urls, definitely_no_more_pages )
         
     
@@ -1120,9 +1179,14 @@ class GalleryDeviantArt( Gallery ):
                 
                 # used to fetch this from a tumblr share url, now we grab from some hidden gubbins behind an age gate
                 
-                a_hidden = soup.find( 'a', class_ = 'ismature' )
+                a_ismatures = soup.find_all( 'a', class_ = 'ismature' )
                 
-                imgs = a_hidden.find_all( 'img' )
+                imgs = []
+                
+                for a_ismature in a_ismatures:
+                    
+                    imgs.extend( a_ismature.find_all( 'img' ) )
+                    
                 
                 for img in imgs:
                     
@@ -1658,13 +1722,22 @@ class GalleryPixiv( Gallery ):
         
         user = soup.find( 'h1', class_ = 'user' )
         
-        tags.append( 'creator:' + user.string )
+        if user is not None:
+            
+            tags.append( 'creator:' + user.string )
+            
         
         title_parent = soup.find( 'section', class_ = re.compile( 'work-info' ) )
         
-        title = title_parent.find( 'h1', class_ = 'title' )
-        
-        tags.append( 'title:' + title.string )
+        if title_parent is not None:
+            
+            title = title_parent.find( 'h1', class_ = 'title' )
+            
+            if title is not None:
+                
+                tags.append( 'title:' + title.string )
+                
+            
         
         return ( image_url, tags )
         
@@ -1705,7 +1778,7 @@ class GalleryPixivArtistID( GalleryPixiv ):
         
         artist_id = query
         
-        gallery_url = 'http://www.pixiv.net/member_illust.php?type=illust&id=' + str( artist_id )
+        gallery_url = 'https://www.pixiv.net/member_illust.php?type=illust&id=' + str( artist_id )
         
         return gallery_url + '&p=' + str( page_index + 1 )
         
@@ -1716,7 +1789,7 @@ class GalleryPixivTag( GalleryPixiv ):
         
         tag = query
         
-        gallery_url = 'http://www.pixiv.net/search.php?word=' + urllib.quote( HydrusData.ToByteString( tag ), '' ) + '&s_mode=s_tag_full&order=date_d'
+        gallery_url = 'https://www.pixiv.net/search.php?word=' + urllib.quote( HydrusData.ToByteString( tag ), '' ) + '&s_mode=s_tag_full&order=date_d'
         
         return gallery_url + '&p=' + str( page_index + 1 )
         
@@ -1732,6 +1805,54 @@ class GalleryTumblr( Gallery ):
     
     def _ParseGalleryPage( self, data, url_base ):
         
+        def ConvertRegularToRawURL( regular_url ):
+            
+            # convert this:
+            # http://68.media.tumblr.com/5af0d991f26ef9fdad5a0c743fb1eca2/tumblr_opl012ZBOu1tiyj7vo1_500.jpg
+            # to this:
+            # http://68.media.tumblr.com/5af0d991f26ef9fdad5a0c743fb1eca2/tumblr_opl012ZBOu1tiyj7vo1_raw.jpg
+            # the 500 part can be a bunch of stuff, including letters
+            
+            url_components = regular_url.split( '_' )
+            
+            last_component = url_components[ -1 ]
+            
+            ( number_gubbins, file_ext ) = last_component.split( '.' )
+            
+            raw_last_component = 'raw.' + file_ext
+            
+            url_components[ -1 ] = raw_last_component
+            
+            raw_url = '_'.join( url_components )
+            
+            return raw_url
+            
+        
+        def Remove68Subdomain( long_url ):
+            
+            # sometimes the 68 subdomain gives a 404 on the raw url, so:
+            
+            # convert this:
+            # http://68.media.tumblr.com/5af0d991f26ef9fdad5a0c743fb1eca2/tumblr_opl012ZBOu1tiyj7vo1_raw.jpg
+            # to this:
+            # http://media.tumblr.com/5af0d991f26ef9fdad5a0c743fb1eca2/tumblr_opl012ZBOu1tiyj7vo1_raw.jpg
+            
+            # I am not sure if it is always 68, but let's not assume
+            
+            ( scheme, rest ) = long_url.split( '://', 1 )
+            
+            if rest.startswith( 'media.tumblr.com' ):
+                
+                return long_url
+                
+            
+            ( gumpf, shorter_rest ) = rest.split( '.', 1 )
+            
+            shorter_url = scheme + '://' + shorter_rest
+            
+            return shorter_url
+            
+        
         definitely_no_more_pages = False
         
         processed_raw_json = data.split( 'var tumblr_api_read = ' )[1][:-2] # -1 takes a js ';' off the end
@@ -1744,6 +1865,13 @@ class GalleryTumblr( Gallery ):
             
             for post in json_object[ 'posts' ]:
                 
+                # 2012-06-20 15:59:00 GMT
+                date = post[ 'date-gmt' ]
+                
+                date_struct = time.strptime( date, '%Y-%m-%d %H:%M:%S %Z' )
+                
+                raw_url_available = date_struct.tm_year > 2012
+                
                 if 'tags' in post: tags = post[ 'tags' ]
                 else: tags = []
                 
@@ -1753,29 +1881,35 @@ class GalleryTumblr( Gallery ):
                     
                     if len( post[ 'photos' ] ) == 0:
                         
+                        photos = [ post ]
+                        
+                    else:
+                        
+                        photos = post[ 'photos' ]
+                        
+                    
+                    for photo in photos:
+                        
                         try:
                             
-                            url = post[ 'photo-url-1280' ]
+                            url = photo[ 'photo-url-1280' ]
+                            
+                            if raw_url_available:
+                                
+                                url = ConvertRegularToRawURL( url )
+                                
+                            
+                            url = Remove68Subdomain( url )
+                            
+                            url = ClientData.ConvertHTTPToHTTPS( url )
                             
                             SetExtraURLInfo( url, tags )
                             
                             urls.append( url )
                             
-                        except: pass
-                        
-                    else:
-                        
-                        for photo in post[ 'photos' ]:
+                        except:
                             
-                            try:
-                                
-                                url = photo[ 'photo-url-1280' ]
-                                
-                                SetExtraURLInfo( url, tags )
-                                
-                                urls.append( url )
-                                
-                            except: pass
+                            pass
                             
                         
                     

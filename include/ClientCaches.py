@@ -306,7 +306,7 @@ class ClientFilesManager( object ):
         
         try:
             
-            thumbnail_resized = HydrusFileHandling.GenerateThumbnail( full_size_path, thumbnail_dimensions )
+            thumbnail_resized = HydrusFileHandling.GenerateThumbnailFromStaticImage( full_size_path, thumbnail_dimensions )
             
         except:
             
@@ -321,7 +321,7 @@ class ClientFilesManager( object ):
             
             self._GenerateFullSizeThumbnail( hash )
             
-            thumbnail_resized = HydrusFileHandling.GenerateThumbnail( full_size_path, thumbnail_dimensions )
+            thumbnail_resized = HydrusFileHandling.GenerateThumbnailFromStaticImage( full_size_path, thumbnail_dimensions )
             
         
         resized_path = self._GenerateExpectedResizedThumbnailPath( hash )
@@ -681,7 +681,12 @@ class ClientFilesManager( object ):
         
         if not os.path.exists( dest_path ):
             
-            HydrusPaths.MirrorFile( source_path, dest_path )
+            successful = HydrusPaths.MirrorFile( source_path, dest_path )
+            
+            if not successful:
+                
+                raise Exception( 'There was a problem copying the file from ' + source_path + ' to ' + dest_path + '!' )
+                
             
         
     
@@ -1008,7 +1013,7 @@ class ClientFilesManager( object ):
                     
                     self._bad_error_occured = True
                     
-                    HydrusData.ShowText( 'A thumbnail for a file, ' + hash.encode( 'hex' ) + ', was missing. It has been regenerated from the original file, but this event could indicate hard drive corruption. Please check everything is ok. This error may be occuring for many files, but this message will only display once per boot. If you are recovering from a fractured database, you may wish to run \'database->maintenance->regenerate thumbnails\'.' )
+                    HydrusData.ShowText( 'A thumbnail for a file, ' + hash.encode( 'hex' ) + ', was missing. It has been regenerated from the original file, but this event could indicate hard drive corruption. Please check everything is ok. This error may be occuring for many files, but this message will only display once per boot. If you are recovering from a fractured database, you may wish to run \'database->regenerate->all thumbnails\'.' )
                     
                 
             
@@ -1233,18 +1238,18 @@ class DataCache( object ):
         self._cache_size = cache_size
         
         self._keys_to_data = {}
-        self._keys_fifo = []
+        self._keys_fifo = collections.OrderedDict()
         
         self._total_estimated_memory_footprint = 0
         
         self._lock = threading.Lock()
         
-        wx.CallLater( 60 * 1000, self.MaintainCache )
+        self._controller.sub( self, 'MaintainCache', 'memory_maintenance_pulse' )
         
     
     def _DeleteItem( self ):
         
-        ( deletee_key, last_access_time ) = self._keys_fifo.pop( 0 )
+        ( deletee_key, last_access_time ) = self._keys_fifo.popitem( last = False )
         
         deletee_data = self._keys_to_data[ deletee_key ]
         
@@ -1259,18 +1264,14 @@ class DataCache( object ):
         
     
     def _TouchKey( self, key ):
-    
-        for ( i, ( fifo_key, last_access_time ) ) in enumerate( self._keys_fifo ):
+        
+        # have to delete first, rather than overwriting, so the ordereddict updates its internal order
+        if key in self._keys_fifo:
             
-            if fifo_key == key:
-                
-                del self._keys_fifo[ i ]
-                
-                break
-                
+            del self._keys_fifo[ key ]
             
         
-        self._keys_fifo.append( ( key, HydrusData.GetNow() ) )
+        self._keys_fifo[ key ] = HydrusData.GetNow()
         
     
     def Clear( self ):
@@ -1278,7 +1279,7 @@ class DataCache( object ):
         with self._lock:
             
             self._keys_to_data = {}
-            self._keys_fifo = []
+            self._keys_fifo = collections.OrderedDict()
             
             self._total_estimated_memory_footprint = 0
             
@@ -1299,7 +1300,7 @@ class DataCache( object ):
                 
                 self._keys_to_data[ key ] = data
                 
-                self._keys_fifo.append( ( key, HydrusData.GetNow() ) )
+                self._TouchKey( key )
                 
                 self._RecalcMemoryUsage()
                 
@@ -1358,7 +1359,7 @@ class DataCache( object ):
                     
                 else:
                     
-                    ( key, last_access_time ) = self._keys_fifo[ 0 ]
+                    ( key, last_access_time ) = next( self._keys_fifo.iteritems() )
                     
                     if HydrusData.TimeHasPassed( last_access_time + 1200 ):
                         
@@ -1371,8 +1372,6 @@ class DataCache( object ):
                     
                 
             
-        
-        wx.CallLater( 60 * 1000, self.MaintainCache )
         
     
 class LocalBooruCache( object ):
@@ -1391,7 +1390,7 @@ class LocalBooruCache( object ):
     
     def _CheckDataUsage( self ):
         
-        if not self._local_booru_service.BandwidthOk():
+        if not self._local_booru_service.BandwidthOK():
             
             raise HydrusExceptions.ForbiddenException( 'This booru has used all its monthly data. Please try again next month.' )
             
@@ -1403,7 +1402,10 @@ class LocalBooruCache( object ):
         
         info = self._GetInfo( share_key )
         
-        if hash not in info[ 'hashes_set' ]: raise HydrusExceptions.NotFoundException( 'That file was not found in that share.' )
+        if hash not in info[ 'hashes_set' ]:
+            
+            raise HydrusExceptions.NotFoundException( 'That file was not found in that share.' )
+            
         
     
     def _CheckShareAuthorised( self, share_key ):
@@ -1414,7 +1416,10 @@ class LocalBooruCache( object ):
         
         timeout = info[ 'timeout' ]
         
-        if timeout is not None and HydrusData.TimeHasPassed( timeout ): raise HydrusExceptions.ForbiddenException( 'This share has expired.' )
+        if timeout is not None and HydrusData.TimeHasPassed( timeout ):
+            
+            raise HydrusExceptions.ForbiddenException( 'This share has expired.' )
+            
         
     
     def _GetInfo( self, share_key ):
@@ -1446,7 +1451,7 @@ class LocalBooruCache( object ):
     
     def _RefreshShares( self ):
         
-        self._local_booru_service = self._controller.GetServicesManager().GetService( CC.LOCAL_BOORU_SERVICE_KEY )
+        self._local_booru_service = self._controller.services_manager.GetService( CC.LOCAL_BOORU_SERVICE_KEY )
         
         self._keys_to_infos = {}
         
@@ -1561,7 +1566,7 @@ class HydrusSessionManager( object ):
             
             # session key expired or not found
             
-            service = self._controller.GetServicesManager().GetService( service_key )
+            service = self._controller.services_manager.GetService( service_key )
             
             ( response_gumpf, cookies ) = service.Request( HC.GET, 'session_key', return_cookies = True )
             
@@ -1729,7 +1734,6 @@ class ThumbnailCache( object ):
         cache_size = options[ 'thumbnail_cache_size' ]
         
         self._data_cache = DataCache( self._controller, cache_size )
-        self._client_files_manager = self._controller.GetClientFilesManager()
         
         self._lock = threading.Lock()
         
@@ -1772,11 +1776,11 @@ class ThumbnailCache( object ):
                 
                 if full_size:
                     
-                    path = self._client_files_manager.GetFullSizeThumbnailPath( hash )
+                    path = self._controller.client_files_manager.GetFullSizeThumbnailPath( hash )
                     
                 else:
                     
-                    path = self._client_files_manager.GetResizedThumbnailPath( hash )
+                    path = self._controller.client_files_manager.GetResizedThumbnailPath( hash )
                     
                 
             except HydrusExceptions.FileMissingException as e:
@@ -1792,11 +1796,11 @@ class ThumbnailCache( object ):
                 
                 if full_size:
                     
-                    path = self._client_files_manager.GetFullSizeThumbnailPath( hash )
+                    path = self._controller.client_files_manager.GetFullSizeThumbnailPath( hash )
                     
                 else:
                     
-                    path = self._client_files_manager.GetResizedThumbnailPath( hash )
+                    path = self._controller.client_files_manager.GetResizedThumbnailPath( hash )
                     
                 
             except HydrusExceptions.FileMissingException:
@@ -1815,7 +1819,7 @@ class ThumbnailCache( object ):
             
             try:
                 
-                self._client_files_manager.RegenerateResizedThumbnail( hash )
+                self._controller.client_files_manager.RegenerateResizedThumbnail( hash )
                 
                 try:
                     
@@ -1850,7 +1854,7 @@ class ThumbnailCache( object ):
         
         if too_large or ( too_small and not small_original_image ):
             
-            self._client_files_manager.RegenerateResizedThumbnail( hash )
+            self._controller.client_files_manager.RegenerateResizedThumbnail( hash )
             
             hydrus_bitmap = ClientRendering.GenerateHydrusBitmap( path )
             
@@ -1895,9 +1899,12 @@ class ThumbnailCache( object ):
                     
                     options = self._controller.GetOptions()
                     
-                    thumbnail = HydrusFileHandling.GenerateThumbnail( path, options[ 'thumbnail_dimensions' ] )
+                    thumbnail = HydrusFileHandling.GenerateThumbnailFromStaticImage( path, options[ 'thumbnail_dimensions' ] )
                     
-                    with open( temp_path, 'wb' ) as f: f.write( thumbnail )
+                    with open( temp_path, 'wb' ) as f:
+                        
+                        f.write( thumbnail )
+                        
                     
                     hydrus_bitmap = ClientRendering.GenerateHydrusBitmap( temp_path )
                     
@@ -2000,39 +2007,45 @@ class ThumbnailCache( object ):
                 last_paused = HydrusData.GetNowPrecise()
                 
             
-            with self._lock:
+            start_time = HydrusData.GetNowPrecise()
+            stop_time = start_time + 0.005 # a bit of a typical frame
+            
+            page_keys_to_rendered_medias = collections.defaultdict( list )
+            
+            while not HydrusData.TimeHasPassedPrecise( stop_time ):
                 
-                if len( self._waterfall_queue_random ) == 0:
+                with self._lock:
                     
-                    continue
-                    
-                else:
+                    if len( self._waterfall_queue_random ) == 0:
+                        
+                        break
+                        
                     
                     result = self._waterfall_queue_random.pop( 0 )
                     
                     self._waterfall_queue_quick.discard( result )
                     
-                    ( page_key, media ) = result
+                
+                ( page_key, media ) = result
+                
+                try:
+                    
+                    self.GetThumbnail( media ) # to load it
+                    
+                    page_keys_to_rendered_medias[ page_key ].append( media )
+                    
+                except Exception as e:
+                    
+                    HydrusData.ShowException( e )
                     
                 
             
-            try:
+            for ( page_key, rendered_medias ) in page_keys_to_rendered_medias.items():
                 
-                self.GetThumbnail( media ) # to load it
+                self._controller.pub( 'waterfall_thumbnails', page_key, rendered_medias )
                 
-                self._controller.pub( 'waterfall_thumbnail', page_key, media )
-                
-                if HydrusData.GetNowPrecise() - last_paused > 0.005:
-                    
-                    time.sleep( 0.00001 )
-                    
-                    last_paused = HydrusData.GetNowPrecise()
-                    
-                
-            except Exception as e:
-                
-                HydrusData.ShowException( e )
-                
+            
+            time.sleep( 0.00001 )
             
         
     
@@ -2121,6 +2134,14 @@ class ServicesManager( object ):
         with self._lock:
             
             return self._GetService( service_key )
+            
+        
+    
+    def GetServiceType( self, service_key ):
+        
+        with self._lock:
+            
+            return self._GetService( service_key ).GetServiceType()
             
         
     
@@ -3232,7 +3253,7 @@ class WebSessionManagerClient( object ):
         form_fields[ 'password' ] = password
         form_fields[ 'captcha' ] = ''
         form_fields[ 'g_recaptcha_response' ] = ''
-        form_fields[ 'return_to' ] = 'http://www.pixiv.net'
+        form_fields[ 'return_to' ] = 'https://www.pixiv.net'
         form_fields[ 'lang' ] = 'en'
         form_fields[ 'post_key' ] = post_key
         form_fields[ 'source' ] = 'pc'

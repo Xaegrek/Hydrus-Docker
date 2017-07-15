@@ -2,6 +2,7 @@ import ClientCaches
 import ClientData
 import ClientConstants as CC
 import ClientGUIMenus
+import ClientGUITopLevelWindows
 import ClientRatings
 import ClientThreading
 import HydrusConstants as HC
@@ -261,6 +262,15 @@ class BetterButton( wx.Button ):
         self._func( *self._args,  **self._kwargs )
         
     
+class BetterCheckListBox( wx.CheckListBox ):
+    
+    def GetChecked( self ):
+        
+        result = [ self.GetClientData( index ) for index in wx.CheckListBox.GetChecked( self ) ]
+        
+        return result
+        
+    
 class BetterChoice( wx.Choice ):
     
     def GetChoice( self ):
@@ -322,6 +332,14 @@ class BetterStaticText( wx.StaticText ):
         
         # at some point, rewrite this to be a control that'll produce a custom geteffectiveminsize and use wx.lib.wordwrap to dc draw the text
         # st.Wrap is a pain to deal with here, seems to sometimes/always not be able to increase after an initial non-zero call
+        
+    
+    def SetLabelText( self, text ):
+        
+        if text != self.GetLabelText():
+            
+            wx.StaticText.SetLabelText( self, text )
+            
         
     
 class BufferedWindow( wx.Window ):
@@ -411,62 +429,37 @@ class CheckboxCollect( wx.combo.ComboCtrl ):
         
         self._page_key = page_key
         
-        sort_by = HC.options[ 'sort_by' ]
-        
-        collect_types = set()
-        
-        for ( sort_by_type, namespaces ) in sort_by: collect_types.update( namespaces )
-        
-        collect_types = list( [ ( namespace, ( 'namespace', namespace ) ) for namespace in collect_types ] )
-        collect_types.sort()
-        
-        ratings_services = HG.client_controller.GetServicesManager().GetServices( ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
-        
-        for ratings_service in ratings_services: collect_types.append( ( ratings_service.GetName(), ( 'rating', ratings_service.GetServiceKey() ) ) )
-        
-        popup = self._Popup( collect_types )
+        popup = self._Popup()
         
         #self.UseAltPopupWindow( True )
         
         self.SetPopupControl( popup )
         
-        ( collect_types, collect_type_strings ) = popup.GetControl().GetValue()
+    
+    def GetChoice( self ):
         
-        self.SetCollectTypes( collect_types, collect_type_strings )
+        return self._collect_by
         
     
-    def GetChoice( self ): return self._collect_by
-    
-    def SetCollectTypes( self, collect_types, collect_type_strings ):
+    def SetCollectTypes( self, collect_by, description ):
         
-        if len( collect_type_strings ) > 0:
-            
-            self.SetValue( 'collect by ' + '-'.join( collect_type_strings ) )
-            
-            self._collect_by = collect_types
-            
-        else:
-            
-            self.SetValue( 'no collections' )
-            
-            self._collect_by = None
-            
+        self._collect_by = collect_by
+        
+        self.SetValue( description )
         
         HG.client_controller.pub( 'collect_media', self._page_key, self._collect_by )
         
     
     class _Popup( wx.combo.ComboPopup ):
         
-        def __init__( self, collect_types ):
+        def __init__( self ):
             
             wx.combo.ComboPopup.__init__( self )
-            
-            self._collect_types = collect_types
             
         
         def Create( self, parent ):
             
-            self._control = self._Control( parent, self.GetCombo(), self._collect_types )
+            self._control = self._Control( parent, self.GetCombo() )
             
             return True
             
@@ -476,36 +469,84 @@ class CheckboxCollect( wx.combo.ComboCtrl ):
             return( ( preferred_width, -1 ) )
             
         
-        def GetControl( self ): return self._control
+        def GetControl( self ):
+            
+            return self._control
+            
         
         class _Control( wx.CheckListBox ):
             
-            def __init__( self, parent, special_parent, collect_types ):
+            def __init__( self, parent, special_parent ):
                 
-                texts = [ text for ( text, data ) in collect_types ] # we do this so it sizes its height properly on init
+                text_and_data_tuples = set()
+                
+                sort_by = HC.options[ 'sort_by' ]
+                
+                for ( sort_by_type, namespaces ) in sort_by:
+                    
+                    text_and_data_tuples.update( namespaces )
+                    
+                
+                text_and_data_tuples = list( [ ( namespace, ( 'namespace', namespace ) ) for namespace in text_and_data_tuples ] )
+                text_and_data_tuples.sort()
+                
+                ratings_services = HG.client_controller.services_manager.GetServices( ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
+                
+                for ratings_service in ratings_services:
+                    
+                    text_and_data_tuples.append( ( ratings_service.GetName(), ( 'rating', ratings_service.GetServiceKey() ) ) )
+                    
+                
+                texts = [ text for ( text, data ) in text_and_data_tuples ] # we do this so it sizes its height properly on init
                 
                 wx.CheckListBox.__init__( self, parent, choices = texts )
                 
                 self.Clear()
                 
-                for ( text, data ) in collect_types: self.Append( text, data )
+                for ( text, data ) in text_and_data_tuples:
+                    
+                    self.Append( text, data )
+                    
                 
                 self._special_parent = special_parent
                 
                 default = HC.options[ 'default_collect' ]
                 
-                if default is not None:
-                    
-                    strings_we_added = { text for ( text, data ) in collect_types }
-                    
-                    strings_to_check = [ s for ( namespace_gumpf, s ) in default if s in strings_we_added ]
-                    
-                    self.SetCheckedStrings( strings_to_check )
-                    
+                self.SetValue( default )
                 
                 self.Bind( wx.EVT_CHECKLISTBOX, self.EventChanged )
                 
                 self.Bind( wx.EVT_LEFT_DOWN, self.EventLeftDown )
+                
+            
+            def _BroadcastCollect( self ):
+                
+                ( collect_by, description ) = self._GetValues()
+                
+                self._special_parent.SetCollectTypes( collect_by, description )
+                
+            
+            def _GetValues( self ):
+                
+                collect_by = []
+                
+                for index in self.GetChecked():
+                    
+                    collect_by.append( self.GetClientData( index ) )
+                    
+                
+                collect_by_strings = self.GetCheckedStrings()
+                
+                if len( collect_by ) > 0:
+                    
+                    description = 'collect by ' + '-'.join( collect_by_strings )
+                    
+                else:
+                    
+                    description = 'no collections'
+                    
+                
+                return ( collect_by, description )
                 
             
             # as inspired by http://trac.wxwidgets.org/attachment/ticket/14413/test_clb_workaround.py
@@ -527,20 +568,32 @@ class CheckboxCollect( wx.combo.ComboCtrl ):
             
             def EventChanged( self, event ):
                 
-                ( collect_types, collect_type_strings ) = self.GetValue()
-                
-                self._special_parent.SetCollectTypes( collect_types, collect_type_strings )
+                self._BroadcastCollect()
                 
             
-            def GetValue( self ):
+            def SetValue( self, collect_by ):
                 
-                collect_types = []
+                # an old possible value, now collapsed to []
+                if collect_by is None:
+                    
+                    collect_by = []
+                    
                 
-                for i in self.GetChecked(): collect_types.append( self.GetClientData( i ) )
+                desired_collect_by_rows = set( collect_by )
                 
-                collect_type_strings = self.GetCheckedStrings()
+                indices_to_check = []
                 
-                return ( collect_types, collect_type_strings )
+                for index in range( self.GetCount() ):
+                    
+                    if self.GetClientData( index ) in desired_collect_by_rows:
+                        
+                        indices_to_check.append( index )
+                        
+                    
+                
+                self.SetChecked( indices_to_check )
+                
+                self._BroadcastCollect()
                 
             
         
@@ -553,26 +606,39 @@ class ChoiceSort( BetterChoice ):
         
         self._page_key = page_key
         
+        services_manager = HG.client_controller.services_manager
+        
         sort_choices = ClientData.GetSortChoices( add_namespaces_and_ratings = add_namespaces_and_ratings )
         
-        for ( sort_by_type, sort_by_data ) in sort_choices:
+        for sort_by in sort_choices:
             
-            if sort_by_type == 'system': string = CC.sort_string_lookup[ sort_by_data ]
-            elif sort_by_type == 'namespaces': string = '-'.join( sort_by_data )
-            elif sort_by_type == 'rating_descend':
+            ( sort_by_type, sort_by_data ) = sort_by
+            
+            if sort_by_type == 'system':
                 
-                string = sort_by_data.GetName() + ' rating highest first'
+                label = CC.sort_string_lookup[ sort_by_data ]
                 
-                sort_by_data = sort_by_data.GetServiceKey()
+            elif sort_by_type == 'namespaces':
                 
-            elif sort_by_type == 'rating_ascend':
+                label = '-'.join( sort_by_data )
                 
-                string = sort_by_data.GetName() + ' rating lowest first'
+            elif sort_by_type in ( 'rating_descend', 'rating_ascend' ):
                 
-                sort_by_data = sort_by_data.GetServiceKey()
+                service_key = sort_by_data
+                
+                service = services_manager.GetService( service_key )
+                
+                if sort_by_type == 'rating_descend':
+                    
+                    label = service.GetName() + ' rating highest first'
+                    
+                elif sort_by_type == 'rating_ascend':
+                    
+                    label = service.GetName() + ' rating lowest first'
+                    
                 
             
-            self.Append( 'sort by ' + string, ( sort_by_type, sort_by_data ) )
+            self.Append( 'sort by ' + label, sort_by )
             
         
         self.Bind( wx.EVT_CHOICE, self.EventChoice )
@@ -594,12 +660,23 @@ class ChoiceSort( BetterChoice ):
     
     def ACollectHappened( self, page_key, collect_by ):
         
-        if page_key == self._page_key: self._BroadcastSort()
+        if page_key == self._page_key:
+            
+            self._BroadcastSort()
+            
+        
+    
+    def BroadcastSort( self ):
+        
+        self._BroadcastSort()
         
     
     def EventChoice( self, event ):
         
-        if self._page_key is not None: self._BroadcastSort()
+        if self._page_key is not None:
+            
+            self._BroadcastSort()
+            
         
     
 class ExportPatternButton( wx.Button ):
@@ -707,41 +784,75 @@ class Gauge( wx.Gauge ):
         
         wx.Gauge.__init__( self, *args, **kwargs )
         
-        self._actual_max = None
+        self._actual_range = None
+        
+        self._is_pulsing = False
         
     
-    def SetRange( self, max ):
+    def SetRange( self, range ):
         
-        if max is None:
+        if range is None:
             
             self.Pulse()
             
-        elif max > 1000:
-            
-            self._actual_max = max
-            wx.Gauge.SetRange( self, 1000 )
+            self._is_pulsing = True
             
         else:
             
-            self._actual_max = None
-            wx.Gauge.SetRange( self, max )
+            if self._is_pulsing:
+                
+                self.StopPulsing()
+                
+            
+            if range > 1000:
+                
+                self._actual_range = range
+                range = 1000
+                
+            else:
+                
+                self._actual_range = None
+                
+            
+            if range != self.GetRange():
+                
+                wx.Gauge.SetRange( self, range )
+                
             
         
     
     def SetValue( self, value ):
         
-        if value is None:
+        if not self._is_pulsing:
             
-            self.Pulse()
+            if value is None:
+                
+                self.Pulse()
+                
+                self._is_pulsing = True
+                
+            else:
+                
+                if self._actual_range is not None:
+                    
+                    value = min( int( 1000 * ( float( value ) / self._actual_range ) ), 1000 )
+                    
+                
+                if value != self.GetValue():
+                    
+                    wx.Gauge.SetValue( self, value )
+                    
+                
             
-        elif self._actual_max is None:
-            
-            wx.Gauge.SetValue( self, value )
-            
-        else:
-            
-            wx.Gauge.SetValue( self, min( int( 1000 * ( float( value ) / self._actual_max ) ), 1000 ) )
-            
+        
+    
+    def StopPulsing( self ):
+        
+        self._is_pulsing = False
+        
+        self.SetRange( 1 )
+        self.SetValue( 1 )
+        self.SetValue( 0 )
         
     
 class ListBook( wx.Panel ):
@@ -862,9 +973,7 @@ class ListBook( wx.Panel ):
         wx.CallAfter( self.ProcessEvent, event )
         
         # now the virtualsize is updated, we now tell any parent resizing frame/dialog that is interested in resizing that now is the time
-        event = CC.SizeChangedEvent( -1 )
-        
-        wx.CallAfter( self.ProcessEvent, event )
+        ClientGUITopLevelWindows.PostSizeChangedEvent( self )
         
         event = wx.NotifyEvent( wx.wxEVT_COMMAND_NOTEBOOK_PAGE_CHANGED, -1 )
         
@@ -1715,9 +1824,7 @@ class PopupMessage( PopupWindow ):
             
             hashes = result
             
-            media_results = HG.client_controller.Read( 'media_results', hashes )
-            
-            HG.client_controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_media_results = media_results )
+            HG.client_controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_hashes = hashes )
             
         
     
@@ -1811,15 +1918,8 @@ class PopupMessage( PopupWindow ):
             
             ( gauge_value, gauge_range ) = popup_gauge_1
             
-            if gauge_range is None or gauge_value is None:
-                
-                self._gauge_1.Pulse()
-                
-            else:
-                
-                self._gauge_1.SetRange( gauge_range )
-                self._gauge_1.SetValue( gauge_value )
-                
+            self._gauge_1.SetRange( gauge_range )
+            self._gauge_1.SetValue( gauge_value )
             
             self._gauge_1.Show()
             
@@ -1852,15 +1952,8 @@ class PopupMessage( PopupWindow ):
             
             ( gauge_value, gauge_range ) = popup_gauge_2
             
-            if gauge_range is None or gauge_value is None:
-                
-                self._gauge_2.Pulse()
-                
-            else:
-                
-                self._gauge_2.SetRange( gauge_range )
-                self._gauge_2.SetValue( gauge_value )
-                
+            self._gauge_2.SetRange( gauge_range )
+            self._gauge_2.SetValue( gauge_value )
             
             self._gauge_2.Show()
             
@@ -2168,12 +2261,14 @@ class PopupMessageManager( wx.Frame ):
                 my_x = ( parent_width - my_width ) - 25
                 my_y = ( parent_height - my_height ) - 5
                 
-                my_position = parent.ClientToScreenXY( my_x, my_y )
-                
-                if my_position != self.GetPosition():
+                if parent.IsShown():
                     
-                    self.SetPosition( parent.ClientToScreenXY( my_x, my_y ) )
+                    my_position = parent.ClientToScreenXY( my_x, my_y )
                     
+                    if my_position != self.GetPosition():
+                        
+                        self.SetPosition( my_position )
+                        
                     
                 
                 # Unhiding tends to raise the main gui tlp, which is annoying if a media viewer window has focus
@@ -2473,7 +2568,7 @@ class RatingLikeCanvas( RatingLike ):
         self._current_media = None
         self._rating_state = None
         
-        service = HG.client_controller.GetServicesManager().GetService( service_key )
+        service = HG.client_controller.services_manager.GetService( service_key )
         
         name = service.GetName()
         
@@ -2582,7 +2677,7 @@ class RatingNumerical( wx.Window ):
         
         self._service_key = service_key
         
-        self._service = HG.client_controller.GetServicesManager().GetService( self._service_key )
+        self._service = HG.client_controller.services_manager.GetService( self._service_key )
         
         self._num_stars = self._service.GetNumStars()
         self._allow_zero = self._service.AllowZero()
@@ -3707,17 +3802,13 @@ class TextAndGauge( wx.Panel ):
     
     def SetValue( self, text, value, range ):
         
-        self._st.SetLabelText( text )
+        if text != self._st.GetLabelText():
+            
+            self._st.SetLabelText( text )
+            
         
-        if value is None or range is None:
-            
-            self._gauge.Pulse()
-            
-        else:
-            
-            self._gauge.SetRange( range )
-            self._gauge.SetValue( value )
-            
+        self._gauge.SetRange( range )
+        self._gauge.SetValue( value )
         
     
 ( DirtyEvent, EVT_DIRTY ) = wx.lib.newevent.NewEvent()
@@ -3743,7 +3834,14 @@ class ThreadToGUIUpdater( object ):
         
         with self._lock:
             
-            self._func( *self._args, **self._kwargs )
+            try:
+                
+                self._func( *self._args, **self._kwargs )
+                
+            except HydrusExceptions.ShutdownException:
+                
+                pass
+                
             
             self._dirty_count = 0
             
@@ -3832,51 +3930,7 @@ class TimeDeltaButton( wx.Button ):
             
         else:
             
-            if self._show_days:
-                
-                days = value / 86400
-                
-                if days > 0:
-                    
-                    text_components.append( HydrusData.ConvertIntToPrettyString( days ) + ' days' )
-                    
-                
-                value %= 86400
-                
-            
-            if self._show_hours:
-                
-                hours = value / 3600
-                
-                if hours > 0:
-                    
-                    text_components.append( HydrusData.ConvertIntToPrettyString( hours ) + ' hours' )
-                    
-                
-                value %= 3600
-                
-            
-            if self._show_minutes:
-                
-                minutes = value / 60
-                
-                if minutes > 0:
-                    
-                    text_components.append( HydrusData.ConvertIntToPrettyString( minutes ) + ' minutes' )
-                    
-                
-                value %= 60
-                
-            
-            if self._show_seconds:
-                
-                if value > 0 or len( text_components ) == 0:
-                    
-                    text_components.append( HydrusData.ConvertIntToPrettyString( value ) + ' seconds' )
-                    
-                
-            
-            text = ' '.join( text_components )
+            text = HydrusData.ConvertTimeDeltaToPrettyString( value )
             
         
         self.SetLabelText( text )

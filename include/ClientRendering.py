@@ -8,7 +8,7 @@ import HydrusImageHandling
 import HydrusGlobals as HG
 import HydrusThreading
 import HydrusVideoHandling
-import lz4
+import lz4.block
 import os
 import threading
 import time
@@ -60,7 +60,7 @@ class ImageRenderer( object ):
         hash = self._media.GetHash()
         mime = self._media.GetMime()
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
+        client_files_manager = HG.client_controller.client_files_manager
         
         self._path = client_files_manager.GetFilePath( hash, mime )
         
@@ -158,7 +158,7 @@ class RasterContainer( object ):
         hash = self._media.GetHash()
         mime = self._media.GetMime()
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
+        client_files_manager = HG.client_controller.client_files_manager
         
         self._path = client_files_manager.GetFilePath( hash, mime )
         
@@ -329,7 +329,7 @@ class RasterContainerVideo( RasterContainer ):
         duration = self._media.GetDuration()
         num_frames = self._media.GetNumFrames()
         
-        client_files_manager = HG.client_controller.GetClientFilesManager()
+        client_files_manager = HG.client_controller.client_files_manager
         
         if self._media.GetMime() == HC.IMAGE_GIF:
             
@@ -441,8 +441,14 @@ class RasterContainerVideo( RasterContainer ):
     
     def GetDuration( self, index ):
         
-        if self._media.GetMime() == HC.IMAGE_GIF: return self._durations[ index ]
-        else: return self._average_frame_duration
+        if self._media.GetMime() == HC.IMAGE_GIF:
+            
+            return self._durations[ index ]
+            
+        else:
+            
+            return self._average_frame_duration
+            
         
     
     def GetFrame( self, index ):
@@ -452,7 +458,18 @@ class RasterContainerVideo( RasterContainer ):
             frame = self._frames[ index ]
             
         
-        self.GetReadyForFrame( index + 1 )
+        num_frames = self.GetNumFrames()
+        
+        if index == num_frames - 1:
+            
+            next_index = 0
+            
+        else:
+            
+            next_index = index + 1
+            
+        
+        self.GetReadyForFrame( next_index )
         
         return frame
         
@@ -466,6 +483,13 @@ class RasterContainerVideo( RasterContainer ):
     def GetReadyForFrame( self, next_index_to_expect ):
         
         num_frames = self.GetNumFrames()
+        
+        frame_exists = 0 <= next_index_to_expect and next_index_to_expect <= ( num_frames - 1 )
+        
+        if not frame_exists:
+            
+            return
+            
         
         if num_frames > self._num_frames_backwards + 1 + self._num_frames_forwards:
             
@@ -528,8 +552,14 @@ class RasterContainerVideo( RasterContainer ):
     
     def GetTotalDuration( self ):
         
-        if self._media.GetMime() == HC.IMAGE_GIF: return sum( self._durations )
-        else: return self._average_frame_duration * self.GetNumFrames()
+        if self._media.GetMime() == HC.IMAGE_GIF:
+            
+            return sum( self._durations )
+            
+        else:
+            
+            return self._average_frame_duration * self.GetNumFrames()
+            
         
     
     def HasFrame( self, index ):
@@ -560,7 +590,7 @@ class HydrusBitmap( object ):
         
         if self._compressed:
             
-            self._data = lz4.dumps( data )
+            self._data = lz4.block.compress( data )
             
         else:
             
@@ -575,7 +605,7 @@ class HydrusBitmap( object ):
         
         if self._compressed:
             
-            return lz4.loads( self._data )
+            return lz4.block.decompress( self._data )
             
         else:
             

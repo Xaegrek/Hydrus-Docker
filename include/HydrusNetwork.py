@@ -391,7 +391,7 @@ class Account( object ):
             return ( False, self._GetExpiresString() )
             
         
-        if not self._account_type.BandwidthOk( self._bandwidth_tracker ):
+        if not self._account_type.BandwidthOK( self._bandwidth_tracker ):
             
             return ( False, 'account has exceeded bandwidth' )
             
@@ -470,7 +470,7 @@ class Account( object ):
                 raise HydrusExceptions.PermissionException( 'This account has expired.' )
                 
             
-            if not self._account_type.BandwidthOk( self._bandwidth_tracker ):
+            if not self._account_type.BandwidthOK( self._bandwidth_tracker ):
                 
                 raise HydrusExceptions.PermissionException( 'This account has no remaining bandwidth.' )
                 
@@ -578,11 +578,21 @@ class Account( object ):
             
         
     
-    def RequestMade( self, num_bytes ):
+    def ReportDataUsed( self, num_bytes ):
         
         with self._lock:
             
-            self._bandwidth_tracker.RequestMade( num_bytes )
+            self._bandwidth_tracker.ReportDataUsed( num_bytes )
+            
+            self._SetDirty()
+            
+        
+    
+    def ReportRequestUsed( self ):
+        
+        with self._lock:
+            
+            self._bandwidth_tracker.ReportRequestUsed()
             
             self._SetDirty()
             
@@ -676,6 +686,8 @@ class Account( object ):
         
         dictionary[ 'bandwidth_tracker' ] = bandwidth_tracker
         
+        dictionary = dictionary.Duplicate()
+        
         return ( account_key, account_type, created, expires, dictionary )
         
     
@@ -731,9 +743,9 @@ class AccountType( object ):
         self._bandwidth_rules = dictionary[ 'bandwidth_rules' ]
         
     
-    def BandwidthOk( self, bandwidth_tracker ):
+    def BandwidthOK( self, bandwidth_tracker ):
         
-        return self._bandwidth_rules.Ok( bandwidth_tracker )
+        return self._bandwidth_rules.CanStart( bandwidth_tracker )
         
     
     def HasPermission( self, content_type, permission ):
@@ -1742,6 +1754,21 @@ class Metadata( HydrusSerialisable.SerialisableBase ):
             
         
     
+    def GetUpdateIndicesAndHashes( self ):
+        
+        with self._lock:
+            
+            result = []
+            
+            for ( update_index, ( update_hashes, begin, end ) ) in self._metadata.items():
+                
+                result.append( ( update_index, update_hashes ) )
+                
+            
+            return result
+            
+        
+    
     def GetUpdateInfo( self, from_client = False ):
         
         with self._lock:
@@ -1787,17 +1814,6 @@ class Metadata( HydrusSerialisable.SerialisableBase ):
         with self._lock:
             
             return update_hash in self._update_hashes
-            
-        
-    
-    def IterateUpdateIndicesAndHashes( self ):
-        
-        with self._lock:
-            
-            for ( update_index, ( update_hashes, begin, end ) ) in self._metadata.items():
-                
-                yield ( update_index, update_hashes )
-                
             
         
     
@@ -1977,11 +1993,21 @@ class ServerService( object ):
         self._dirty = True
         
     
+    def BandwidthOK( self ):
+        
+        with self._lock:
+            
+            return True
+            
+        
+    
     def Duplicate( self ):
         
         with self._lock:
             
             dictionary = self._GetSerialisableDictionary()
+            
+            dictionary = dictionary.Duplicate()
             
             duplicate = GenerateService( self._service_key, self._service_type, self._name, self._port, dictionary )
             
@@ -2037,19 +2063,21 @@ class ServerService( object ):
             
         
     
-    def BandwidthOk( self ):
+    def ReportDataUsed( self, num_bytes ):
         
         with self._lock:
             
-            return True
+            self._bandwidth_tracker.ReportDataUsed( num_bytes )
+            
+            self._SetDirty()
             
         
     
-    def RequestMade( self, num_bytes ):
+    def ReportRequestUsed( self ):
         
         with self._lock:
             
-            self._bandwidth_tracker.RequestMade( num_bytes )
+            self._bandwidth_tracker.ReportRequestUsed()
             
             self._SetDirty()
             
@@ -2101,6 +2129,8 @@ class ServerService( object ):
             
             dictionary = self._GetSerialisableDictionary()
             
+            dictionary = dictionary.Duplicate()
+            
             return ( self._service_key, self._service_type, self._name, self._port, dictionary )
             
         
@@ -2123,11 +2153,11 @@ class ServerServiceRestricted( ServerService ):
         self._bandwidth_rules = dictionary[ 'bandwidth_rules' ]
         
     
-    def BandwidthOk( self ):
+    def BandwidthOK( self ):
         
         with self._lock:
             
-            return self._bandwidth_rules.Ok( self._bandwidth_tracker )
+            return self._bandwidth_rules.CanStart( self._bandwidth_tracker )
             
         
     
@@ -2269,19 +2299,29 @@ class ServerServiceAdmin( ServerServiceRestricted ):
         self._server_bandwidth_rules = dictionary[ 'server_bandwidth_rules' ]
         
     
-    def ServerBandwidthOk( self ):
+    def ServerBandwidthOK( self ):
         
         with self._lock:
             
-            return self._server_bandwidth_rules.Ok( self._server_bandwidth_tracker )
+            return self._server_bandwidth_rules.CanStart( self._server_bandwidth_tracker )
             
         
     
-    def ServerRequestMade( self, num_bytes ):
+    def ServerReportDataUsed( self, num_bytes ):
         
         with self._lock:
             
-            self._server_bandwidth_tracker.RequestMade( num_bytes )
+            self._server_bandwidth_tracker.ReportDataUsed( num_bytes )
+            
+            self._SetDirty()
+            
+        
+    
+    def ServerReportRequestUsed( self ):
+        
+        with self._lock:
+            
+            self._server_bandwidth_tracker.ReportRequestUsed()
             
             self._SetDirty()
             

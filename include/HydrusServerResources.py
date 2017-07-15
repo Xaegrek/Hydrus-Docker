@@ -384,11 +384,13 @@ class HydrusResource( Resource ):
                 raise HydrusExceptions.ForbiddenException( 'Did not recognise Content-Type header!' )
                 
             
+            total_bytes_read = 0
+            
             if mime == HC.APPLICATION_JSON:
                 
                 json_string = request.content.read()
                 
-                request.hydrus_request_data_usage += len( json_string )
+                total_bytes_read += len( json_string )
                 
                 hydrus_args = HydrusNetwork.ParseBodyString( json_string )
                 
@@ -404,12 +406,14 @@ class HydrusResource( Resource ):
                         
                         f.write( block )
                         
-                        request.hydrus_request_data_usage += len( block )
+                        total_bytes_read += len( block )
                         
                     
                 
                 hydrus_args = ParseFileArguments( temp_path )
                 
+            
+            self._reportDataUsed( request, total_bytes_read )
             
         
         request.hydrus_args = hydrus_args
@@ -496,9 +500,8 @@ class HydrusResource( Resource ):
             request.setHeader( 'Content-Length', str( content_length ) )
             
         
-        request.hydrus_request_data_usage += content_length
-        
-        self._recordDataUsage( request )
+        self._reportDataUsed( request, content_length )
+        self._reportRequestUsed( request )
         
         if do_finish:
             
@@ -567,7 +570,7 @@ class HydrusResource( Resource ):
         
         if failure.type == KeyError:
             
-            response_context = ResponseContext( 403, mime = default_mime, body = default_encoding( 'It appears one or more parameters required for that request were missing:' + os.linesep + failure.getTraceback() ) )
+            response_context = ResponseContext( 400, mime = default_mime, body = default_encoding( 'It appears one or more parameters required for that request were missing:' + os.linesep + failure.getTraceback() ) )
             
         elif failure.type == HydrusExceptions.BandwidthException:
             
@@ -632,18 +635,29 @@ class HydrusResource( Resource ):
         return access_key
         
     
-    def _recordDataUsage( self, request ):
+    def _reportDataUsed( self, request, num_bytes ):
         
-        num_bytes = request.hydrus_request_data_usage
+        self._service.ReportDataUsed( num_bytes )
         
-        self._service.RequestMade( num_bytes )
-        
-        HG.controller.RequestMade( num_bytes )
+        HG.controller.ReportDataUsed( num_bytes )
         
     
-    def _threadDoGETJob( self, request ): raise HydrusExceptions.NotFoundException( 'This service does not support that request!' )
+    def _reportRequestUsed( self, request ):
+        
+        self._service.ReportRequestUsed()
+        
+        HG.controller.ReportRequestUsed()
+        
     
-    def _threadDoPOSTJob( self, request ): raise HydrusExceptions.NotFoundException( 'This service does not support that request!' )
+    def _threadDoGETJob( self, request ):
+        
+        raise HydrusExceptions.NotFoundException( 'This service does not support that request!' )
+        
+    
+    def _threadDoPOSTJob( self, request ):
+        
+        raise HydrusExceptions.NotFoundException( 'This service does not support that request!' )
+        
     
     def _CleanUpTempFile( self, request ):
         
@@ -705,6 +719,18 @@ class HydrusResource( Resource ):
         request.notifyFinish().addErrback( self._errbackDisconnected, d )
         
         return NOT_DONE_YET
+        
+    
+class HydrusResourceRobotsTXT( HydrusResource ):
+    
+    def _threadDoGETJob( self, request ):
+        
+        body = '''User-agent: *
+Disallow: /'''
+        
+        response_context = ResponseContext( 200, mime = HC.TEXT_PLAIN, body = body )
+        
+        return response_context
         
     
 class HydrusResourceWelcome( HydrusResource ):

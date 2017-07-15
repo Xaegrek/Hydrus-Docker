@@ -2,6 +2,7 @@ import ClientThreading
 import HydrusConstants as HC
 import HydrusData
 import HydrusExceptions
+import HydrusGlobals as HG
 import HydrusNATPunch
 import HydrusPaths
 import HydrusSerialisable
@@ -61,7 +62,7 @@ def DAEMONDownloadFiles( controller ):
     
     if num_downloads > 0:
         
-        client_files_manager = controller.GetClientFilesManager()
+        client_files_manager = controller.client_files_manager
         
         successful_hashes = set()
         
@@ -88,59 +89,71 @@ def DAEMONDownloadFiles( controller ):
                 
                 try:
                     
-                    service = controller.GetServicesManager().GetService( service_key )
+                    service = controller.services_manager.GetService( service_key )
                     
                 except:
                     
                     continue
                     
                 
-                if service.GetServiceType() != HC.FILE_REPOSITORY:
+                if service.GetServiceType() == HC.FILE_REPOSITORY:
                     
-                    continue
+                    file_repository = service
                     
-                
-                file_repository = service
-                
-                if file_repository.IsFunctional():
-                    
-                    try:
-                        
-                        ( os_file_handle, temp_path ) = HydrusPaths.GetTempPath()
+                    if file_repository.IsFunctional():
                         
                         try:
                             
-                            file_repository.Request( HC.GET, 'file', { 'hash' : hash }, temp_path = temp_path )
+                            ( os_file_handle, temp_path ) = HydrusPaths.GetTempPath()
                             
-                            controller.WaitUntilPubSubsEmpty()
+                            try:
+                                
+                                file_repository.Request( HC.GET, 'file', { 'hash' : hash }, temp_path = temp_path )
+                                
+                                controller.WaitUntilPubSubsEmpty()
+                                
+                                client_files_manager.ImportFile( temp_path, override_deleted = True )
+                                
+                                successful_hashes.add( hash )
+                                
+                                break
+                                
+                            finally:
+                                
+                                HydrusPaths.CleanUpTempPath( os_file_handle, temp_path )
+                                
                             
-                            client_files_manager.ImportFile( temp_path, override_deleted = True )
+                        except HydrusExceptions.ServerBusyException:
                             
-                            successful_hashes.add( hash )
+                            job_key.SetVariable( 'popup_text_1', file_repository.GetName() + ' was busy. waiting 30s before trying again' )
                             
-                            break
+                            time.sleep( 30 )
                             
-                        finally:
+                            job_key.Delete()
                             
-                            HydrusPaths.CleanUpTempPath( os_file_handle, temp_path )
+                            controller.pub( 'notify_new_downloads' )
+                            
+                            return
+                            
+                        except Exception as e:
+                            
+                            HydrusData.ShowText( 'Error downloading file!' )
+                            HydrusData.ShowException( e )
                             
                         
-                    except HydrusExceptions.ServerBusyException:
+                    
+                elif service.GetServiceType() == HC.IPFS:
+                    
+                    multihashes = HG.client_controller.Read( 'service_filenames', service_key, { hash } )
+                    
+                    if len( multihashes ) > 0:
                         
-                        job_key.SetVariable( 'popup_text_1', file_repository.GetName() + ' was busy. waiting 30s before trying again' )
+                        multihash = multihashes[0]
                         
-                        time.sleep( 30 )
+                        # this actually calls to a thread that can launch gui 'select from tree' stuff, so let's just break at this point
+                        service.ImportFile( multihash )
                         
-                        job_key.Delete()
-                        
-                        controller.pub( 'notify_new_downloads' )
-                        
-                        return
-                        
-                    except Exception as e:
-                        
-                        HydrusData.ShowText( 'Error downloading file!' )
-                        HydrusData.ShowException( e )
+                        break
                         
                     
                 
@@ -154,10 +167,6 @@ def DAEMONDownloadFiles( controller ):
         if len( successful_hashes ) > 0:
             
             job_key.SetVariable( 'popup_text_1', HydrusData.ConvertIntToPrettyString( len( successful_hashes ) ) + ' files downloaded' )
-            
-        else:
-            
-            job_key.SetVariable( 'popup_text_1', 'all files failed to download' )
             
         
         job_key.Delete()
@@ -224,7 +233,7 @@ def DAEMONMaintainTrash( controller ):
     
 def DAEMONRebalanceClientFiles( controller ):
     
-    controller.GetClientFilesManager().Rebalance()
+    controller.client_files_manager.Rebalance()
     
 def DAEMONSaveDirtyObjects( controller ):
     
@@ -232,7 +241,7 @@ def DAEMONSaveDirtyObjects( controller ):
     
 def DAEMONSynchroniseAccounts( controller ):
     
-    services = controller.GetServicesManager().GetServices( HC.RESTRICTED_SERVICES )
+    services = controller.services_manager.GetServices( HC.RESTRICTED_SERVICES )
     
     for service in services:
         
@@ -245,7 +254,7 @@ def DAEMONSynchroniseRepositories( controller ):
     
     if not options[ 'pause_repo_sync' ]:
         
-        services = controller.GetServicesManager().GetServices( HC.REPOSITORIES )
+        services = controller.services_manager.GetServices( HC.REPOSITORIES )
         
         for service in services:
             
@@ -297,7 +306,7 @@ def DAEMONUPnP( controller ):
         return # This IGD probably doesn't support UPnP, so don't spam the user with errors they can't fix!
         
     
-    services = controller.GetServicesManager().GetServices( ( HC.LOCAL_BOORU, ) )
+    services = controller.services_manager.GetServices( ( HC.LOCAL_BOORU, ) )
     
     for service in services:
         

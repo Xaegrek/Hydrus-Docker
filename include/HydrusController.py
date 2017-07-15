@@ -25,18 +25,18 @@ class HydrusController( object ):
         
         self._name = 'hydrus'
         
-        self._db_dir = db_dir
+        self.db_dir = db_dir
         self._no_daemons = no_daemons
         self._no_wal = no_wal
         
-        self._no_wal_path = os.path.join( self._db_dir, 'no-wal' )
+        self._no_wal_path = os.path.join( self.db_dir, 'no-wal' )
         
         if os.path.exists( self._no_wal_path ):
             
             self._no_wal = True
             
         
-        self._db = None
+        self.db = None
         
         self._model_shutdown = False
         self._view_shutdown = False
@@ -69,7 +69,11 @@ class HydrusController( object ):
                 
             
         
-        if len( self._call_to_threads ) < 10:
+        # all the threads in the pool are currently busy
+        
+        calling_from_the_thread_pool = threading.current_thread() in self._call_to_threads
+        
+        if calling_from_the_thread_pool or len( self._call_to_threads ) < 10:
             
             call_to_thread = HydrusThreading.THREADCallToThread( self )
             
@@ -92,7 +96,7 @@ class HydrusController( object ):
     
     def _Read( self, action, *args, **kwargs ):
         
-        result = self._db.Read( action, HC.HIGH_PRIORITY, *args, **kwargs )
+        result = self.db.Read( action, HC.HIGH_PRIORITY, *args, **kwargs )
         
         return result
         
@@ -114,7 +118,7 @@ class HydrusController( object ):
     
     def _Write( self, action, priority, synchronous, *args, **kwargs ):
         
-        result = self._db.Write( action, priority, synchronous, *args, **kwargs )
+        result = self.db.Write( action, priority, synchronous, *args, **kwargs )
         
         return result
         
@@ -135,6 +139,23 @@ class HydrusController( object ):
         
     
     def CallToThread( self, callable, *args, **kwargs ):
+        
+        if HG.callto_report_mode:
+            
+            what_to_report = [ callable ]
+            
+            if len( args ) > 0:
+                
+                what_to_report.append( args )
+                
+            
+            if len( kwargs ) > 0:
+                
+                what_to_report.append( kwargs )
+                
+            
+            HydrusData.ShowText( tuple( what_to_report ) )
+            
         
         call_to_thread = self._GetCallToThread()
         
@@ -161,24 +182,29 @@ class HydrusController( object ):
     
     def DBCurrentlyDoingJob( self ):
         
-        if self._db is None:
+        if self.db is None:
             
             return False
             
         else:
             
-            return self._db.CurrentlyDoingJob()
+            return self.db.CurrentlyDoingJob()
             
+        
+    
+    def GetDBDir( self ):
+        
+        return self.db_dir
+        
+    
+    def GetDBStatus( self ):
+        
+        return self.db.GetStatus()
         
     
     def GetCache( self, name ):
         
         return self._caches[ name ]
-        
-    
-    def GetDBDir( self ):
-        
-        return self._db_dir
         
     
     def GetManager( self, name ):
@@ -205,7 +231,7 @@ class HydrusController( object ):
     
     def InitModel( self ):
         
-        self._db = self._InitDB()
+        self.db = self._InitDB()
         
     
     def InitView( self ):
@@ -213,7 +239,8 @@ class HydrusController( object ):
         if not self._no_daemons:
             
             self._daemons.append( HydrusThreading.DAEMONWorker( self, 'SleepCheck', HydrusDaemons.DAEMONSleepCheck, period = 120 ) )
-            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'MaintainMemory', HydrusDaemons.DAEMONMaintainMemory, period = 300 ) )
+            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'MaintainMemoryFast', HydrusDaemons.DAEMONMaintainMemoryFast, period = 60 ) )
+            self._daemons.append( HydrusThreading.DAEMONWorker( self, 'MaintainMemorySlow', HydrusDaemons.DAEMONMaintainMemorySlow, period = 300 ) )
             
             self._daemons.append( HydrusThreading.DAEMONBackgroundWorker( self, 'MaintainDB', HydrusDaemons.DAEMONMaintainDB, period = 300, init_wait = 60 ) )
             
@@ -221,13 +248,13 @@ class HydrusController( object ):
     
     def IsFirstStart( self ):
         
-        if self._db is None:
+        if self.db is None:
             
             return False
             
         else:
             
-            return self._db.IsFirstStart()
+            return self.db.IsFirstStart()
             
         
     
@@ -236,7 +263,7 @@ class HydrusController( object ):
         pass
         
     
-    def MaintainMemory( self ):
+    def MaintainMemorySlow( self ):
         
         sys.stdout.flush()
         sys.stderr.flush()
@@ -260,7 +287,7 @@ class HydrusController( object ):
         
         profile_log_filename = self._name + ' profile - ' + boot_pretty_timestamp + '.log'
         
-        profile_log_path = os.path.join( self._db_dir, profile_log_filename )
+        profile_log_path = os.path.join( self.db_dir, profile_log_filename )
         
         with open( profile_log_path, 'a' ) as f:
             
@@ -276,8 +303,14 @@ class HydrusController( object ):
         
         self._currently_doing_pubsub = True
         
-        try: self._pubsub.Process()
-        finally: self._currently_doing_pubsub = False
+        try:
+            
+            self._pubsub.Process()
+            
+        finally:
+            
+            self._currently_doing_pubsub = False
+            
         
     
     def Read( self, action, *args, **kwargs ):
@@ -285,7 +318,12 @@ class HydrusController( object ):
         return self._Read( action, *args, **kwargs )
         
     
-    def RequestMade( self, num_bytes ):
+    def ReportDataUsed( self, num_bytes ):
+        
+        pass
+        
+    
+    def ReportRequestUsed( self ):
         
         pass
         
@@ -295,9 +333,9 @@ class HydrusController( object ):
         self._model_shutdown = True
         HG.model_shutdown = True
         
-        if self._db is not None:
+        if self.db is not None:
             
-            while not self._db.LoopIsFinished(): time.sleep( 0.1 )
+            while not self.db.LoopIsFinished(): time.sleep( 0.1 )
             
         
     

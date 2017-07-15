@@ -927,7 +927,7 @@ class ListBoxTags( ListBox ):
     
     def GetSelectedTags( self ):
         
-        return self._selected_terms
+        return set( self._selected_terms )
         
     
     def SiblingsHaveChanged( self ):
@@ -1345,6 +1345,8 @@ class ListBoxTagsCensorship( ListBoxTags ):
                 self._RemoveTerm( tag )
                 
             
+            self._ordered_terms.sort()
+            
             self._DataHasChanged()
             
         
@@ -1367,20 +1369,9 @@ class ListBoxTagsCensorship( ListBoxTags ):
     
     def _GetTextFromTerm( self, term ):
         
-        tag = term
+        tag_slice = term
         
-        if tag == '':
-            
-            return 'unnamespaced'
-            
-        elif tag == ':':
-            
-            return 'namespaced'
-            
-        else:
-            
-            return tag
-            
+        return ClientData.ConvertTagSliceToString( tag_slice )
         
     
     def AddTags( self, tags ):
@@ -1389,6 +1380,8 @@ class ListBoxTagsCensorship( ListBoxTags ):
             
             self._AppendTerm( tag )
             
+        
+        self._ordered_terms.sort()
         
         self._DataHasChanged()
         
@@ -1407,15 +1400,19 @@ class ListBoxTagsCensorship( ListBoxTags ):
                 
             
         
+        self._ordered_terms.sort()
+        
         self._DataHasChanged()
         
     
-    def _RemoveTags( self, tags ):
+    def RemoveTags( self, tags ):
         
         for tag in tags:
             
             self._RemoveTerm( tag )
             
+        
+        self._ordered_terms.sort()
         
         self._DataHasChanged()
         
