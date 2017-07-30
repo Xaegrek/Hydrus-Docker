@@ -266,7 +266,7 @@ class ServiceLocalBooru( Service ):
     
     def _GetFunctionalStatus( self ):
         
-        if not self._bandwidth_rules.CanStart( self._bandwidth_tracker ):
+        if not self._bandwidth_rules.CanStartRequest( self._bandwidth_tracker ):
             
             return ( False, 'bandwidth exceeded' )
             
@@ -302,7 +302,7 @@ class ServiceLocalBooru( Service ):
         
         with self._lock:
             
-            return self._bandwidth_rules.CanStart( self._bandwidth_tracker )
+            return self._bandwidth_rules.CanStartRequest( self._bandwidth_tracker )
             
         
     
@@ -472,7 +472,7 @@ class ServiceRemote( Service ):
             return ( False, self._no_requests_reason + ' - next request ' + HydrusData.ConvertTimestampToPrettyPending( self._no_requests_until ) )
             
         
-        if not self._bandwidth_rules.CanStart( self._bandwidth_tracker ):
+        if not self._bandwidth_rules.CanStartRequest( self._bandwidth_tracker ):
             
             return ( False, 'bandwidth exceeded' )
             
@@ -522,7 +522,7 @@ class ServiceRemote( Service ):
         
         with self._lock:
             
-            return self._bandwidth_rules.CanStart( self._bandwidth_tracker )
+            return self._bandwidth_rules.CanStartRequest( self._bandwidth_tracker )
             
         
     
@@ -530,7 +530,7 @@ class ServiceRemote( Service ):
         
         with self._lock:
             
-            return self._bandwidth_rules.CanContinue( self._bandwidth_tracker )
+            return self._bandwidth_rules.CanContinueDownload( self._bandwidth_tracker )
             
         
     
@@ -1591,11 +1591,10 @@ class ServiceIPFS( ServiceRemote ):
                     
                     if len( urls ) > 0:
                         
-                        HG.client_controller.CallToThread( ClientDownloading.THREADDownloadURLs, job_key, urls, multihash )
+                        HG.client_controller.CallToThread( ClientImporting.THREADDownloadURLs, job_key, urls, multihash )
                         
                     
                 
-            
             
         
         def off_wx():
@@ -1615,7 +1614,7 @@ class ServiceIPFS( ServiceRemote ):
                 
                 url = url_tree[3]
                 
-                HG.client_controller.CallToThread( ClientDownloading.THREADDownloadURL, job_key, url, multihash )
+                HG.client_controller.CallToThread( ClientImporting.THREADDownloadURL, job_key, url, multihash )
                 
             else:
                 
@@ -1764,7 +1763,11 @@ class ServiceIPFS( ServiceRemote ):
         
         multihash = j[ 'Hash' ]
         
-        content_update_row = ( hash, multihash )
+        ( media_result, ) = HG.client_controller.Read( 'media_results', ( hash, ) )
+        
+        file_info_manager = media_result.GetFileInfoManager()
+        
+        content_update_row = ( file_info_manager, multihash )
         
         content_updates = [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_FILES, HC.CONTENT_UPDATE_ADD, content_update_row ) ]
         

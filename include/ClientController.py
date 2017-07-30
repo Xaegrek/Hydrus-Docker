@@ -41,6 +41,8 @@ class Controller( HydrusController.HydrusController ):
         
         self._is_booted = False
         
+        self._splash = None
+        
         HydrusController.HydrusController.__init__( self, db_dir, no_daemons, no_wal )
         
         self._name = 'client'
@@ -67,45 +69,29 @@ class Controller( HydrusController.HydrusController ):
         return ClientDB.DB( self, self.db_dir, 'client', no_wal = self._no_wal )
         
     
-    def BackupDatabase( self ):
+    def _CreateSplash( self ):
         
-        path = self._new_options.GetNoneableString( 'backup_path' )
-        
-        if path is None:
+        try:
             
-            wx.MessageBox( 'No backup path is set!' )
+            self._splash = ClientGUI.FrameSplash( self )
             
-            return
+        except:
             
-        
-        if not os.path.exists( path ):
+            HydrusData.Print( 'There was an error trying to start the splash screen!' )
             
-            wx.MessageBox( 'The backup path does not exist--creating it now.' )
+            HydrusData.Print( traceback.format_exc() )
             
-            HydrusPaths.MakeSureDirectoryExists( path )
+            raise
             
         
-        client_db_path = os.path.join( path, 'client.db' )
+    
+    def _DestroySplash( self ):
         
-        if os.path.exists( client_db_path ):
+        if self._splash is not None:
             
-            action = 'Update the existing'
+            self._splash.Destroy()
             
-        else:
-            
-            action = 'Create a new'
-            
-        
-        text = action + ' backup at "' + path + '"?'
-        text += os.linesep * 2
-        text += 'The database will be locked while the backup occurs, which may lock up your gui as well.'
-        
-        with ClientGUIDialogs.DialogYesNo( self._gui, text ) as dlg_yn:
-            
-            if dlg_yn.ShowModal() == wx.ID_YES:
-                
-                self.Write( 'backup', path )
-                
+            self._splash = None
             
         
     
@@ -320,22 +306,6 @@ class Controller( HydrusController.HydrusController ):
             
         
     
-    def CreateSplash( self ):
-        
-        try:
-            
-            self._splash = ClientGUI.FrameSplash( self )
-            
-        except:
-            
-            HydrusData.Print( 'There was an error trying to start the splash screen!' )
-            
-            HydrusData.Print( traceback.format_exc() )
-            
-            raise
-            
-        
-    
     def CurrentlyIdle( self ):
         
         if HG.force_idle_mode:
@@ -414,8 +384,6 @@ class Controller( HydrusController.HydrusController ):
         
         stop_time = HydrusData.GetNow() + ( self._options[ 'idle_shutdown_max_minutes' ] * 60 )
         
-        self.client_files_manager.Rebalance( partial = False, stop_time = stop_time )
-        
         self.MaintainDB( stop_time = stop_time )
         
         if not self._options[ 'pause_repo_sync' ]:
@@ -445,7 +413,7 @@ class Controller( HydrusController.HydrusController ):
             
             try:
                 
-                self.CreateSplash()
+                self._CreateSplash()
                 
                 idle_shutdown_action = self._options[ 'idle_shutdown' ]
                 
@@ -459,14 +427,18 @@ class Controller( HydrusController.HydrusController ):
                         
                         if idle_shutdown_action == CC.IDLE_ON_SHUTDOWN_ASK_FIRST:
                             
-                            text = 'Is now a good time for the client to do up to ' + HydrusData.ConvertIntToPrettyString( idle_shutdown_max_minutes ) + ' minutes\' maintenance work?'
+                            text = 'Is now a good time for the client to do up to ' + HydrusData.ConvertIntToPrettyString( idle_shutdown_max_minutes ) + ' minutes\' maintenance work? (Will auto-no in 15 seconds)'
                             
                             with ClientGUIDialogs.DialogYesNo( self._splash, text, title = 'Maintenance is due' ) as dlg_yn:
+                                
+                                call_later = wx.CallLater( 15000, dlg_yn.EndModal, wx.ID_NO )
                                 
                                 if dlg_yn.ShowModal() == wx.ID_YES:
                                     
                                     HG.do_idle_shutdown_work = True
                                     
+                                
+                                call_later.Stop()
                                 
                             
                         else:
@@ -482,7 +454,7 @@ class Controller( HydrusController.HydrusController ):
                 
             except:
                 
-                self.pub( 'splash_destroy' )
+                self._DestroySplash()
                 
                 HydrusData.DebugPrint( traceback.format_exc() )
                 
@@ -523,7 +495,7 @@ class Controller( HydrusController.HydrusController ):
     
     def GetGUI( self ):
         
-        return self._gui
+        return self.gui
         
     
     def GetOptions( self ):
@@ -538,9 +510,9 @@ class Controller( HydrusController.HydrusController ):
     
     def GoodTimeToDoForegroundWork( self ):
         
-        if self._gui:
+        if self.gui:
             
-            return not self._gui.CurrentlyBusy()
+            return not self.gui.CurrentlyBusy()
             
         else:
             
@@ -679,7 +651,7 @@ class Controller( HydrusController.HydrusController ):
         
         def wx_code_gui():
             
-            self._gui = ClientGUI.FrameGUI( self )
+            self.gui = ClientGUI.FrameGUI( self )
             
             # this is because of some bug in wx C++ that doesn't add these by default
             wx.richtext.RichTextBuffer.AddHandler( wx.richtext.RichTextHTMLHandler() )
@@ -711,7 +683,6 @@ class Controller( HydrusController.HydrusController ):
             self._daemons.append( HydrusThreading.DAEMONForegroundWorker( self, 'MaintainTrash', ClientDaemons.DAEMONMaintainTrash, init_wait = 120 ) )
             self._daemons.append( HydrusThreading.DAEMONForegroundWorker( self, 'SynchroniseRepositories', ClientDaemons.DAEMONSynchroniseRepositories, ( 'notify_restart_repo_sync_daemon', 'notify_new_permissions' ), period = 4 * 3600, pre_call_wait = 1 ) )
             
-            self._daemons.append( HydrusThreading.DAEMONBackgroundWorker( self, 'RebalanceClientFiles', ClientDaemons.DAEMONRebalanceClientFiles, period = 3600 ) )
             self._daemons.append( HydrusThreading.DAEMONBackgroundWorker( self, 'UPnP', ClientDaemons.DAEMONUPnP, ( 'notify_new_upnp_mappings', ), init_wait = 120, pre_call_wait = 6 ) )
             
         
@@ -847,16 +818,11 @@ class Controller( HydrusController.HydrusController ):
         return self._menu_open
         
     
-    def NotifyPubSubs( self ):
-        
-        wx.CallAfter( self.ProcessPubSub )
-        
-    
     def PageCompletelyDestroyed( self, page_key ):
         
-        if self._gui:
+        if self.gui:
             
-            return self._gui.PageCompletelyDestroyed( page_key )
+            return self.gui.PageCompletelyDestroyed( page_key )
             
         else:
             
@@ -866,9 +832,9 @@ class Controller( HydrusController.HydrusController ):
     
     def PageClosedButNotDestroyed( self, page_key ):
         
-        if self._gui:
+        if self.gui:
             
-            return self._gui.PageClosedButNotDestroyed( page_key )
+            return self.gui.PageClosedButNotDestroyed( page_key )
             
         else:
             
@@ -892,8 +858,19 @@ class Controller( HydrusController.HydrusController ):
     
     def PrepStringForDisplay( self, text ):
         
-        if self._options[ 'gui_capitalisation' ]: return text
-        else: return text.lower()
+        if self._options[ 'gui_capitalisation' ]:
+            
+            return text
+            
+        else:
+            
+            return text.lower()
+            
+        
+    
+    def ProcessPubSub( self ):
+        
+        self.CallBlockingToWx( self._pubsub.Process )
         
     
     def RefreshServices( self ):
@@ -988,7 +965,7 @@ class Controller( HydrusController.HydrusController ):
         
         restore_intro = ''
         
-        with wx.DirDialog( self._gui, 'Select backup location.' ) as dlg:
+        with wx.DirDialog( self.gui, 'Select backup location.' ) as dlg:
             
             if dlg.ShowModal() == wx.ID_OK:
                 
@@ -1000,13 +977,13 @@ class Controller( HydrusController.HydrusController ):
                 text += os.linesep * 2
                 text += 'The gui will shut down, and then it will take a while to complete the restore. Once it is done, the client will restart.'
                 
-                with ClientGUIDialogs.DialogYesNo( self._gui, text ) as dlg_yn:
+                with ClientGUIDialogs.DialogYesNo( self.gui, text ) as dlg_yn:
                     
                     if dlg_yn.ShowModal() == wx.ID_YES:
                         
                         def THREADRestart():
                             
-                            wx.CallAfter( self._gui.Exit )
+                            wx.CallAfter( self.gui.Exit )
                             
                             while not self.db.LoopIsFinished():
                                 
@@ -1043,7 +1020,7 @@ class Controller( HydrusController.HydrusController ):
         
         HydrusData.Print( u'booting controller\u2026' )
         
-        self.CreateSplash()
+        self._CreateSplash()
         
         boot_thread = threading.Thread( target = self.THREADBootEverything, name = 'Application Boot Thread' )
         
@@ -1257,7 +1234,7 @@ class Controller( HydrusController.HydrusController ):
             
         finally:
             
-            self.pub( 'splash_destroy' )
+            self._DestroySplash()
             
         
     
@@ -1275,15 +1252,21 @@ class Controller( HydrusController.HydrusController ):
             
             HydrusData.CleanRunningFile( self.db_dir, 'client' )
             
-        except HydrusExceptions.PermissionException: pass
-        except HydrusExceptions.ShutdownException: pass
+        except HydrusExceptions.PermissionException:
+            
+            pass
+            
+        except HydrusExceptions.ShutdownException:
+            
+            pass
+            
         except:
             
             ClientData.ReportShutdownException()
             
         finally:
             
-            self.pub( 'splash_destroy' )
+            self._DestroySplash()
             
         
     

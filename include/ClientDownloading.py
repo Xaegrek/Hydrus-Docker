@@ -18,6 +18,7 @@ import urlparse
 import HydrusData
 import ClientConstants as CC
 import HydrusGlobals as HG
+import wx
 
 # This is fairly ugly, but it works for what I need it to do
 
@@ -227,190 +228,6 @@ def GetYoutubeFormats( youtube_url ):
     info = { ( s.extension, s.resolution ) : ( s.url, s.title ) for s in p.streams if s.extension in ( 'flv', 'mp4', 'webm' ) }
     
     return info
-    
-def THREADDownloadURL( job_key, url, url_string ):
-    
-    job_key.SetVariable( 'popup_title', url_string )
-    job_key.SetVariable( 'popup_text_1', 'initialising' )
-    
-    ( os_file_handle, temp_path ) = HydrusPaths.GetTempPath()
-    
-    try:
-        
-        response = ClientNetworking.RequestsGet( url, stream = True )
-        
-        with open( temp_path, 'wb' ) as f:
-            
-            ClientNetworking.StreamResponseToFile( job_key, response, f )
-            
-        
-        job_key.SetVariable( 'popup_text_1', 'importing' )
-        
-        client_files_manager = HG.client_controller.client_files_manager
-        
-        ( result, hash ) = client_files_manager.ImportFile( temp_path )
-        
-    except HydrusExceptions.CancelledException:
-        
-        return
-        
-    except HydrusExceptions.NetworkException:
-        
-        job_key.Cancel()
-        
-        raise
-        
-    finally:
-        
-        HydrusPaths.CleanUpTempPath( os_file_handle, temp_path )
-        
-    
-    if result in ( CC.STATUS_SUCCESSFUL, CC.STATUS_REDUNDANT ):
-        
-        if result == CC.STATUS_SUCCESSFUL:
-            
-            job_key.SetVariable( 'popup_text_1', 'successful!' )
-            
-        else:
-            
-            job_key.SetVariable( 'popup_text_1', 'was already in the database!' )
-            
-        
-        job_key.SetVariable( 'popup_files', { hash } )
-        
-    elif result == CC.STATUS_DELETED:
-        
-        job_key.SetVariable( 'popup_text_1', 'had already been deleted!' )
-        
-    
-    job_key.Finish()
-    
-def THREADDownloadURLs( job_key, urls, title ):
-    
-    job_key.SetVariable( 'popup_title', title )
-    job_key.SetVariable( 'popup_text_1', 'initialising' )
-    
-    num_successful = 0
-    num_redundant = 0
-    num_deleted = 0
-    num_failed = 0
-    
-    successful_hashes = set()
-    
-    for ( i, url ) in enumerate( urls ):
-        
-        ( i_paused, should_quit ) = job_key.WaitIfNeeded()
-        
-        if should_quit:
-            
-            break
-            
-        
-        job_key.SetVariable( 'popup_text_1', HydrusData.ConvertValueRangeToPrettyString( i + 1, len( urls ) ) )
-        job_key.SetVariable( 'popup_gauge_1', ( i + 1, len( urls ) ) )
-        
-        ( os_file_handle, temp_path ) = HydrusPaths.GetTempPath()
-        
-        try:
-            
-            try:
-                
-                response = ClientNetworking.RequestsGet( url, stream = True )
-                
-                with open( temp_path, 'wb' ) as f:
-                    
-                    ClientNetworking.StreamResponseToFile( job_key, response, f )
-                    
-                
-            except HydrusExceptions.CancelledException:
-                
-                return
-                
-            except HydrusExceptions.NetworkException:
-                
-                job_key.Cancel()
-                
-                raise
-                
-            
-            try:
-                
-                job_key.SetVariable( 'popup_text_2', 'importing' )
-                
-                client_files_manager = HG.client_controller.client_files_manager
-                
-                ( result, hash ) = client_files_manager.ImportFile( temp_path )
-                
-            except Exception as e:
-                
-                job_key.DeleteVariable( 'popup_text_2' )
-                
-                HydrusData.Print( url + ' failed to import!' )
-                HydrusData.PrintException( e )
-                
-                num_failed += 1
-                
-                continue
-                
-            
-        finally:
-            
-            HydrusPaths.CleanUpTempPath( os_file_handle, temp_path )
-            
-        
-        if result in ( CC.STATUS_SUCCESSFUL, CC.STATUS_REDUNDANT ):
-            
-            if result == CC.STATUS_SUCCESSFUL:
-                
-                num_successful += 1
-                
-            else:
-                
-                num_redundant += 1
-                
-            
-            successful_hashes.add( hash )
-            
-        elif result == CC.STATUS_DELETED:
-            
-            num_deleted += 1
-            
-        
-    
-    text_components = []
-    
-    if num_successful > 0:
-        
-        text_components.append( HydrusData.ConvertIntToPrettyString( num_successful ) + ' successful' )
-        
-    
-    if num_redundant > 0:
-        
-        text_components.append( HydrusData.ConvertIntToPrettyString( num_redundant ) + ' already in db' )
-        
-    
-    if num_deleted > 0:
-        
-        text_components.append( HydrusData.ConvertIntToPrettyString( num_deleted ) + ' deleted' )
-        
-    
-    if num_failed > 0:
-        
-        text_components.append( HydrusData.ConvertIntToPrettyString( num_failed ) + ' failed (errors written to log)' )
-        
-    
-    job_key.SetVariable( 'popup_text_1', ', '.join( text_components ) )
-    
-    if len( successful_hashes ) > 0:
-        
-        job_key.SetVariable( 'popup_files', successful_hashes )
-        
-    
-    job_key.DeleteVariable( 'popup_gauge_1' )
-    job_key.DeleteVariable( 'popup_text_2' )
-    job_key.DeleteVariable( 'popup_gauge_2' )
-    
-    job_key.Finish()
     
 def Parse4chanPostScreen( html ):
     
@@ -665,22 +482,56 @@ HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIAL
 
 class Gallery( object ):
     
-    def _AddSessionCookies( self, request_headers ): pass
+    def __init__( self ):
+        
+        self._network_job_factory = self._DefaultNetworkJobFactory
+        
     
-    def _FetchData( self, url, referer_url = None, report_hooks = None, temp_path = None ):
+    def _DefaultNetworkJobFactory( self, method, url, **kwargs ):
         
-        if report_hooks is None: report_hooks = []
+        return ClientNetworking.NetworkJob( method, url, **kwargs )
         
-        request_headers = {}
+    
+    def _EnsureLoggedIn( self ):
         
-        if referer_url is not None:
+        pass
+        
+    
+    def _FetchData( self, url, referral_url = None, temp_path = None ):
+        
+        self._EnsureLoggedIn()
+        
+        network_job = self._network_job_factory( 'GET', url, referral_url = referral_url, temp_path = temp_path )
+        
+        HG.client_controller.network_engine.AddJob( network_job )
+        
+        while not network_job.IsDone():
             
-            request_headers[ 'Referer' ] = referer_url
+            time.sleep( 0.1 )
             
         
-        self._AddSessionCookies( request_headers )
+        if HG.view_shutdown:
+            
+            raise HydrusExceptions.ShutdownException()
+            
+        elif network_job.HasError():
+            
+            e = network_job.GetErrorException()
+            
+            raise e
+            
+        elif network_job.IsCancelled():
+            
+            raise HydrusExceptions.CancelledException( 'Download cancelled!' )
+            
+        else:
+            
+            if temp_path is None:
+                
+                return network_job.GetContent()
+                
+            
         
-        return HG.client_controller.DoHTTP( HC.GET, url, request_headers = request_headers, report_hooks = report_hooks, temp_path = temp_path )
         
     
     def _GetGalleryPageURL( self, query, page_index ):
@@ -693,15 +544,15 @@ class Gallery( object ):
         raise NotImplementedError()
         
     
-    def GetFile( self, temp_path, url, report_hooks = None ):
+    def GetFile( self, temp_path, url ):
         
-        self._FetchData( url, report_hooks = report_hooks, temp_path = temp_path )
+        self._FetchData( url, temp_path = temp_path )
         
     
-    def GetFileAndTags( self, temp_path, url, report_hooks = None ):
+    def GetFileAndTags( self, temp_path, url ):
         
-        temp_path = self.GetFile( temp_path, url, report_hooks )
-        tags = self.GetTags( url, report_hooks = report_hooks )
+        self.GetFile( temp_path, url )
+        tags = self.GetTags( url )
         
         return tags
         
@@ -717,9 +568,14 @@ class Gallery( object ):
         return ( page_of_urls, definitely_no_more_pages )
         
     
-    def GetTags( self, url, report_hooks = None ):
+    def GetTags( self, url ):
         
         raise NotImplementedError()
+        
+    
+    def SetNetworkJobFactory( self, network_job_factory ):
+        
+        self._network_job_factory = network_job_factory
         
     
 class GalleryBooru( Gallery ):
@@ -906,7 +762,7 @@ class GalleryBooru( Gallery ):
                     
                 else:
                     
-                    urls.append( url )
+                    urls.append( bad_url )
                     
                 
             
@@ -1071,46 +927,37 @@ class GalleryBooru( Gallery ):
         return ( image_url, tags )
         
     
-    def _GetFileURLAndTags( self, url, report_hooks = None ):
+    def _GetFileURLAndTags( self, url ):
         
-        html = self._FetchData( url, report_hooks = report_hooks )
+        html = self._FetchData( url )
         
         return self._ParseImagePage( html, url )
         
     
-    def GetFile( self, temp_path, url, report_hooks = None ):
+    def GetFile( self, temp_path, url ):
         
-        ( file_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( file_url, tags ) = self._GetFileURLAndTags( url )
         
-        self._FetchData( file_url, referer_url = url, report_hooks = report_hooks, temp_path = temp_path )
+        self._FetchData( file_url, referral_url = url, temp_path = temp_path )
         
     
-    def GetFileAndTags( self, temp_path, url, report_hooks = None ):
+    def GetFileAndTags( self, temp_path, url ):
         
-        ( file_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( file_url, tags ) = self._GetFileURLAndTags( url )
         
-        self._FetchData( file_url, referer_url = url, report_hooks = report_hooks, temp_path = temp_path )
+        self._FetchData( file_url, referral_url = url, temp_path = temp_path )
         
         return tags
         
     
-    def GetTags( self, url, report_hooks = None ):
+    def GetTags( self, url ):
         
-        ( file_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( file_url, tags ) = self._GetFileURLAndTags( url )
         
         return tags
         
     
 class GalleryDeviantArt( Gallery ):
-    
-    def _AddSessionCookies( self, request_headers ):
-        
-        manager = HG.client_controller.GetManager( 'web_sessions' )
-        
-        cookies = manager.GetCookies( 'deviant art' )
-        
-        ClientNetworking.AddCookiesToHeaders( cookies, request_headers )
-        
     
     def _GetGalleryPageURL( self, query, page_index ):
         
@@ -1161,7 +1008,7 @@ class GalleryDeviantArt( Gallery ):
         return ( urls, definitely_no_more_pages )
         
     
-    def _ParseImagePage( self, html, referer_url ):
+    def _ParseImagePage( self, html, referral_url ):
         
         soup = GetSoup( html )
         
@@ -1226,21 +1073,21 @@ class GalleryDeviantArt( Gallery ):
         return img_url
         
     
-    def _GetFileURL( self, url, report_hooks = None ):
+    def _GetFileURL( self, url ):
         
-        html = self._FetchData( url, report_hooks = report_hooks )
+        html = self._FetchData( url )
         
         return self._ParseImagePage( html, url )
         
     
-    def GetFile( self, temp_path, url, report_hooks = None ):
+    def GetFile( self, temp_path, url ):
         
-        file_url = self._GetFileURL( url, report_hooks = report_hooks )
+        file_url = self._GetFileURL( url )
         
-        self._FetchData( file_url, referer_url = url, report_hooks = report_hooks, temp_path = temp_path )
+        self._FetchData( file_url, referral_url = url, temp_path = temp_path )
         
     
-    def GetTags( self, url, report_hooks = None ):
+    def GetTags( self, url ):
         
         result = GetExtraURLInfo( url )
         
@@ -1289,7 +1136,7 @@ class GalleryGiphy( Gallery ):
         return ( urls, definitely_no_more_pages )
         
     
-    def GetTags( self, url, report_hooks = None ):
+    def GetTags( self, url ):
         
         id = GetExtraURLInfo( url )
         
@@ -1303,7 +1150,7 @@ class GalleryGiphy( Gallery ):
             
             try:
                 
-                raw_json = self._FetchData( url, report_hooks = report_hooks )
+                raw_json = self._FetchData( url )
                 
                 json_dict = json.loads( raw_json )
                 
@@ -1322,18 +1169,16 @@ class GalleryGiphy( Gallery ):
     
 class GalleryHentaiFoundry( Gallery ):
     
-    def _AddSessionCookies( self, request_headers ):
+    def _EnsureLoggedIn( self ):
         
         manager = HG.client_controller.GetManager( 'web_sessions' )
         
-        cookies = manager.GetCookies( 'hentai foundry' )
-        
-        ClientNetworking.AddCookiesToHeaders( cookies, request_headers )
+        manager.EnsureLoggedIn( 'hentai foundry' )
         
     
-    def _GetFileURLAndTags( self, url, report_hooks = None ):
+    def _GetFileURLAndTags( self, url ):
         
-        html = self._FetchData( url, report_hooks = report_hooks )
+        html = self._FetchData( url )
         
         return self._ParseImagePage( html, url )
         
@@ -1439,25 +1284,25 @@ class GalleryHentaiFoundry( Gallery ):
         return ( image_url, tags )
         
     
-    def GetFile( self, temp_path, url, report_hooks = None ):
+    def GetFile( self, temp_path, url ):
         
-        ( file_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( file_url, tags ) = self._GetFileURLAndTags( url )
         
-        self._FetchData( file_url, referer_url = url, report_hooks = report_hooks, temp_path = temp_path )
+        self._FetchData( file_url, referral_url = url, temp_path = temp_path )
         
     
-    def GetFileAndTags( self, temp_path, url, report_hooks = None ):
+    def GetFileAndTags( self, temp_path, url ):
         
-        ( file_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( file_url, tags ) = self._GetFileURLAndTags( url )
         
-        self._FetchData( file_url, referer_url = url, report_hooks = report_hooks, temp_path = temp_path )
+        self._FetchData( file_url, referral_url = url, temp_path = temp_path )
         
         return tags
         
     
-    def GetTags( self, url, report_hooks = None ):
+    def GetTags( self, url ):
         
-        ( file_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( file_url, tags ) = self._GetFileURLAndTags( url )
         
         return tags
         
@@ -1498,9 +1343,9 @@ class GalleryHentaiFoundryTags( GalleryHentaiFoundry ):
     
 class GalleryNewgrounds( Gallery ):
     
-    def _GetFileURLAndTags( self, url, report_hooks = None ):
+    def _GetFileURLAndTags( self, url ):
         
-        html = self._FetchData( url, report_hooks = report_hooks )
+        html = self._FetchData( url )
         
         return self._ParseImagePage( html, url )
         
@@ -1603,25 +1448,25 @@ class GalleryNewgrounds( Gallery ):
         return ( flash_url, tags )
         
     
-    def GetFile( self, temp_path, url, report_hooks = None ):
+    def GetFile( self, temp_path, url ):
         
-        ( file_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( file_url, tags ) = self._GetFileURLAndTags( url )
         
-        self._FetchData( file_url, referer_url = url, report_hooks = report_hooks, temp_path = temp_path )
+        self._FetchData( file_url, referral_url = url, temp_path = temp_path )
         
     
-    def GetFileAndTags( self, temp_path, url, report_hooks = None ):
+    def GetFileAndTags( self, temp_path, url ):
         
-        ( file_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( file_url, tags ) = self._GetFileURLAndTags( url )
         
-        self._FetchData( file_url, referer_url = url, report_hooks = report_hooks, temp_path = temp_path )
+        self._FetchData( file_url, referral_url = url, temp_path = temp_path )
         
         return tags
         
     
-    def GetTags( self, url, report_hooks = None ):
+    def GetTags( self, url ):
         
-        ( file_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( file_url, tags ) = self._GetFileURLAndTags( url )
         
         return tags
         
@@ -1646,13 +1491,11 @@ class GalleryNewgroundsMovies( GalleryNewgrounds ):
     
 class GalleryPixiv( Gallery ):
     
-    def _AddSessionCookies( self, request_headers ):
+    def _EnsureLoggedIn( self ):
         
         manager = HG.client_controller.GetManager( 'web_sessions' )
         
-        cookies = manager.GetCookies( 'pixiv' )
-        
-        ClientNetworking.AddCookiesToHeaders( cookies, request_headers )
+        manager.EnsureLoggedIn( 'pixiv' )
         
     
     def _ParseGalleryPage( self, html, url_base ):
@@ -1742,32 +1585,32 @@ class GalleryPixiv( Gallery ):
         return ( image_url, tags )
         
     
-    def _GetFileURLAndTags( self, page_url, report_hooks = None ):
+    def _GetFileURLAndTags( self, page_url ):
         
-        html = self._FetchData( page_url, report_hooks = report_hooks )
+        html = self._FetchData( page_url )
         
         return self._ParseImagePage( html, page_url )
         
     
-    def GetFile( self, temp_path, url, report_hooks = None ):
+    def GetFile( self, temp_path, url ):
         
-        ( image_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( image_url, tags ) = self._GetFileURLAndTags( url )
         
-        self._FetchData( image_url, referer_url = url, report_hooks = report_hooks, temp_path = temp_path )
+        self._FetchData( image_url, referral_url = url, temp_path = temp_path )
         
     
-    def GetFileAndTags( self, temp_path, url, report_hooks = None ):
+    def GetFileAndTags( self, temp_path, url ):
         
-        ( image_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( image_url, tags ) = self._GetFileURLAndTags( url )
         
-        self._FetchData( image_url, referer_url = url, report_hooks = report_hooks, temp_path = temp_path )
+        self._FetchData( image_url, referral_url = url, temp_path = temp_path )
         
         return tags
         
     
-    def GetTags( self, url, report_hooks = None ):
+    def GetTags( self, url ):
         
-        ( image_url, tags ) = self._GetFileURLAndTags( url, report_hooks = report_hooks )
+        ( image_url, tags ) = self._GetFileURLAndTags( url )
         
         return tags
         
@@ -1800,7 +1643,7 @@ class GalleryTumblr( Gallery ):
         
         username = query
         
-        return 'http://' + username + '.tumblr.com/api/read/json?start=' + str( page_index * 50 ) + '&num=50'
+        return 'https://' + username + '.tumblr.com/api/read/json?start=' + str( page_index * 50 ) + '&num=50'
         
     
     def _ParseGalleryPage( self, data, url_base ):
@@ -1894,12 +1737,22 @@ class GalleryTumblr( Gallery ):
                             
                             url = photo[ 'photo-url-1280' ]
                             
-                            if raw_url_available:
-                                
-                                url = ConvertRegularToRawURL( url )
-                                
+                            # some urls are given in the form:
+                            # https://68.media.tumblr.com/tumblr_m5yb5m2O6A1rso2eyo1_540.jpg
+                            # which is missing the hex key in the middle
+                            # these urls are unavailable as raws from the main media server
+                            # these seem to all be the pre-2013 files, but we'll double-check just in case anyway
+                            unusual_hexless_url = url.count( '/' ) == 3
                             
-                            url = Remove68Subdomain( url )
+                            if not unusual_hexless_url:
+                                
+                                if raw_url_available:
+                                    
+                                    url = ConvertRegularToRawURL( url )
+                                    
+                                    url = Remove68Subdomain( url )
+                                    
+                                
                             
                             url = ClientData.ConvertHTTPToHTTPS( url )
                             
@@ -1919,7 +1772,7 @@ class GalleryTumblr( Gallery ):
         return ( urls, definitely_no_more_pages )
         
     
-    def GetTags( self, url, report_hooks = None ):
+    def GetTags( self, url ):
         
         result = GetExtraURLInfo( url )
         

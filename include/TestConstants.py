@@ -13,7 +13,7 @@ import wx
 
 DB_DIR = None
 
-tinest_gif = '\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x00\xFF\x00\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00\x3B'
+tiniest_gif = '\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x00\xFF\x00\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00\x3B'
 
 LOCAL_RATING_LIKE_SERVICE_KEY = HydrusData.GenerateKey()
 LOCAL_RATING_NUMERICAL_SERVICE_KEY = HydrusData.GenerateKey()
@@ -87,7 +87,15 @@ class FakeHTTPConnectionManager():
     
 class FakeWebSessionManager():
     
-    def GetCookies( self, *args, **kwargs ): return { 'session_cookie' : 'blah' }
+    def EnsureLoggedIn( self, name ):
+        
+        pass
+        
+    
+    def GetCookies( self, *args, **kwargs ):
+        
+        return { 'session_cookie' : 'blah' }
+        
     
 class TestFrame( wx.Frame ):
     

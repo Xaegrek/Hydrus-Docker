@@ -1566,7 +1566,7 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
         
         ClientMedia.ListeningMediaList.ProcessContentUpdates( self, service_keys_to_content_updates )
         
-        force_reload = False
+        we_were_affected = False
         
         for ( service_key, content_updates ) in service_keys_to_content_updates.items():
             
@@ -1582,12 +1582,15 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
                     
                     self._RedrawMedia( affected_media )
                     
-                    force_reload = True
+                    we_were_affected = True
                     
                 
             
         
-        self._PublishSelectionChange( force_reload = force_reload )
+        if we_were_affected:
+            
+            self._PublishSelectionChange( force_reload = True )
+            
         
         if self._focussed_media is not None:
             
@@ -1627,9 +1630,10 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
     
     def Sort( self, page_key, sort_by = None ):
         
-        if page_key == self._page_key: ClientMedia.ListeningMediaList.Sort( self, sort_by )
-        
-        HG.client_controller.pub( 'sorted_media_pulse', self._page_key, self._sorted_media )
+        if page_key == self._page_key:
+            
+            ClientMedia.ListeningMediaList.Sort( self, sort_by )
+            
         
     
 class MediaPanelLoading( MediaPanel ):
@@ -1666,13 +1670,13 @@ class MediaPanelLoading( MediaPanel ):
         return []
         
     
-    def SetNumQueryResults( self, page_key, current, max ):
+    def SetNumQueryResults( self, page_key, num_current, num_max ):
         
         if page_key == self._page_key:
             
-            self._current = current
+            self._current = num_current
             
-            self._max = max
+            self._max = num_max
             
             self._PublishSelectionChange()
             
@@ -2199,8 +2203,6 @@ class MediaPanelThumbnails( MediaPanel ):
         self._DirtyAllPages()
         
         self._PublishSelectionChange()
-        
-        HG.client_controller.pub( 'sorted_media_pulse', self._page_key, self._sorted_media )
         
         self.Refresh()
         

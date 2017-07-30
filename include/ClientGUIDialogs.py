@@ -14,6 +14,7 @@ import ClientGUICollapsible
 import ClientGUIListBoxes
 import ClientGUIPredicates
 import ClientGUITopLevelWindows
+import ClientImporting
 import ClientThreading
 import collections
 import gc
@@ -830,7 +831,15 @@ class DialogInputLocalFiles( Dialog ):
         
         self.SetDropTarget( ClientDragDrop.FileDropTarget( self._AddPathsToList, None ) )
         
-        self._paths_list = ClientGUICommon.SaneListCtrl( self, 120, [ ( 'path', -1 ), ( 'guessed mime', 110 ), ( 'size', 60 ) ], delete_key_callback = self.RemovePaths )
+        listctrl_panel = ClientGUICommon.SaneListCtrlPanel( self )
+        
+        self._paths_list = ClientGUICommon.SaneListCtrl( listctrl_panel, 120, [ ( 'path', -1 ), ( 'guessed mime', 110 ), ( 'size', 60 ) ], delete_key_callback = self.RemovePaths )
+        
+        listctrl_panel.SetListCtrl( self._paths_list )
+        
+        listctrl_panel.AddButton( 'add files', self.AddPaths )
+        listctrl_panel.AddButton( 'add folder', self.AddFolder )
+        listctrl_panel.AddButton( 'remove files', self.RemovePaths, enabled_only_on_selection = True )
         
         self._progress = ClientGUICommon.TextAndGauge( self )
         
@@ -839,12 +848,6 @@ class DialogInputLocalFiles( Dialog ):
         
         self._progress_cancel = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.stop, self.StopProgress )
         self._progress_cancel.Disable()
-        
-        self._add_files_button = ClientGUICommon.BetterButton( self, 'add files', self.AddPaths )
-        
-        self._add_folder_button = ClientGUICommon.BetterButton( self, 'add folder', self.AddFolder )
-        
-        self._remove_files_button = ClientGUICommon.BetterButton( self, 'remove files', self.RemovePaths )
         
         self._import_file_options = ClientGUICollapsible.CollapsibleOptionsImportFiles( self )
         
@@ -868,12 +871,6 @@ class DialogInputLocalFiles( Dialog ):
         gauge_sizer.AddF( self._progress_pause, CC.FLAGS_VCENTER )
         gauge_sizer.AddF( self._progress_cancel, CC.FLAGS_VCENTER )
         
-        file_buttons = wx.BoxSizer( wx.HORIZONTAL )
-        
-        file_buttons.AddF( self._add_files_button, CC.FLAGS_VCENTER )
-        file_buttons.AddF( self._add_folder_button, CC.FLAGS_VCENTER )
-        file_buttons.AddF( self._remove_files_button, CC.FLAGS_VCENTER )
-        
         buttons = wx.BoxSizer( wx.HORIZONTAL )
         
         buttons.AddF( self._add_button, CC.FLAGS_VCENTER )
@@ -882,9 +879,8 @@ class DialogInputLocalFiles( Dialog ):
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._paths_list, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.AddF( listctrl_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
         vbox.AddF( gauge_sizer, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        vbox.AddF( file_buttons, CC.FLAGS_BUTTON_SIZER )
         vbox.AddF( self._import_file_options, CC.FLAGS_EXPAND_PERPENDICULAR )
         vbox.AddF( self._delete_after_success, CC.FLAGS_LONE_BUTTON )
         vbox.AddF( ( 0, 5 ), CC.FLAGS_NONE )
@@ -2254,6 +2250,8 @@ class DialogPathsToTags( Dialog ):
             
             self._simple_panel.SetSelectedPaths( paths )
             
+            event.Skip()
+            
         
         def GetInfo( self ):
             
@@ -3374,7 +3372,7 @@ class DialogSelectYoutubeURL( Dialog ):
                 
                 job_key = ClientThreading.JobKey( pausable = True, cancellable = True )
                 
-                HG.client_controller.CallToThread( ClientDownloading.THREADDownloadURL, job_key, url, url_string )
+                HG.client_controller.CallToThread( ClientImporting.THREADDownloadURL, job_key, url, url_string )
                 
                 HG.client_controller.pub( 'message', job_key )
                 

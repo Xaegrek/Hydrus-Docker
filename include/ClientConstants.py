@@ -251,6 +251,7 @@ NETWORK_CONTEXT_DOMAIN = 2
 NETWORK_CONTEXT_DOWNLOADER = 3
 NETWORK_CONTEXT_DOWNLOADER_QUERY = 4
 NETWORK_CONTEXT_SUBSCRIPTION = 5
+NETWORK_CONTEXT_THREAD_WATCHER_THREAD = 6
 
 network_context_type_string_lookup = {}
 
@@ -260,6 +261,7 @@ network_context_type_string_lookup[ NETWORK_CONTEXT_DOMAIN ] = 'web domain'
 network_context_type_string_lookup[ NETWORK_CONTEXT_DOWNLOADER ] = 'downloader'
 network_context_type_string_lookup[ NETWORK_CONTEXT_DOWNLOADER_QUERY ] = 'downloader query instance'
 network_context_type_string_lookup[ NETWORK_CONTEXT_SUBSCRIPTION ] = 'subscription'
+network_context_type_string_lookup[ NETWORK_CONTEXT_THREAD_WATCHER_THREAD ] = 'thread watcher thread instance'
 
 network_context_type_description_lookup = {}
 
@@ -269,6 +271,7 @@ network_context_type_description_lookup[ NETWORK_CONTEXT_DOMAIN ] = 'Network tra
 network_context_type_description_lookup[ NETWORK_CONTEXT_DOWNLOADER ] = 'Network traffic going through this downloader.'
 network_context_type_description_lookup[ NETWORK_CONTEXT_DOWNLOADER_QUERY ] = 'Network traffic going through this single downloader query (you probably shouldn\'t be able to see this!)'
 network_context_type_description_lookup[ NETWORK_CONTEXT_SUBSCRIPTION ] = 'Network traffic going through this subscription.'
+network_context_type_description_lookup[ NETWORK_CONTEXT_THREAD_WATCHER_THREAD ] = 'Network traffic going through this single thread watch (you probably shouldn\'t be able to see this!)'
 
 SHORTCUT_MODIFIER_CTRL = 0
 SHORTCUT_MODIFIER_ALT = 1
@@ -433,8 +436,8 @@ wxk_code_string_lookup = {
     wx.WXK_RIGHT: 'right',
     wx.WXK_HOME: 'home',
     wx.WXK_END: 'end',
-    wx.WXK_PAGEDOWN: 'page up',
-    wx.WXK_PAGEUP: 'page down',
+    wx.WXK_PAGEDOWN: 'page down',
+    wx.WXK_PAGEUP: 'page up',
     wx.WXK_F1: 'f1',
     wx.WXK_F2: 'f2',
     wx.WXK_F3: 'f3',
@@ -467,8 +470,8 @@ wxk_code_string_lookup = {
     wx.WXK_NUMPAD_RIGHT: 'numpad right',
     wx.WXK_NUMPAD_HOME: 'numpad home',
     wx.WXK_NUMPAD_END: 'numpad end',
-    wx.WXK_NUMPAD_PAGEDOWN: 'numpad page up',
-    wx.WXK_NUMPAD_PAGEUP: 'numpad page down',
+    wx.WXK_NUMPAD_PAGEDOWN: 'numpad page down',
+    wx.WXK_NUMPAD_PAGEUP: 'numpad page up',
     wx.WXK_NUMPAD_ADD: 'numpad +',
     wx.WXK_NUMPAD_DIVIDE: 'numpad /',
     wx.WXK_NUMPAD_SUBTRACT: 'numpad -',
