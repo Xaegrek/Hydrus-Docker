@@ -414,6 +414,7 @@ class GalleryImport( HydrusSerialisable.SerialisableBase ):
         self._import_tag_options = new_options.GetDefaultImportTagOptions( self._gallery_identifier )
         
         self._seed_cache = SeedCache()
+        self._ordered_urls = []
         
         self._lock = threading.Lock()
         
@@ -703,11 +704,18 @@ class GalleryImport( HydrusSerialisable.SerialisableBase ):
                 if definitely_no_more_pages or no_urls_found or no_new_urls:
                     
                     self._current_gallery_stream_identifier = None
+
+                    n_urls = self._ordered_urls[::-1]
+                    for url in n_urls:
+                        if not self._seed_cache.HasSeed(url):
+                            self._seed_cache.AddSeeds(n_urls)
+                    self._ordered_urls = []
                     
                 else:
                     
                     self._current_gallery_stream_identifier_page_index += 1
                     self._current_gallery_stream_identifier_found_urls.update( page_of_urls )
+                    self._ordered_urls.extend(page_of_urls)
                     
                 
             
@@ -735,7 +743,7 @@ class GalleryImport( HydrusSerialisable.SerialisableBase ):
                     
                 
             
-            self._seed_cache.AddSeeds( new_urls )
+            #self._seed_cache.AddSeeds( new_urls )
             
         except Exception as e:
             
