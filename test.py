@@ -10,14 +10,18 @@ from include import ClientConstants as CC
 from include import HydrusGlobals as HG
 from include import ClientDefaults
 from include import ClientNetworking
+from include import ClientNetworkingDomain
+from include import ClientNetworkingLogin
 from include import ClientServices
+from include import ClientThreading
+from include import HydrusExceptions
 from include import HydrusPubSub
 from include import HydrusSessions
 from include import HydrusTags
 from include import HydrusThreading
 from include import TestClientConstants
 from include import TestClientDaemons
-from include import TestClientDownloading
+from include import TestClientData
 from include import TestClientListBoxes
 from include import TestClientNetworking
 from include import TestConstants
@@ -71,17 +75,21 @@ class Controller( object ):
         HG.server_controller = self
         HG.test_controller = self
         
+        self.gui = self
+        
+        self._call_to_threads = []
+        
         self._pubsub = HydrusPubSub.HydrusPubSub( self )
         
-        self._new_options = ClientData.ClientOptions( self.db_dir )
+        self.new_options = ClientData.ClientOptions( self.db_dir )
+        
+        HC.options = ClientDefaults.GetClientDefaultOptions()
+        
+        self.options = HC.options
         
         def show_text( text ): pass
         
         HydrusData.ShowText = show_text
-        
-        self._http = ClientNetworking.HTTPConnectionManager()
-        
-        self._call_to_threads = []
         
         self._reads = {}
         
@@ -90,6 +98,10 @@ class Controller( object ):
         self._reads[ 'messaging_sessions' ] = []
         self._reads[ 'tag_censorship' ] = []
         self._reads[ 'options' ] = ClientDefaults.GetClientDefaultOptions()
+        self._reads[ 'file_system_predicates' ] = []
+        self._reads[ 'media_results' ] = []
+        
+        self.example_tag_repo_service_key = HydrusData.GenerateKey()
         
         services = []
         
@@ -98,6 +110,8 @@ class Controller( object ):
         services.append( ClientServices.GenerateService( CC.LOCAL_FILE_SERVICE_KEY, HC.LOCAL_FILE_DOMAIN, CC.LOCAL_FILE_SERVICE_KEY ) )
         services.append( ClientServices.GenerateService( CC.TRASH_SERVICE_KEY, HC.LOCAL_FILE_TRASH_DOMAIN, CC.LOCAL_FILE_SERVICE_KEY ) )
         services.append( ClientServices.GenerateService( CC.LOCAL_TAG_SERVICE_KEY, HC.LOCAL_TAG, CC.LOCAL_TAG_SERVICE_KEY ) )
+        services.append( ClientServices.GenerateService( self.example_tag_repo_service_key, HC.TAG_REPOSITORY, 'example tag repo' ) )
+        services.append( ClientServices.GenerateService( CC.COMBINED_TAG_SERVICE_KEY, HC.COMBINED_TAG, CC.COMBINED_TAG_SERVICE_KEY ) )
         services.append( ClientServices.GenerateService( TestConstants.LOCAL_RATING_LIKE_SERVICE_KEY, HC.LOCAL_RATING_LIKE, 'example local rating like service' ) )
         services.append( ClientServices.GenerateService( TestConstants.LOCAL_RATING_NUMERICAL_SERVICE_KEY, HC.LOCAL_RATING_NUMERICAL, 'example local rating numerical service' ) )
         
@@ -118,9 +132,7 @@ class Controller( object ):
         self._reads[ 'sessions' ] = []
         self._reads[ 'tag_parents' ] = {}
         self._reads[ 'tag_siblings' ] = {}
-        self._reads[ 'web_sessions' ] = {}
-        
-        HC.options = ClientDefaults.GetClientDefaultOptions()
+        self._reads[ 'in_inbox' ] = False
         
         self._writes = collections.defaultdict( list )
         
@@ -128,17 +140,29 @@ class Controller( object ):
         
         self.services_manager = ClientCaches.ServicesManager( self )
         self.client_files_manager = ClientCaches.ClientFilesManager( self )
-        self._client_session_manager = ClientCaches.HydrusSessionManager( self )
+        
+        bandwidth_manager = ClientNetworking.NetworkBandwidthManager()
+        session_manager = ClientNetworking.NetworkSessionManager()
+        domain_manager = ClientNetworkingDomain.NetworkDomainManager()
+        login_manager = ClientNetworkingLogin.NetworkLoginManager()
+        
+        self.network_engine = ClientNetworking.NetworkEngine( self, bandwidth_manager, session_manager, domain_manager, login_manager )
+        
+        self.CallToThreadLongRunning( self.network_engine.MainLoop )
         
         self._managers[ 'tag_censorship' ] = ClientCaches.TagCensorshipManager( self )
         self._managers[ 'tag_siblings' ] = ClientCaches.TagSiblingsManager( self )
         self._managers[ 'tag_parents' ] = ClientCaches.TagParentsManager( self )
         self._managers[ 'undo' ] = ClientCaches.UndoManager( self )
-        self._managers[ 'web_sessions' ] = TestConstants.FakeWebSessionManager()
-        self._server_session_manager = HydrusSessions.HydrusSessionManagerServer()
-        self._managers[ 'local_booru' ] = ClientCaches.LocalBooruCache( self )
+        self.server_session_manager = HydrusSessions.HydrusSessionManagerServer()
+        
+        self.local_booru_manager = ClientCaches.LocalBooruCache( self )
         
         self._cookies = {}
+        
+        self._job_scheduler = HydrusThreading.JobScheduler( self )
+        
+        self._job_scheduler.start()
         
     
     def _GetCallToThread( self ):
@@ -156,7 +180,7 @@ class Controller( object ):
             raise Exception( 'Too many call to threads!' )
             
         
-        call_to_thread = HydrusThreading.THREADCallToThread( self )
+        call_to_thread = HydrusThreading.THREADCallToThread( self, 'CallToThread' )
         
         self._call_to_threads.append( call_to_thread )
         
@@ -170,6 +194,8 @@ class Controller( object ):
         self.locale = wx.Locale( wx.LANGUAGE_DEFAULT ) # Very important to init this here and keep it non garbage collected
         
         CC.GlobalBMPs.STATICInitialise()
+        
+        self.frame_icon = wx.Icon( os.path.join( HC.STATIC_DIR, 'hydrus_32_non-transparent.png' ), wx.BITMAP_TYPE_PNG )
         
     
     def pub( self, topic, *args, **kwargs ):
@@ -187,6 +213,68 @@ class Controller( object ):
         self._pubsub.sub( object, method_name, topic )
         
     
+    def CallBlockingToWx( self, func, *args, **kwargs ):
+        
+        def wx_code( job_key ):
+            
+            try:
+                
+                result = func( *args, **kwargs )
+                
+                job_key.SetVariable( 'result', result )
+                
+            except HydrusExceptions.PermissionException as e:
+                
+                job_key.SetVariable( 'error', e )
+                
+            except Exception as e:
+                
+                job_key.SetVariable( 'error', e )
+                
+                HydrusData.Print( 'CallBlockingToWx just caught this error:' )
+                HydrusData.DebugPrint( traceback.format_exc() )
+                
+            finally:
+                
+                job_key.Finish()
+                
+            
+        
+        job_key = ClientThreading.JobKey()
+        
+        job_key.Begin()
+        
+        wx.CallAfter( wx_code, job_key )
+        
+        while not job_key.IsDone():
+            
+            if HG.model_shutdown:
+                
+                raise HydrusExceptions.ShutdownException( 'Application is shutting down!' )
+                
+            
+            time.sleep( 0.05 )
+            
+        
+        if job_key.HasVariable( 'result' ):
+            
+            # result can be None, for wx_code that has no return variable
+            
+            result = job_key.GetIfHasVariable( 'result' )
+            
+            return result
+            
+        
+        error = job_key.GetIfHasVariable( 'error' )
+        
+        if error is not None:
+            
+            raise error
+            
+        
+        raise HydrusExceptions.ShutdownException()
+        
+    
     def CallToThread( self, callable, *args, **kwargs ):
         
         call_to_thread = self._GetCallToThread()
@@ -194,11 +282,55 @@ class Controller( object ):
         call_to_thread.put( callable, *args, **kwargs )
         
     
-    def DoHTTP( self, *args, **kwargs ): return self._http.Request( *args, **kwargs )
+    CallToThreadLongRunning = CallToThread
     
-    def GetClientSessionManager( self ):
+    def CallLater( self, delay, func, *args, **kwargs ):
         
-        return self._client_session_manager
+        call = HydrusData.Call( func, *args, **kwargs )
+        
+        job = HydrusThreading.SchedulableJob( self, self._job_scheduler, call, initial_delay = delay )
+        
+        self._job_scheduler.AddJob( job )
+        
+        return job
+        
+    
+    def CallLaterWXSafe( self, window, delay, func, *args, **kwargs ):
+        
+        call = HydrusData.Call( func, *args, **kwargs )
+        
+        job = ClientThreading.WXAwareJob( self, self._job_scheduler, window, call, initial_delay = delay )
+        
+        self._job_scheduler.AddJob( job )
+        
+        return job
+        
+    
+    def CallRepeating( self, period, delay, func, *args, **kwargs ):
+        
+        call = HydrusData.Call( func, *args, **kwargs )
+        
+        job = HydrusThreading.RepeatingJob( self, self._job_scheduler, call, period, initial_delay = delay )
+        
+        self._job_scheduler.AddJob( job )
+        
+        return job
+        
+    
+    def CallRepeatingWXSafe( self, window, period, delay, func, *args, **kwargs ):
+        
+        call = HydrusData.Call( func, *args, **kwargs )
+        
+        job = ClientThreading.WXAwareRepeatingJob( self, self._job_scheduler, window, call, period, initial_delay = delay )
+        
+        self._job_scheduler.AddJob( job )
+        
+        return job
+        
+    
+    def DBCurrentlyDoingJob( self ):
+        
+        return False
         
     
     def GetFilesDir( self ):
@@ -206,26 +338,14 @@ class Controller( object ):
         return self._server_files_dir
         
     
-    def GetHTTP( self ): return self._http
-    
     def GetNewOptions( self ):
         
-        return self._new_options
-        
-    
-    def GetOptions( self ):
-        
-        return HC.options
+        return self.new_options
         
     
     def GetManager( self, manager_type ):
         
         return self._managers[ manager_type ]
-        
-    
-    def GetServerSessionManager( self ):
-        
-        return self._server_session_manager
         
     
     def GetWrite( self, name ):
@@ -242,7 +362,17 @@ class Controller( object ):
         return True
         
     
+    def IsCurrentPage( self, page_key ):
+        
+        return False
+        
+    
     def IsFirstStart( self ):
+        
+        return True
+        
+    
+    def IShouldRegularlyUpdate( self, window ):
         
         return True
         
@@ -252,9 +382,24 @@ class Controller( object ):
         return HG.model_shutdown
         
     
+    def PageCompletelyDestroyed( self, page_key ):
+        
+        return False
+        
+    
+    def PageClosedButNotDestroyed( self, page_key ):
+        
+        return False
+        
+    
     def Read( self, name, *args, **kwargs ):
         
         return self._reads[ name ]
+        
+    
+    def RegisterUIUpdateWindow( self, window ):
+        
+        pass
         
     
     def ReportDataUsed( self, num_bytes ):
@@ -278,38 +423,69 @@ class Controller( object ):
         if only_run is None: run_all = True
         else: run_all = False
         
-        if run_all or only_run == 'daemons': suites.append( unittest.TestLoader().loadTestsFromModule( TestClientDaemons ) )
+        # the gui stuff runs fine on its own but crashes in the full test if it is not early, wew
+        # something to do with the delayed button clicking stuff
+        if run_all or only_run == 'gui':
+            
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestDialogs ) )
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestClientListBoxes ) )
+            
+        if run_all or only_run == 'daemons':
+            
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestClientDaemons ) )
+            
         if run_all or only_run == 'data':
+            
             suites.append( unittest.TestLoader().loadTestsFromModule( TestClientConstants ) )
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestClientData ) )
             suites.append( unittest.TestLoader().loadTestsFromModule( TestFunctions ) )
             suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusSerialisable ) )
             suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusSessions ) )
             suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusTags ) )
-        if run_all or only_run == 'db': suites.append( unittest.TestLoader().loadTestsFromModule( TestDB ) )
-        if run_all or only_run == 'downloading':
-            suites.append( unittest.TestLoader().loadTestsFromModule( TestClientDownloading ) )
+            
+        if run_all or only_run == 'db':
+            
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestDB ) )
+            
         if run_all or only_run == 'networking':
+            
             suites.append( unittest.TestLoader().loadTestsFromModule( TestClientNetworking ) )
             suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusNetworking ) )
-        if run_all or only_run == 'gui':
-            suites.append( unittest.TestLoader().loadTestsFromModule( TestDialogs ) )
-            suites.append( unittest.TestLoader().loadTestsFromModule( TestClientListBoxes ) )
-        if run_all or only_run == 'image': suites.append( unittest.TestLoader().loadTestsFromModule( TestClientImageHandling ) )
-        if run_all or only_run == 'nat': suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusNATPunch ) )
-        if run_all or only_run == 'server': suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusServer ) )
+            
+        if run_all or only_run == 'image':
+            
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestClientImageHandling ) )
+            
+        if run_all or only_run == 'nat':
+            
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusNATPunch ) )
+            
+        if run_all or only_run == 'server':
+            
+            suites.append( unittest.TestLoader().loadTestsFromModule( TestHydrusServer ) )
+            
         
         suite = unittest.TestSuite( suites )
         
-        runner = unittest.TextTestRunner( verbosity = 1 )
+        runner = unittest.TextTestRunner( verbosity = 2 )
         
         runner.run( suite )
         
     
-    def SetHTTP( self, http ): self._http = http
+    def SetRead( self, name, value ):
+        
+        self._reads[ name ] = value
+        
     
-    def SetRead( self, name, value ): self._reads[ name ] = value
+    def SetStatusBarDirty( self ):
+        
+        pass
+        
     
-    def SetWebCookies( self, name, value ): self._cookies[ name ] = value
+    def SetWebCookies( self, name, value ):
+        
+        self._cookies[ name ] = value
+        
     
     def TidyUp( self ):
         
@@ -321,6 +497,16 @@ class Controller( object ):
     def ViewIsShutdown( self ):
         
         return HG.view_shutdown
+        
+    
+    def WaitUntilModelFree( self ):
+        
+        return
+        
+    
+    def WaitUntilViewFree( self ):
+        
+        return
         
     
     def Write( self, name, *args, **kwargs ):
@@ -367,6 +553,9 @@ if __name__ == '__main__':
         
         try:
             
+            # we run the tests on the wx thread atm
+            # keep a window alive the whole time so the app doesn't finish its mainloop
+            
             win = wx.Frame( None )
             
             def do_it():
@@ -377,6 +566,7 @@ if __name__ == '__main__':
                 
             
             wx.CallAfter( do_it )
+            
             app.MainLoop()
             
         except:

@@ -9,15 +9,9 @@ import HydrusGlobals as HG
 
 class HydrusPubSub( object ):
     
-    def __init__( self, controller, binding_errors_to_ignore = None ):
-        
-        if binding_errors_to_ignore is None:
-            
-            binding_errors_to_ignore = []
-            
+    def __init__( self, controller ):
         
         self._controller = controller
-        self._binding_errors_to_ignore = binding_errors_to_ignore
         
         self._doing_work = False
         
@@ -43,34 +37,28 @@ class HydrusPubSub( object ):
                 
                 for object in objects:
                     
+                    if not object:
+                        
+                        continue
+                        
+                    
                     method_names = self._topics_to_method_names[ topic ]
                     
                     for method_name in method_names:
                         
                         if hasattr( object, method_name ):
                             
-                            try:
-                                
-                                callable = getattr( object, method_name )
-                                
-                                callables.append( callable )
-                                
-                            except TypeError as e:
-                                
-                                if '_wxPyDeadObject' not in HydrusData.ToUnicode( e ): raise
-                                
-                            except Exception as e:
-                                
-                                if not isinstance( e, self._binding_errors_to_ignore ):
-                                    
-                                    raise
-                                    
-                                
+                            callable = getattr( object, method_name )
+                            
+                            callables.append( callable )
                             
                         
                     
                 
-            except: pass
+            except:
+                
+                pass
+                
             
         
         return callables

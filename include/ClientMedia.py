@@ -5,6 +5,7 @@ import ClientData
 import ClientFiles
 import ClientRatings
 import ClientSearch
+import ClientTags
 import HydrusConstants as HC
 import HydrusTags
 import os
@@ -16,6 +17,7 @@ import HydrusData
 import HydrusFileHandling
 import HydrusExceptions
 import HydrusGlobals as HG
+import HydrusSerialisable
 import itertools
 
 def FlattenMedia( media_list ):
@@ -220,7 +222,7 @@ def MergeTagsManagers( tags_managers ):
         merged_service_keys_to_statuses_to_tags[ service_key ] = statuses_to_tags
         
     
-    return TagsManagerSimple( merged_service_keys_to_statuses_to_tags )
+    return TagsManager( merged_service_keys_to_statuses_to_tags )
     
 class DuplicatesManager( object ):
     
@@ -250,59 +252,24 @@ class FileInfoManager( object ):
             mime = HC.APPLICATION_UNKNOWN
             
         
-        self._hash = hash
-        self._size = size
-        self._mime = mime
-        self._width = width
-        self._height = height
-        self._duration = duration
-        self._num_frames = num_frames
-        self._num_words = num_words
+        self.hash = hash
+        self.size = size
+        self.mime = mime
+        self.width = width
+        self.height = height
+        self.duration = duration
+        self.num_frames = num_frames
+        self.num_words = num_words
         
     
     def Duplicate( self ):
         
-        return FileInfoManager( self._hash, self._size, self._mime, self._width, self._height, self._duration, self._num_frames, self._num_words )
-        
-    
-    def GetDuration( self ):
-        
-        return self._duration
-        
-    
-    def GetHash( self ):
-        
-        return self._hash
-        
-    
-    def GetMime( self ):
-        
-        return self._mime
-        
-    
-    def GetNumFrames( self ):
-        
-        return self._num_frames
-        
-    
-    def GetNumWords( self ):
-        
-        return self._num_words
-        
-    
-    def GetResolution( self ):
-        
-        return ( self._width, self._height )
-        
-    
-    def GetSize( self ):
-        
-        return self._size
+        return FileInfoManager( self.hash, self.size, self.mime, self.width, self.height, self.duration, self.num_frames, self.num_words )
         
     
     def ToTuple( self ):
         
-        return ( self._hash, self._size, self._mime, self._width, self._height, self._duration, self._num_frames, self._num_words )
+        return ( self.hash, self.size, self.mime, self.width, self.height, self.duration, self.num_frames, self.num_words )
         
     
 class LocationsManager( object ):
@@ -352,7 +319,7 @@ class LocationsManager( object ):
         deleted = set( self._deleted )
         pending = set( self._pending )
         petitioned = set( self._petitioned )
-        urls = list( self._urls )
+        urls = set( self._urls )
         service_keys_to_filenames = dict( self._service_keys_to_filenames )
         current_to_timestamps = dict( self._current_to_timestamps )
         
@@ -459,6 +426,11 @@ class LocationsManager( object ):
     def IsLocal( self ):
         
         return CC.COMBINED_LOCAL_FILE_SERVICE_KEY in self._current
+        
+    
+    def IsRemote( self ):
+        
+        return CC.COMBINED_LOCAL_FILE_SERVICE_KEY not in self._current
         
     
     def IsTrashed( self ):
@@ -589,7 +561,10 @@ class Media( object ):
     
     def __eq__( self, other ): return self.__hash__() == other.__hash__()
     
-    def __hash__( self ): return self._id_hash
+    def __hash__( self ):
+        
+        return self._id_hash
+        
     
     def __ne__( self, other ): return self.__hash__() != other.__hash__()
     
@@ -601,7 +576,10 @@ class MediaList( object ):
         
         self._hashes = set()
         
-        self._sort_by = CC.SORT_BY_SMALLEST
+        self._hashes_to_singleton_media = {}
+        self._hashes_to_collected_media = {}
+        
+        self._media_sort = MediaSort( ( 'system', CC.SORT_FILES_BY_FILESIZE ), CC.SORT_ASC )
         self._collect_by = []
         
         self._collect_map_singletons = {}
@@ -655,9 +633,15 @@ class MediaList( object ):
         return keys_to_medias
         
     
-    def _GenerateMediaCollection( self, media_results ): return MediaCollection( self._file_service_key, media_results )
+    def _GenerateMediaCollection( self, media_results ):
+        
+        return MediaCollection( self._file_service_key, media_results )
+        
     
-    def _GenerateMediaSingleton( self, media_result ): return MediaSingleton( media_result )
+    def _GenerateMediaSingleton( self, media_result ):
+        
+        return MediaSingleton( media_result )
+        
     
     def _GetFirst( self ): return self._sorted_media[ 0 ]
     
@@ -665,21 +649,59 @@ class MediaList( object ):
     
     def _GetMedia( self, hashes, discriminator = None ):
         
-        if discriminator is None: medias = self._sorted_media
-        elif discriminator == 'singletons': medias = self._singleton_media
-        elif discriminator == 'collections': medias = self._collected_media
+        if hashes.isdisjoint( self._hashes ):
+            
+            return []
+            
         
-        return [ media for media in medias if not hashes.isdisjoint( media.GetHashes() ) ]
+        medias = []
         
+        if discriminator is None or discriminator == 'singletons':
+            
+            medias.extend( ( self._hashes_to_singleton_media[ hash ] for hash in hashes if hash in self._hashes_to_singleton_media ) )
+            
+        
+        if discriminator is None or discriminator == 'collections':
+            
+            medias.extend( { self._hashes_to_collected_media[ hash ] for hash in hashes if hash in self._hashes_to_collected_media } )
+            
+        
+        return medias
+        
+        '''
+        if discriminator is None:
+            
+            medias = self._sorted_media
+            
+        elif discriminator == 'singletons':
+            
+            medias = self._singleton_media
+            
+        elif discriminator == 'collections':
+            
+            medias = self._collected_media
+            
+        
+        return [ media for media in medias if media.HasAnyOfTheseHashes( hashes ) ]
+        '''
     
     def _GetNext( self, media ):
         
-        if media is None: return None
+        if media is None:
+            
+            return None
+            
         
         next_index = self._sorted_media.index( media ) + 1
         
-        if next_index == len( self._sorted_media ): return self._GetFirst()
-        else: return self._sorted_media[ next_index ]
+        if next_index == len( self._sorted_media ):
+            
+            return self._GetFirst()
+            
+        else:
+            
+            return self._sorted_media[ next_index ]
+            
         
     
     def _GetPrevious( self, media ):
@@ -692,195 +714,45 @@ class MediaList( object ):
         else: return self._sorted_media[ previous_index ]
         
     
-    def _GetSortFunction( self, sort_by ):
+    def _HasHashes( self, hashes ):
         
-        reverse = False
-        
-        ( sort_by_type, sort_by_data ) = sort_by
-        
-        def deal_with_none( x ):
+        for hash in hashes:
             
-            if x is None: return -1
-            else: return x
-            
-        
-        if sort_by_type == 'system':
-            
-            if sort_by_data == CC.SORT_BY_RANDOM:
+            if hash in self._hashes:
                 
-                def sort_key( x ):
-                    
-                    return random.random()
-                    
-                
-            elif sort_by_data in ( CC.SORT_BY_SMALLEST, CC.SORT_BY_LARGEST ):
-                
-                def sort_key( x ):
-                    
-                    return deal_with_none( x.GetSize() )
-                    
-                
-                if sort_by_data == CC.SORT_BY_LARGEST:
-                    
-                    reverse = True
-                    
-                
-            elif sort_by_data in ( CC.SORT_BY_SHORTEST, CC.SORT_BY_LONGEST ):
-                
-                def sort_key( x ):
-                    
-                    return deal_with_none( x.GetDuration() )
-                    
-                
-                if sort_by_data == CC.SORT_BY_LONGEST:
-                    
-                    reverse = True
-                    
-                
-            elif sort_by_data in ( CC.SORT_BY_OLDEST, CC.SORT_BY_NEWEST ):
-                
-                file_service = HG.client_controller.services_manager.GetService( self._file_service_key )
-                
-                file_service_type = file_service.GetServiceType()
-                
-                if file_service_type == HC.LOCAL_FILE_DOMAIN:
-                    
-                    file_service_key = CC.COMBINED_LOCAL_FILE_SERVICE_KEY
-                    
-                else:
-                    
-                    file_service_key = self._file_service_key
-                    
-                
-                def sort_key( x ):
-                    
-                    return deal_with_none( x.GetTimestamp( file_service_key ) )
-                    
-                
-                if sort_by_data == CC.SORT_BY_NEWEST:
-                    
-                    reverse = True
-                    
-                
-            elif sort_by_data in ( CC.SORT_BY_HEIGHT_ASC, CC.SORT_BY_HEIGHT_DESC ):
-                
-                def sort_key( x ):
-                    
-                    return deal_with_none( x.GetResolution()[1] )
-                    
-                
-                if sort_by_data == CC.SORT_BY_HEIGHT_DESC:
-                    
-                    reverse = True
-                    
-                
-            elif sort_by_data in ( CC.SORT_BY_WIDTH_ASC, CC.SORT_BY_WIDTH_DESC ):
-                
-                def sort_key( x ):
-                    
-                    return deal_with_none( x.GetResolution()[0] )
-                    
-                
-                if sort_by_data == CC.SORT_BY_WIDTH_DESC:
-                    
-                    reverse = True
-                    
-                
-            elif sort_by_data in ( CC.SORT_BY_RATIO_ASC, CC.SORT_BY_RATIO_DESC ):
-                
-                def sort_key( x ):
-                    
-                    ( width, height ) = x.GetResolution()
-                    
-                    if width is None or height is None or width == 0 or height == 0:
-                        
-                        return -1
-                        
-                    else:
-                        
-                        return float( width ) / float( height )
-                        
-                    
-                
-                if sort_by_data == CC.SORT_BY_RATIO_DESC:
-                    
-                    reverse = True
-                    
-                
-            elif sort_by_data in ( CC.SORT_BY_NUM_PIXELS_ASC, CC.SORT_BY_NUM_PIXELS_DESC ):
-                
-                def sort_key( x ):
-                    
-                    ( width, height ) = x.GetResolution()
-                    
-                    if width is None or height is None:
-                        
-                        return -1
-                        
-                    else:
-                        
-                        return width * height
-                        
-                    
-                
-                if sort_by_data == CC.SORT_BY_NUM_PIXELS_DESC:
-                    
-                    reverse = True
-                    
-                
-            elif sort_by_data == CC.SORT_BY_MIME:
-                
-                def sort_key( x ):
-                    
-                    return x.GetMime()
-                    
-                
-            
-        elif sort_by_type == 'namespaces':
-            
-            namespaces = sort_by_data
-            
-            def sort_key( x ):
-                
-                x_tags_manager = x.GetTagsManager()
-                
-                return [ x_tags_manager.GetComparableNamespaceSlice( ( namespace, ) ) for namespace in namespaces ]
-                
-            
-        elif sort_by_type in ( 'rating_descend', 'rating_ascend' ):
-            
-            service_key = sort_by_data
-            
-            def sort_key( x ):
-                
-                x_ratings_manager = x.GetRatingsManager()
-                
-                rating = deal_with_none( x_ratings_manager.GetRating( service_key ) )
-                
-                return rating
-                
-            
-            if sort_by_type == 'rating_descend':
-                
-                reverse = True
+                return True
                 
             
         
-        return ( sort_key, reverse )
+        return False
         
     
     def _RecalcHashes( self ):
         
         self._hashes = set()
         
+        self._hashes_to_singleton_media = {}
+        self._hashes_to_collected_media = {}
+        
         for media in self._collected_media:
             
-            self._hashes.update( media.GetHashes() )
+            hashes = media.GetHashes()
+            
+            self._hashes.update( hashes )
+            
+            for hash in hashes:
+                
+                self._hashes_to_collected_media[ hash ] = media
+                
             
         
         for media in self._singleton_media:
             
-            self._hashes.add( media.GetHash() )
+            hash = media.GetHash()
+            
+            self._hashes.add( hash )
+            
+            self._hashes_to_singleton_media[ hash ] = media
             
         
     
@@ -943,18 +815,17 @@ class MediaList( object ):
             
             for media in new_media:
                 
-                self._hashes.add( media.GetHash() )
+                hash = media.GetHash()
+                
+                self._hashes.add( hash )
+                
+                self._hashes_to_singleton_media[ hash ] = media
                 
             
             self._singleton_media.update( new_media )
             self._sorted_media.append_items( new_media )
             
         else:
-            
-            for media in new_media:
-                
-                self._hashes.update( media.GetHashes() )
-                
             
             if self._collect_by is not None:
                 
@@ -976,7 +847,7 @@ class MediaList( object ):
                         
                         collected_media = self._GenerateMediaCollection( [ media.GetMediaResult() for media in medias ] )
                         
-                        collected_media.Sort( self._sort_by )
+                        collected_media.Sort( self._media_sort )
                         
                         self._collected_media.add( collected_media )
                         self._collect_map_collected[ key ] = collected_media
@@ -991,7 +862,7 @@ class MediaList( object ):
                         
                         collected_media.AddMedia( medias )
                         
-                        collected_media.Sort( self._sort_by )
+                        collected_media.Sort( self._media_sort )
                         
                         new_media.append( collected_media )
                         
@@ -1006,7 +877,7 @@ class MediaList( object ):
                         
                         collected_media = self._GenerateMediaCollection( [ media.GetMediaResult() for media in medias ] )
                         
-                        collected_media.Sort( self._sort_by )
+                        collected_media.Sort( self._media_sort )
                         
                         self._collected_media.add( collected_media )
                         self._collect_map_collected[ key ] = collected_media
@@ -1017,6 +888,8 @@ class MediaList( object ):
                 
             
             self._sorted_media.insert_items( new_media )
+            
+            self._RecalcHashes()
             
         
         return new_media
@@ -1053,6 +926,8 @@ class MediaList( object ):
             
         
         self._sorted_media = SortedList( list( self._singleton_media ) + list( self._collected_media ) )
+        
+        self._RecalcHashes()
         
     
     def DeletePending( self, service_key ):
@@ -1134,7 +1009,7 @@ class MediaList( object ):
                 
                 if for_media_viewer:
                     
-                    new_options = HG.client_controller.GetNewOptions()
+                    new_options = HG.client_controller.new_options
                     
                     media_show_action = new_options.GetMediaShowAction( media.GetMime() )
                     
@@ -1180,11 +1055,19 @@ class MediaList( object ):
         return self._GetLast()
         
     
-    def GetMediaIndex( self, media ): return self._sorted_media.index( media )
+    def GetMediaIndex( self, media ):
+        
+        return self._sorted_media.index( media )
+        
     
     def GetNext( self, media ):
         
         return self._GetNext( media )
+        
+    
+    def GetNumFiles( self ):
+        
+        return len( self._hashes )
         
     
     def GetPrevious( self, media ):
@@ -1192,19 +1075,39 @@ class MediaList( object ):
         return self._GetPrevious( media )
         
     
-    def GetSortedMedia( self ): return self._sorted_media
+    def GetSortedMedia( self ):
+        
+        return self._sorted_media
+        
+    
+    def HasAnyOfTheseHashes( self, hashes ):
+        
+        return not hashes.isdisjoint( self._hashes )
+        
     
     def HasMedia( self, media ):
         
-        if media is None: return False
+        if media is None:
+            
+            return False
+            
         
-        if media in self._singleton_media: return True
-        elif media in self._collected_media: return True
+        if media in self._singleton_media:
+            
+            return True
+            
+        elif media in self._collected_media:
+            
+            return True
+            
         else:
             
             for media_collection in self._collected_media:
                 
-                if media_collection.HasMedia( media ): return True
+                if media_collection.HasMedia( media ):
+                    
+                    return True
+                    
                 
             
         
@@ -1291,38 +1194,29 @@ class MediaList( object ):
             
         
     
-    def Sort( self, sort_by = None ):
+    def Sort( self, media_sort = None ):
         
         for media in self._collected_media:
             
-            media.Sort( sort_by )
+            media.Sort( media_sort )
             
         
-        if sort_by is None:
+        if media_sort is None:
             
-            sort_by = self._sort_by
-            
-        
-        self._sort_by = sort_by
-        
-        sort_choices = ClientData.GetSortChoices( add_namespaces_and_ratings = True )
-        
-        try:
-            
-            sort_by_fallback = sort_choices[ HC.options[ 'sort_fallback' ] ]
-            
-        except IndexError:
-            
-            sort_by_fallback = sort_choices[ 0 ]
+            media_sort = self._media_sort
             
         
-        ( sort_key, reverse ) = self._GetSortFunction( sort_by_fallback )
+        self._media_sort = media_sort
+        
+        media_sort_fallback = HG.client_controller.new_options.GetFallbackSort()
+        
+        ( sort_key, reverse ) = media_sort_fallback.GetSortKeyAndReverse( self._file_service_key )
         
         self._sorted_media.sort( sort_key, reverse = reverse )
         
         # this is a stable sort, so the fallback order above will remain for equal items
         
-        ( sort_key, reverse ) = self._GetSortFunction( self._sort_by )
+        ( sort_key, reverse ) = self._media_sort.GetSortKeyAndReverse( self._file_service_key )
         
         self._sorted_media.sort( sort_key = sort_key, reverse = reverse )
         
@@ -1457,13 +1351,19 @@ class MediaCollection( MediaList, Media ):
                 
                 result = []
                 
-                for media in self._sorted_media: result.extend( media.GetHashes( has_location, discriminant, not_uploaded_to, ordered ) )
+                for media in self._sorted_media:
+                    
+                    result.extend( media.GetHashes( has_location, discriminant, not_uploaded_to, ordered ) )
+                    
                 
             else:
                 
                 result = set()
                 
-                for media in self._sorted_media: result.update( media.GetHashes( has_location, discriminant, not_uploaded_to, ordered ) )
+                for media in self._sorted_media:
+                    
+                    result.update( media.GetHashes( has_location, discriminant, not_uploaded_to, ordered ) )
+                    
                 
             
             return result
@@ -1524,7 +1424,7 @@ class MediaCollection( MediaList, Media ):
     
     def HasDuration( self ): return self._duration is not None
     
-    def HasImages( self ): return True in ( media.HasImages() for media in self._collected_media | self._singleton_media )
+    def HasImages( self ): return True in ( media.HasImages() for media in self._sorted_media )
     
     def HasInbox( self ): return self._inbox
     
@@ -1539,6 +1439,16 @@ class MediaCollection( MediaList, Media ):
     def ProcessContentUpdate( self, service_key, content_update ):
         
         MediaList.ProcessContentUpdate( self, service_key, content_update )
+        
+        self._RecalcInternals()
+        
+    
+    def RefreshFileInfo( self ):
+        
+        for media in self._sorted_media:
+            
+            media.RefreshFileInfo()
+            
         
         self._RecalcInternals()
         
@@ -1564,13 +1474,22 @@ class MediaSingleton( Media ):
         return MediaSingleton( self._media_result.Duplicate() )
         
     
-    def GetDisplayMedia( self ): return self
+    def GetDisplayMedia( self ):
+        
+        return self
+        
     
-    def GetDuration( self ): return self._media_result.GetDuration()
+    def GetDuration( self ):
+        
+        return self._media_result.GetDuration()
+        
     
-    def GetHash( self ): return self._media_result.GetHash()
+    def GetHash( self ):
+        
+        return self._media_result.GetHash()
+        
     
-    def GetHashes( self, has_location = None, discriminant = None, not_uploaded_to = None, ordered = False ):
+    def MatchesDiscriminant( self, has_location = None, discriminant = None, not_uploaded_to = None ):
         
         if discriminant is not None:
             
@@ -1605,14 +1524,7 @@ class MediaSingleton( Media ):
             
             if not p:
                 
-                if ordered:
-                    
-                    return []
-                    
-                else:
-                    
-                    return set()
-                    
+                return False
                 
             
         
@@ -1622,14 +1534,7 @@ class MediaSingleton( Media ):
             
             if has_location not in locations_manager.GetCurrent():
                 
-                if ordered:
-                    
-                    return []
-                    
-                else:
-                    
-                    return set()
-                    
+                return False
                 
             
         
@@ -1639,24 +1544,36 @@ class MediaSingleton( Media ):
             
             if not_uploaded_to in locations_manager.GetCurrentRemote():
                 
-                if ordered:
-                    
-                    return []
-                    
-                else:
-                    
-                    return set()
-                    
+                return False
                 
             
         
-        if ordered:
+        return True
+        
+    
+    def GetHashes( self, has_location = None, discriminant = None, not_uploaded_to = None, ordered = False ):
+        
+        if self.MatchesDiscriminant( has_location = has_location, discriminant = discriminant, not_uploaded_to = not_uploaded_to ):
             
-            return [ self._media_result.GetHash() ]
+            if ordered:
+                
+                return [ self._media_result.GetHash() ]
+                
+            else:
+                
+                return { self._media_result.GetHash() }
+                
             
         else:
             
-            return { self._media_result.GetHash() }
+            if ordered:
+                
+                return []
+                
+            else:
+                
+                return set()
+                
             
         
     
@@ -1710,14 +1627,14 @@ class MediaSingleton( Media ):
             
             timestamp = locations_manager.GetTimestamp( CC.COMBINED_LOCAL_FILE_SERVICE_KEY )
             
-            lines.append( 'imported ' + HydrusData.ConvertTimestampToPrettyAgo( timestamp ) )
+            lines.append( 'imported ' + HydrusData.ConvertTimestampToPrettyAgo( timestamp ) + ' ago' )
             
         
         if CC.TRASH_SERVICE_KEY in current_service_keys:
             
             timestamp = locations_manager.GetTimestamp( CC.TRASH_SERVICE_KEY )
             
-            lines.append( 'trashed ' + HydrusData.ConvertTimestampToPrettyAgo( timestamp ) )
+            lines.append( 'trashed ' + HydrusData.ConvertTimestampToPrettyAgo( timestamp ) + ' ago' )
             
         
         for service_key in current_service_keys:
@@ -1742,7 +1659,7 @@ class MediaSingleton( Media ):
                 status = 'uploaded '
                 
             
-            lines.append( status + 'to ' + service.GetName() + ' ' + HydrusData.ConvertTimestampToPrettyAgo( timestamp ) )
+            lines.append( status + 'to ' + service.GetName() + ' ' + HydrusData.ConvertTimestampToPrettyAgo( timestamp ) + ' ago' )
             
         
         return lines
@@ -1770,101 +1687,31 @@ class MediaSingleton( Media ):
     
     def GetTitleString( self ):
         
-        title_string = ''
+        new_options = HG.client_controller.new_options
+        
+        tag_summary_generator = new_options.GetTagSummaryGenerator( 'media_viewer_top' )
+        
+        tm = self.GetTagsManager()
+        
+        tags = tm.GetCurrent( CC.COMBINED_TAG_SERVICE_KEY ).union( tm.GetPending( CC.COMBINED_TAG_SERVICE_KEY ) )
+        
+        if len( tags ) == 0:
+            
+            return ''
+            
         
         siblings_manager = HG.client_controller.GetManager( 'tag_siblings' )
         
-        namespaces = self._media_result.GetTagsManager().GetCombinedNamespaces( ( 'creator', 'series', 'title', 'volume', 'chapter', 'page' ) )
+        tags = siblings_manager.CollapseTags( CC.COMBINED_TAG_SERVICE_KEY, tags )
         
-        creators = namespaces[ 'creator' ]
-        series = namespaces[ 'series' ]
-        titles = namespaces[ 'title' ]
-        volumes = namespaces[ 'volume' ]
-        chapters = namespaces[ 'chapter' ]
-        pages = namespaces[ 'page' ]
+        summary = tag_summary_generator.GenerateSummary( tags )
         
-        if len( creators ) > 0:
-            
-            title_string_append = ', '.join( creators )
-            
-            if len( title_string ) > 0: title_string += ' - ' + title_string_append
-            else: title_string = title_string_append
-            
+        return summary
         
-        if len( series ) > 0:
-            
-            title_string_append = ', '.join( series )
-            
-            if len( title_string ) > 0: title_string += ' - ' + title_string_append
-            else: title_string = title_string_append
-            
+    
+    def HasAnyOfTheseHashes( self, hashes ):
         
-        if len( titles ) > 0:
-            
-            title_string_append = ', '.join( titles )
-            
-            if len( title_string ) > 0: title_string += ' - ' + title_string_append
-            else: title_string = title_string_append
-            
-        
-        if len( volumes ) > 0:
-            
-            if len( volumes ) == 1:
-                
-                ( volume, ) = volumes
-                
-                title_string_append = 'volume ' + str( volume )
-                
-            else:
-                
-                volumes_sorted = HydrusTags.SortNumericTags( volumes )
-                
-                title_string_append = 'volumes ' + str( volumes_sorted[0] ) + '-' + str( volumes_sorted[-1] )
-                
-            
-            if len( title_string ) > 0: title_string += ' - ' + title_string_append
-            else: title_string = title_string_append
-            
-        
-        if len( chapters ) > 0:
-            
-            if len( chapters ) == 1:
-                
-                ( chapter, ) = chapters
-                
-                title_string_append = 'chapter ' + str( chapter )
-                
-            else:
-                
-                chapters_sorted = HydrusTags.SortNumericTags( chapters )
-                
-                title_string_append = 'chapters ' + str( chapters_sorted[0] ) + '-' + str( chapters_sorted[-1] )
-                
-            
-            if len( title_string ) > 0: title_string += ' - ' + title_string_append
-            else: title_string = title_string_append
-            
-        
-        if len( pages ) > 0:
-            
-            if len( pages ) == 1:
-                
-                ( page, ) = pages
-                
-                title_string_append = 'page ' + str( page )
-                
-            else:
-                
-                pages_sorted = HydrusTags.SortNumericTags( pages )
-                
-                title_string_append = 'pages ' + str( pages_sorted[0] ) + '-' + str( pages_sorted[-1] )
-                
-            
-            if len( title_string ) > 0: title_string += ' - ' + title_string_append
-            else: title_string = title_string_append
-            
-        
-        return title_string
+        return self._media_result.GetHash() in hashes
         
     
     def HasArchive( self ): return not self._media_result.GetInbox()
@@ -1882,7 +1729,12 @@ class MediaSingleton( Media ):
     def IsNoisy( self ): return self._media_result.GetMime() in HC.NOISY_MIMES
     
     def IsSizeDefinite( self ): return self._media_result.GetSize() is not None
-
+    
+    def RefreshFileInfo( self ):
+        
+        self._media_result.RefreshFileInfo()
+        
+    
 class MediaResult( object ):
     
     def __init__( self, file_info_manager, tags_manager, locations_manager, ratings_manager ):
@@ -1921,7 +1773,7 @@ class MediaResult( object ):
     
     def GetDuration( self ):
         
-        return self._file_info_manager.GetDuration()
+        return self._file_info_manager.duration
         
     
     def GetFileInfoManager( self ):
@@ -1931,7 +1783,7 @@ class MediaResult( object ):
     
     def GetHash( self ):
         
-        return self._file_info_manager.GetHash()
+        return self._file_info_manager.hash
         
     
     def GetInbox( self ):
@@ -1946,17 +1798,17 @@ class MediaResult( object ):
     
     def GetMime( self ):
         
-        return self._file_info_manager.GetMime()
+        return self._file_info_manager.mime
         
     
     def GetNumFrames( self ):
         
-        return self._file_info_manager.GetNumFrames()
+        return self._file_info_manager.num_frames
         
     
     def GetNumWords( self ):
         
-        return self._file_info_manager.GetNumWords()
+        return self._file_info_manager.num_words
         
     
     def GetRatingsManager( self ):
@@ -1966,12 +1818,12 @@ class MediaResult( object ):
     
     def GetResolution( self ):
         
-        return self._file_info_manager.GetResolution()
+        return ( self._file_info_manager.width, self._file_info_manager.height )
         
     
     def GetSize( self ):
         
-        return self._file_info_manager.GetSize()
+        return self._file_info_manager.size
         
     
     def GetTagsManager( self ):
@@ -2001,6 +1853,18 @@ class MediaResult( object ):
             
         
     
+    def RefreshFileInfo( self ):
+        
+        media_results = HG.client_controller.Read( 'media_results', ( self._file_info_manager.hash, ) )
+        
+        if len( media_results ) > 0:
+            
+            media_result = media_results[0]
+            
+            self._file_info_manager = media_result._file_info_manager
+            
+        
+    
     def ResetService( self, service_key ):
         
         self._tags_manager.ResetService( service_key )
@@ -2012,6 +1876,301 @@ class MediaResult( object ):
         return ( self._file_info_manager, self._tags_manager, self._locations_manager, self._ratings_manager )
         
     
+class MediaSort( HydrusSerialisable.SerialisableBase ):
+    
+    SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_MEDIA_SORT
+    SERIALISABLE_NAME = 'Media Sort'
+    SERIALISABLE_VERSION = 1
+    
+    def __init__( self, sort_type = None, sort_asc = None ):
+        
+        if sort_type is None:
+            
+            sort_type = ( 'system', CC.SORT_FILES_BY_FILESIZE )
+            
+        
+        if sort_asc is None:
+            
+            sort_asc = CC.SORT_ASC
+            
+        
+        self.sort_type = sort_type
+        self.sort_asc = sort_asc
+        
+    
+    def _GetSerialisableInfo( self ):
+        
+        ( sort_metatype, sort_data ) = self.sort_type
+        
+        if sort_metatype == 'system':
+            
+            serialisable_sort_data = sort_data
+            
+        elif sort_metatype == 'namespaces':
+            
+            serialisable_sort_data = sort_data
+            
+        elif sort_metatype == 'rating':
+            
+            service_key = sort_data
+            
+            serialisable_sort_data = service_key.encode( 'hex' )
+            
+        
+        return ( sort_metatype, serialisable_sort_data, self.sort_asc )
+        
+    
+    def _InitialiseFromSerialisableInfo( self, serialisable_info ):
+        
+        ( sort_metatype, serialisable_sort_data, self.sort_asc ) = serialisable_info
+        
+        if sort_metatype == 'system':
+            
+            sort_data = serialisable_sort_data
+            
+        elif sort_metatype == 'namespaces':
+            
+            sort_data = tuple( serialisable_sort_data )
+            
+        elif sort_metatype == 'rating':
+            
+            sort_data = serialisable_sort_data.decode( 'hex' )
+            
+        
+        self.sort_type = ( sort_metatype, sort_data )
+        
+    
+    def CanAsc( self ):
+        
+        ( sort_metatype, sort_data ) = self.sort_type
+        
+        if sort_metatype == 'system':
+            
+            if sort_data in ( CC.SORT_FILES_BY_MIME, CC.SORT_FILES_BY_RANDOM ):
+                
+                return False
+                
+            
+        elif sort_metatype == 'namespaces':
+            
+            return False
+            
+        
+        return True
+        
+    
+    def GetSortKeyAndReverse( self, file_service_key ):
+        
+        reverse = False
+        
+        ( sort_metadata, sort_data ) = self.sort_type
+        
+        def deal_with_none( x ):
+            
+            if x is None: return -1
+            else: return x
+            
+        
+        if sort_metadata == 'system':
+            
+            if sort_data == CC.SORT_FILES_BY_RANDOM:
+                
+                def sort_key( x ):
+                    
+                    return random.random()
+                    
+                
+            elif sort_data == CC.SORT_FILES_BY_FILESIZE:
+                
+                def sort_key( x ):
+                    
+                    return deal_with_none( x.GetSize() )
+                    
+                
+            elif sort_data == CC.SORT_FILES_BY_DURATION:
+                
+                def sort_key( x ):
+                    
+                    return deal_with_none( x.GetDuration() )
+                    
+                
+            elif sort_data == CC.SORT_FILES_BY_IMPORT_TIME:
+                
+                file_service = HG.client_controller.services_manager.GetService( file_service_key )
+                
+                file_service_type = file_service.GetServiceType()
+                
+                if file_service_type == HC.LOCAL_FILE_DOMAIN:
+                    
+                    file_service_key = CC.COMBINED_LOCAL_FILE_SERVICE_KEY
+                    
+                
+                def sort_key( x ):
+                    
+                    return deal_with_none( x.GetTimestamp( file_service_key ) )
+                    
+                
+            elif sort_data == CC.SORT_FILES_BY_HEIGHT:
+                
+                def sort_key( x ):
+                    
+                    return deal_with_none( x.GetResolution()[1] )
+                    
+                
+            elif sort_data == CC.SORT_FILES_BY_WIDTH:
+                
+                def sort_key( x ):
+                    
+                    return deal_with_none( x.GetResolution()[0] )
+                    
+                
+            elif sort_data == CC.SORT_FILES_BY_RATIO:
+                
+                def sort_key( x ):
+                    
+                    ( width, height ) = x.GetResolution()
+                    
+                    if width is None or height is None or width == 0 or height == 0:
+                        
+                        return -1
+                        
+                    else:
+                        
+                        return float( width ) / float( height )
+                        
+                    
+                
+            elif sort_data == CC.SORT_FILES_BY_NUM_PIXELS:
+                
+                def sort_key( x ):
+                    
+                    ( width, height ) = x.GetResolution()
+                    
+                    if width is None or height is None:
+                        
+                        return -1
+                        
+                    else:
+                        
+                        return width * height
+                        
+                    
+                
+            elif sort_data == CC.SORT_FILES_BY_NUM_TAGS:
+                
+                def sort_key( x ):
+                    
+                    tags_manager = x.GetTagsManager()
+                    
+                    return( len( tags_manager.GetCurrent() ) + len( tags_manager.GetPending() ) )
+                    
+                
+            elif sort_data == CC.SORT_FILES_BY_MIME:
+                
+                def sort_key( x ):
+                    
+                    return x.GetMime()
+                    
+                
+            
+        elif sort_metadata == 'namespaces':
+            
+            namespaces = sort_data
+            
+            def sort_key( x ):
+                
+                x_tags_manager = x.GetTagsManager()
+                
+                return [ x_tags_manager.GetComparableNamespaceSlice( ( namespace, ) ) for namespace in namespaces ]
+                
+            
+        elif sort_metadata == 'rating':
+            
+            service_key = sort_data
+            
+            def sort_key( x ):
+                
+                x_ratings_manager = x.GetRatingsManager()
+                
+                rating = deal_with_none( x_ratings_manager.GetRating( service_key ) )
+                
+                return rating
+                
+            
+        
+        return ( sort_key, self.sort_asc )
+        
+    
+    def GetSortTypeString( self ):
+        
+        ( sort_metatype, sort_data ) = self.sort_type
+        
+        sort_string = 'sort by '
+        
+        if sort_metatype == 'system':
+            
+            sort_string_lookup = {}
+            
+            sort_string_lookup[ CC.SORT_FILES_BY_FILESIZE ] = 'filesize'
+            sort_string_lookup[ CC.SORT_FILES_BY_DURATION ] = 'duration'
+            sort_string_lookup[ CC.SORT_FILES_BY_IMPORT_TIME ] = 'time imported'
+            sort_string_lookup[ CC.SORT_FILES_BY_MIME ] = 'mime'
+            sort_string_lookup[ CC.SORT_FILES_BY_RANDOM ] = 'random'
+            sort_string_lookup[ CC.SORT_FILES_BY_WIDTH ] = 'width'
+            sort_string_lookup[ CC.SORT_FILES_BY_HEIGHT ] = 'height'
+            sort_string_lookup[ CC.SORT_FILES_BY_RATIO ] = 'resolution ratio'
+            sort_string_lookup[ CC.SORT_FILES_BY_NUM_PIXELS ] = 'number of pixels'
+            sort_string_lookup[ CC.SORT_FILES_BY_NUM_TAGS ] = 'number of tags'
+            
+            sort_string += sort_string_lookup[ sort_data ]
+            
+        elif sort_metatype == 'namespaces':
+            
+            namespaces = sort_data
+            
+            sort_string += '-'.join( namespaces )
+            
+        elif sort_metatype == 'rating':
+            
+            service_key = sort_data
+            
+            service = HG.client_controller.services_manager.GetService( service_key )
+            
+            sort_string += service.GetName()
+            
+        
+        return sort_string
+        
+    
+    def GetSortAscStrings( self ):
+        
+        ( sort_metatype, sort_data ) = self.sort_type
+        
+        if sort_metatype == 'system':
+            
+            sort_string_lookup = {}
+            
+            sort_string_lookup[ CC.SORT_FILES_BY_FILESIZE ] = ( 'smallest first', 'largest first' )
+            sort_string_lookup[ CC.SORT_FILES_BY_DURATION ] = ( 'shortest first', 'longest first' )
+            sort_string_lookup[ CC.SORT_FILES_BY_IMPORT_TIME ] = ( 'oldest first', 'newest first' )
+            sort_string_lookup[ CC.SORT_FILES_BY_MIME ] = ( 'mime', 'mime' )
+            sort_string_lookup[ CC.SORT_FILES_BY_RANDOM ] = ( 'random', 'random' )
+            sort_string_lookup[ CC.SORT_FILES_BY_WIDTH ] = ( 'slimmest first', 'widest first' )
+            sort_string_lookup[ CC.SORT_FILES_BY_HEIGHT ] = ( 'shortest first', 'tallest first' )
+            sort_string_lookup[ CC.SORT_FILES_BY_RATIO ] = ( 'tallest first', 'widest first' )
+            sort_string_lookup[ CC.SORT_FILES_BY_NUM_PIXELS ] = ( 'ascending', 'descending' )
+            sort_string_lookup[ CC.SORT_FILES_BY_NUM_TAGS ] = ( 'ascending', 'descending' )
+            
+            return sort_string_lookup[ sort_data ]
+            
+        else:
+            
+            return ( 'ascending', 'descending' )
+            
+        
+    
+HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_MEDIA_SORT ] = MediaSort
+
 class SortedList( object ):
     
     def __init__( self, initial_items = None ):
@@ -2041,12 +2200,12 @@ class SortedList( object ):
     
     def __iter__( self ):
         
-        for item in self._sorted_list: yield item
+        return iter( self._sorted_list )
         
     
     def __len__( self ):
         
-        return self._sorted_list.__len__()
+        return len( self._sorted_list )
         
     
     def _DirtyIndices( self ):
@@ -2215,6 +2374,30 @@ class TagsManagerSimple( object ):
         return tuple( slice )
         
     
+    def GetCurrent( self, service_key = CC.COMBINED_TAG_SERVICE_KEY ):
+        
+        if service_key == CC.COMBINED_TAG_SERVICE_KEY:
+            
+            self._RecalcCombinedIfNeeded()
+            
+        
+        statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
+        
+        return statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ]
+        
+    
+    def GetDeleted( self, service_key = CC.COMBINED_TAG_SERVICE_KEY ):
+        
+        if service_key == CC.COMBINED_TAG_SERVICE_KEY:
+            
+            self._RecalcCombinedIfNeeded()
+            
+        
+        statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
+        
+        return statuses_to_tags[ HC.CONTENT_STATUS_DELETED ]
+        
+    
     def GetNamespaceSlice( self, namespaces ):
         
         self._RecalcCombinedIfNeeded()
@@ -2231,6 +2414,30 @@ class TagsManagerSimple( object ):
         slice = frozenset( slice )
         
         return slice
+        
+    
+    def GetPending( self, service_key = CC.COMBINED_TAG_SERVICE_KEY ):
+        
+        if service_key == CC.COMBINED_TAG_SERVICE_KEY:
+            
+            self._RecalcCombinedIfNeeded()
+            
+        
+        statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
+        
+        return statuses_to_tags[ HC.CONTENT_STATUS_PENDING ]
+        
+    
+    def GetPetitioned( self, service_key = CC.COMBINED_TAG_SERVICE_KEY ):
+        
+        if service_key == CC.COMBINED_TAG_SERVICE_KEY:
+            
+            self._RecalcCombinedIfNeeded()
+            
+        
+        statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
+        
+        return statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ]
         
     
 class TagsManager( TagsManagerSimple ):
@@ -2309,30 +2516,6 @@ class TagsManager( TagsManagerSimple ):
         return TagsManager( dupe_service_keys_to_statuses_to_tags )
         
     
-    def GetCurrent( self, service_key = CC.COMBINED_TAG_SERVICE_KEY ):
-        
-        if service_key == CC.COMBINED_TAG_SERVICE_KEY:
-            
-            self._RecalcCombinedIfNeeded()
-            
-        
-        statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
-        
-        return set( statuses_to_tags[ HC.CONTENT_STATUS_CURRENT ] )
-        
-    
-    def GetDeleted( self, service_key = CC.COMBINED_TAG_SERVICE_KEY ):
-        
-        if service_key == CC.COMBINED_TAG_SERVICE_KEY:
-            
-            self._RecalcCombinedIfNeeded()
-            
-        
-        statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
-        
-        return set( statuses_to_tags[ HC.CONTENT_STATUS_DELETED ] )
-        
-    
     def GetNumTags( self, service_key, include_current_tags = True, include_pending_tags = False ):
         
         if service_key == CC.COMBINED_TAG_SERVICE_KEY:
@@ -2348,30 +2531,6 @@ class TagsManager( TagsManagerSimple ):
         if include_pending_tags: num_tags += len( statuses_to_tags[ HC.CONTENT_STATUS_PENDING ] )
         
         return num_tags
-        
-    
-    def GetPending( self, service_key = CC.COMBINED_TAG_SERVICE_KEY ):
-        
-        if service_key == CC.COMBINED_TAG_SERVICE_KEY:
-            
-            self._RecalcCombinedIfNeeded()
-            
-        
-        statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
-        
-        return set( statuses_to_tags[ HC.CONTENT_STATUS_PENDING ] )
-        
-    
-    def GetPetitioned( self, service_key = CC.COMBINED_TAG_SERVICE_KEY ):
-        
-        if service_key == CC.COMBINED_TAG_SERVICE_KEY:
-            
-            self._RecalcCombinedIfNeeded()
-            
-        
-        statuses_to_tags = self._service_keys_to_statuses_to_tags[ service_key ]
-        
-        return set( statuses_to_tags[ HC.CONTENT_STATUS_PETITIONED ] )
         
     
     def GetServiceKeysToStatusesToTags( self ):

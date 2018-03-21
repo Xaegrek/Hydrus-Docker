@@ -3,8 +3,10 @@ import ClientConstants as CC
 import ClientData
 import ClientGUICommon
 import ClientGUIDialogs
+import ClientGUIListCtrl
 import ClientGUIMenus
 import ClientGUIScrolledPanels
+import ClientGUITime
 import ClientGUITopLevelWindows
 import HydrusConstants as HC
 import HydrusData
@@ -19,11 +21,9 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
         
         ClientGUICommon.StaticBox.__init__( self, parent, 'bandwidth rules' )
         
-        columns = [ ( 'type', -1 ), ( 'time delta', 120 ), ( 'max allowed', 80 ) ]
+        listctrl_panel = ClientGUIListCtrl.BetterListCtrlPanel( self )
         
-        listctrl_panel = ClientGUICommon.SaneListCtrlPanel( self )
-        
-        self._listctrl = ClientGUICommon.SaneListCtrl( listctrl_panel, 100, columns, delete_key_callback = self._Delete, activation_callback = self._Edit )
+        self._listctrl = ClientGUIListCtrl.BetterListCtrl( listctrl_panel, 'bandwidth_rules', 8, 10, [ ( 'max allowed', 14 ), ( 'every', 16 ) ], self._ConvertRuleToListctrlTuples, delete_key_callback = self._Delete, activation_callback = self._Edit )
         
         listctrl_panel.SetListCtrl( self._listctrl )
         
@@ -33,18 +33,13 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
         
         #
         
-        for rule in bandwidth_rules.GetRules():
-            
-            sort_tuple = rule
-            
-            display_tuple = self._GetDisplayTuple( sort_tuple )
-            
-            self._listctrl.Append( display_tuple, sort_tuple )
-            
+        self._listctrl.AddDatas( bandwidth_rules.GetRules() )
+        
+        self._listctrl.Sort( 0 )
         
         #
         
-        self.AddF( listctrl_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self.Add( listctrl_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
         
     
     def _Add( self ):
@@ -61,20 +56,16 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
                 
                 new_rule = panel.GetValue()
                 
-                sort_tuple = new_rule
+                self._listctrl.AddDatas( ( new_rule, ) )
                 
-                display_tuple = self._GetDisplayTuple( sort_tuple )
-                
-                self._listctrl.Append( display_tuple, sort_tuple )
+                self._listctrl.Sort()
                 
             
         
     
-    def _GetDisplayTuple( self, rule ):
+    def _ConvertRuleToListctrlTuples( self, rule ):
         
         ( bandwidth_type, time_delta, max_allowed ) = rule
-        
-        pretty_bandwidth_type = HC.bandwidth_type_string_lookup[ bandwidth_type ]
         
         pretty_time_delta = HydrusData.ConvertTimeDeltaToPrettyString( time_delta )
         
@@ -84,10 +75,13 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
             
         elif bandwidth_type == HC.BANDWIDTH_TYPE_REQUESTS:
             
-            pretty_max_allowed = HydrusData.ConvertIntToPrettyString( max_allowed )
+            pretty_max_allowed = HydrusData.ConvertIntToPrettyString( max_allowed ) + ' requests'
             
         
-        return ( pretty_bandwidth_type, pretty_time_delta, pretty_max_allowed )
+        sort_tuple = ( max_allowed, time_delta )
+        display_tuple = ( pretty_max_allowed, pretty_time_delta )
+        
+        return ( display_tuple, sort_tuple )
         
     
     def _Delete( self ):
@@ -96,18 +90,16 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
             
             if dlg.ShowModal() == wx.ID_YES:
                 
-                self._listctrl.RemoveAllSelected()
+                self._listctrl.DeleteSelected()
                 
             
         
     
     def _Edit( self ):
         
-        all_selected = self._listctrl.GetAllSelected()
+        selected_rules = self._listctrl.GetData( only_selected = True )
         
-        for index in all_selected:
-            
-            rule = self._listctrl.GetClientData( index )
+        for rule in selected_rules:
             
             with ClientGUITopLevelWindows.DialogEdit( self, 'edit rule' ) as dlg:
                 
@@ -119,11 +111,9 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
                     
                     edited_rule = panel.GetValue()
                     
-                    sort_tuple = edited_rule
+                    self._listctrl.DeleteDatas( ( rule, ) )
                     
-                    display_tuple = self._GetDisplayTuple( sort_tuple )
-                    
-                    self._listctrl.UpdateRow( index, display_tuple, sort_tuple )
+                    self._listctrl.AddDatas( ( edited_rule, ) )
                     
                 else:
                     
@@ -132,12 +122,16 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
                 
             
         
+        self._listctrl.Sort()
+        
     
     def GetValue( self ):
         
         bandwidth_rules = HydrusNetworking.BandwidthRules()
         
-        for ( bandwidth_type, time_delta, max_allowed ) in self._listctrl.GetClientData():
+        for rule in self._listctrl.GetData():
+            
+            ( bandwidth_type, time_delta, max_allowed ) = rule
             
             bandwidth_rules.AddRule( bandwidth_type, time_delta, max_allowed )
             
@@ -158,11 +152,10 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
             
             self._bandwidth_type.Bind( wx.EVT_CHOICE, self.EventBandwidth )
             
-            self._time_delta = ClientGUICommon.TimeDeltaButton( self, min = 1, days = True, hours = True, minutes = True, seconds = True, monthly_allowed = True )
+            self._max_allowed_bytes = BytesControl( self )
+            self._max_allowed_requests = wx.SpinCtrl( self, min = 1, max = 1048576 )
             
-            self._max_allowed = wx.SpinCtrl( self, min = 1, max = 1024 * 1024 * 1024 )
-            
-            self._max_allowed_st = ClientGUICommon.BetterStaticText( self )
+            self._time_delta = ClientGUITime.TimeDeltaButton( self, min = 1, days = True, hours = True, minutes = True, seconds = True, monthly_allowed = True )
             
             #
             
@@ -174,42 +167,49 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
             
             if bandwidth_type == HC.BANDWIDTH_TYPE_DATA:
                 
-                max_allowed /= 1048576
+                self._max_allowed_bytes.SetValue( max_allowed )
+                
+            else:
+                
+                self._max_allowed_requests.SetValue( max_allowed )
                 
             
-            self._max_allowed.SetValue( max_allowed )
-            
-            self._UpdateMaxAllowedSt()
+            self._UpdateEnabled()
             
             #
             
             hbox = wx.BoxSizer( wx.HORIZONTAL )
             
-            hbox.AddF( self._bandwidth_type, CC.FLAGS_VCENTER )
-            hbox.AddF( self._time_delta, CC.FLAGS_VCENTER )
-            hbox.AddF( self._max_allowed, CC.FLAGS_VCENTER )
-            hbox.AddF( self._max_allowed_st, CC.FLAGS_VCENTER )
+            hbox.Add( self._max_allowed_bytes, CC.FLAGS_VCENTER )
+            hbox.Add( self._max_allowed_requests, CC.FLAGS_VCENTER )
+            hbox.Add( self._bandwidth_type, CC.FLAGS_VCENTER )
+            hbox.Add( ClientGUICommon.BetterStaticText( self, ' every ' ), CC.FLAGS_VCENTER )
+            hbox.Add( self._time_delta, CC.FLAGS_VCENTER )
             
             self.SetSizer( hbox )
             
         
-        def _UpdateMaxAllowedSt( self ):
+        def _UpdateEnabled( self ):
             
             bandwidth_type = self._bandwidth_type.GetChoice()
             
             if bandwidth_type == HC.BANDWIDTH_TYPE_DATA:
                 
-                self._max_allowed_st.SetLabelText( 'MB' )
+                self._max_allowed_bytes.Show()
+                self._max_allowed_requests.Hide()
                 
             elif bandwidth_type == HC.BANDWIDTH_TYPE_REQUESTS:
                 
-                self._max_allowed_st.SetLabelText( 'requests' )
+                self._max_allowed_bytes.Hide()
+                self._max_allowed_requests.Show()
                 
+            
+            self.Layout()
             
         
         def EventBandwidth( self, event ):
             
-            self._UpdateMaxAllowedSt()
+            self._UpdateEnabled()
             
         
         def GetValue( self ):
@@ -218,15 +218,151 @@ class BandwidthRulesCtrl( ClientGUICommon.StaticBox ):
             
             time_delta = self._time_delta.GetValue()
             
-            max_allowed = self._max_allowed.GetValue()
-            
             if bandwidth_type == HC.BANDWIDTH_TYPE_DATA:
                 
-                max_allowed *= 1048576
+                max_allowed = self._max_allowed_bytes.GetValue()
+                
+            elif bandwidth_type == HC.BANDWIDTH_TYPE_REQUESTS:
+                
+                max_allowed = self._max_allowed_requests.GetValue()
                 
             
             return ( bandwidth_type, time_delta, max_allowed )
             
+        
+    
+class BytesControl( wx.Panel ):
+    
+    def __init__( self, parent, initial_value = 65536 ):
+        
+        wx.Panel.__init__( self, parent )
+        
+        self._spin = wx.SpinCtrl( self, min = 0, max = 1048576, size = ( 60, -1 ) )
+        
+        self._unit = ClientGUICommon.BetterChoice( self )
+        
+        self._unit.Append( 'B', 1 )
+        self._unit.Append( 'KB', 1024 )
+        self._unit.Append( 'MB', 1024 * 1024 )
+        self._unit.Append( 'GB', 1024 * 1024 * 1024 )
+        
+        #
+        
+        self.SetValue( initial_value )
+        
+        #
+        
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        hbox.Add( self._spin, CC.FLAGS_VCENTER )
+        hbox.Add( self._unit, CC.FLAGS_VCENTER )
+        
+        self.SetSizer( hbox )
+        
+    
+    def GetSeparatedValue( self ):
+        
+        return ( self._spin.GetValue(), self._unit.GetChoice() )
+        
+    
+    def GetValue( self ):
+        
+        return self._spin.GetValue() * self._unit.GetChoice()
+        
+    
+    def SetSeparatedValue( self, value, unit ):
+        
+        return ( self._spin.SetValue( value ), self._unit.SelectClientData( unit ) )
+        
+    
+    def SetValue( self, value ):
+        
+        max_unit = 1024 * 1024 * 1024
+        
+        unit = 1
+        
+        while value % 1024 == 0 and unit < max_unit:
+            
+            value /= 1024
+            
+            unit *= 1024
+            
+        
+        self._spin.SetValue( value )
+        self._unit.SelectClientData( unit )
+        
+    
+class NoneableBytesControl( wx.Panel ):
+    
+    def __init__( self, parent, initial_value = 65536, none_label = 'no limit' ):
+        
+        wx.Panel.__init__( self, parent )
+        
+        self._bytes = BytesControl( self )
+        
+        self._none_checkbox = wx.CheckBox( self, label = none_label )
+        
+        #
+        
+        self.SetValue( initial_value )
+        
+        #
+        
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        hbox.Add( self._bytes, CC.FLAGS_SIZER_VCENTER )
+        hbox.Add( self._none_checkbox, CC.FLAGS_VCENTER )
+        
+        self.SetSizer( hbox )
+        
+        #
+        
+        self._none_checkbox.Bind( wx.EVT_CHECKBOX, self.EventNoneChecked )
+        
+    
+    def _UpdateEnabled( self ):
+        
+        if self._none_checkbox.GetValue():
+            
+            self._bytes.Disable()
+            
+        else:
+            
+            self._bytes.Enable()
+            
+        
+    
+    def EventNoneChecked( self, event ):
+        
+        self._UpdateEnabled()
+        
+    
+    def GetValue( self ):
+        
+        if self._none_checkbox.GetValue():
+            
+            return None
+            
+        else:
+            
+            return self._bytes.GetValue()
+            
+        
+    
+    def SetValue( self, value ):
+        
+        if value is None:
+            
+            self._none_checkbox.SetValue( True )
+            
+        else:
+            
+            self._none_checkbox.SetValue( False )
+            
+            self._bytes.SetValue( value )
+            
+        
+        self._UpdateEnabled()
         
     
 class EditStringToStringDictControl( wx.Panel ):
@@ -235,33 +371,42 @@ class EditStringToStringDictControl( wx.Panel ):
         
         wx.Panel.__init__( self, parent )
         
-        listctrl_panel = ClientGUICommon.SaneListCtrlPanel( self )
+        listctrl_panel = ClientGUIListCtrl.BetterListCtrlPanel( self )
         
-        self._listctrl = ClientGUICommon.SaneListCtrl( listctrl_panel, 120, [ ( 'key', 200 ), ( 'value', -1 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
+        self._listctrl = ClientGUIListCtrl.BetterListCtrl( listctrl_panel, 'key_to_value', 10, 36, [ ( 'key', 20 ), ( 'value', -1 ) ], self._ConvertDataToListCtrlTuples, delete_key_callback = self._Delete, activation_callback = self._Edit )
         
         listctrl_panel.SetListCtrl( self._listctrl )
         
-        listctrl_panel.AddButton( 'add', self.Add )
-        listctrl_panel.AddButton( 'edit', self.Edit, enabled_only_on_selection = True )
-        listctrl_panel.AddButton( 'delete', self.Delete, enabled_only_on_selection = True )
+        listctrl_panel.AddButton( 'add', self._Add )
+        listctrl_panel.AddButton( 'edit', self._Edit, enabled_only_on_selection = True )
+        listctrl_panel.AddButton( 'delete', self._Delete, enabled_only_on_selection = True )
         
         #
         
-        for display_tuple in initial_dict.items():
-            
-            self._listctrl.Append( display_tuple, display_tuple )
-            
+        self._listctrl.AddDatas( initial_dict.items() )
+        
+        self._listctrl.Sort()
         
         #
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( listctrl_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( listctrl_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
     
-    def Add( self ):
+    def _ConvertDataToListCtrlTuples( self, data ):
+        
+        ( key, value ) = data
+        
+        display_tuple = ( key, value )
+        sort_tuple = ( key, value )
+        
+        return ( display_tuple, sort_tuple )
+        
+    
+    def _Add( self ):
         
         with ClientGUIDialogs.DialogTextEntry( self, 'enter the key', allow_blank = False ) as dlg:
             
@@ -275,33 +420,31 @@ class EditStringToStringDictControl( wx.Panel ):
                         
                         value = dlg.GetValue()
                         
-                        display_tuple = ( key, value )
+                        data = ( key, value )
                         
-                        self._listctrl.Append( display_tuple, display_tuple )
+                        self._listctrl.AddDatas( ( data, ) )
                         
                     
                 
             
         
     
-    def Delete( self ):
+    def _Delete( self ):
         
         with ClientGUIDialogs.DialogYesNo( self, 'Remove all selected?' ) as dlg:
             
             if dlg.ShowModal() == wx.ID_YES:
                 
-                self._listctrl.RemoveAllSelected()
+                self._listctrl.DeleteSelected()
                 
             
         
     
-    def Edit( self ):
+    def _Edit( self ):
         
-        for i in self._listctrl.GetAllSelected():
+        for data in self._listctrl.GetData( only_selected = True ):
             
-            ( key, value ) = self._listctrl.GetClientData( i )
-            
-            import ClientGUIDialogs
+            ( key, value ) = data
             
             with ClientGUIDialogs.DialogTextEntry( self, 'edit the key', default = key, allow_blank = False ) as dlg:
                 
@@ -311,7 +454,7 @@ class EditStringToStringDictControl( wx.Panel ):
                     
                 else:
                     
-                    return
+                    break
                     
                 
             
@@ -323,19 +466,23 @@ class EditStringToStringDictControl( wx.Panel ):
                     
                 else:
                     
-                    return
+                    break
                     
                 
             
-            display_tuple = ( key, value )
+            self._listctrl.DeleteDatas( ( data, ) )
             
-            self._listctrl.UpdateRow( i, display_tuple, display_tuple )
+            new_data = ( key, value )
             
+            self._listctrl.AddDatas( ( new_data, ) )
+            
+        
+        self._listctrl.Sort()
         
     
     def GetValue( self ):
         
-        value_dict = { key : value for ( key, value ) in self._listctrl.GetClientData() }
+        value_dict = dict( self._listctrl.GetData() )
         
         return value_dict
         
@@ -349,6 +496,8 @@ class NetworkJobControl( wx.Panel ):
         self._network_job = None
         self._download_started = False
         
+        self._auto_override_bandwidth_rules = False
+        
         self._left_text = ClientGUICommon.BetterStaticText( self )
         self._right_text = ClientGUICommon.BetterStaticText( self, style = wx.ALIGN_RIGHT )
         
@@ -359,6 +508,25 @@ class NetworkJobControl( wx.Panel ):
         
         self._gauge = ClientGUICommon.Gauge( self )
         
+        menu_items = []
+        
+        invert_call = self.FlipOverrideBandwidthForCurrentJob
+        value_call = self.CurrentJobOverridesBandwidth
+        
+        check_manager = ClientGUICommon.CheckboxManagerCalls( invert_call, value_call )
+        
+        menu_items.append( ( 'check', 'override bandwidth rules for this job', 'Tell the current job to ignore existing bandwidth rules and go ahead anyway.', check_manager ) )
+        
+        menu_items.append( ( 'separator', 0, 0, 0 ) )
+        
+        invert_call = self.FlipAutoOverrideBandwidth
+        value_call = self.AutoOverrideBandwidth
+        
+        check_manager = ClientGUICommon.CheckboxManagerCalls( invert_call, value_call )
+        
+        menu_items.append( ( 'check', 'auto-override bandwidth rules for all jobs here after five seconds', 'Ignore existing bandwidth rules for all jobs under this control, instead waiting a flat five seconds.', check_manager ) )
+        
+        self._cog_button = ClientGUICommon.MenuBitmapButton( self, CC.GlobalBMPs.cog, menu_items )
         self._cancel_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.stop, self.Cancel )
         
         #
@@ -369,26 +537,36 @@ class NetworkJobControl( wx.Panel ):
         
         st_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        st_hbox.AddF( self._left_text, CC.FLAGS_EXPAND_BOTH_WAYS )
-        st_hbox.AddF( self._right_text, CC.FLAGS_VCENTER )
+        st_hbox.Add( self._left_text, CC.FLAGS_EXPAND_BOTH_WAYS )
+        st_hbox.Add( self._right_text, CC.FLAGS_VCENTER )
         
         left_vbox = wx.BoxSizer( wx.VERTICAL )
         
-        left_vbox.AddF( st_hbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        left_vbox.AddF( self._gauge, CC.FLAGS_EXPAND_PERPENDICULAR )
+        left_vbox.Add( st_hbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        left_vbox.Add( self._gauge, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        hbox.AddF( left_vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        hbox.AddF( self._cancel_button, CC.FLAGS_VCENTER )
+        hbox.Add( left_vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        hbox.Add( self._cog_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._cancel_button, CC.FLAGS_VCENTER )
         
         self.SetSizer( hbox )
         
-        #
+    
+    def _OverrideBandwidthIfAppropriate( self ):
         
-        self.Bind( wx.EVT_TIMER, self.TIMEREventUpdate )
-        
-        self._update_timer = wx.Timer( self )
+        if self._network_job is None or self._network_job.NoEngineYet():
+            
+            return
+            
+        else:
+            
+            if self._auto_override_bandwidth_rules and HydrusData.TimeHasPassed( self._network_job.GetCreationTime() + 5 ):
+                
+                self._network_job.OverrideBandwidth()
+                
+            
         
     
     def _Update( self ):
@@ -470,6 +648,11 @@ class NetworkJobControl( wx.Panel ):
             
         
     
+    def AutoOverrideBandwidth( self ):
+        
+        return self._auto_override_bandwidth_rules
+        
+    
     def Cancel( self ):
         
         if self._network_job is not None:
@@ -480,31 +663,97 @@ class NetworkJobControl( wx.Panel ):
     
     def ClearNetworkJob( self ):
         
-        if self:
+        if self and self._network_job is not None:
             
             self._network_job = None
             
             self._Update()
             
-            self._update_timer.Stop()
+            HG.client_controller.gui.UnregisterUIUpdateWindow( self )
+            
+        
+    
+    def CurrentJobOverridesBandwidth( self ):
+        
+        if self._network_job is None:
+            
+            return None
+            
+        else:
+            
+            return not self._network_job.ObeysBandwidth()
+            
+        
+    
+    def FlipAutoOverrideBandwidth( self ):
+        
+        self._auto_override_bandwidth_rules = not self._auto_override_bandwidth_rules
+        
+    
+    def FlipOverrideBandwidthForCurrentJob( self ):
+        
+        if self._network_job is not None:
+            
+            self._network_job.OverrideBandwidth()
             
         
     
     def SetNetworkJob( self, network_job ):
         
-        if self:
+        if self and self._network_job != network_job:
             
             self._network_job = network_job
             self._download_started = False
             
-            self._update_timer.Start( 250, wx.TIMER_CONTINUOUS )
+            HG.client_controller.gui.RegisterUIUpdateWindow( self )
             
         
     
-    def TIMEREventUpdate( self, event ):
+    def TIMERUIUpdate( self ):
         
-        if HG.client_controller.gui.IAmInCurrentPage( self ):
+        self._OverrideBandwidthIfAppropriate()
+        
+        if HG.client_controller.gui.IShouldRegularlyUpdate( self ):
             
             self._Update()
             
         
+    
+class StringToStringDictButton( ClientGUICommon.BetterButton ):
+    
+    def __init__( self, parent, label ):
+        
+        ClientGUICommon.BetterButton.__init__( self, parent, label, self._Edit )
+        
+        self._value = {}
+        
+    
+    def _Edit( self ):
+        
+        with ClientGUITopLevelWindows.DialogEdit( self, 'edit string dictionary' ) as dlg:
+            
+            panel = ClientGUIScrolledPanels.EditSingleCtrlPanel( dlg )
+            
+            control = EditStringToStringDictControl( panel, self._value )
+            
+            panel.SetControl( control )
+            
+            dlg.SetPanel( panel )
+            
+            if dlg.ShowModal() == wx.ID_OK:
+                
+                self._value = control.GetValue()
+                
+            
+        
+    
+    def GetValue( self ):
+        
+        return self._value
+        
+    
+    def SetValue( self, value ):
+        
+        self._value = value
+        
+    

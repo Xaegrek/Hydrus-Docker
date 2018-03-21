@@ -1,6 +1,7 @@
 import ClientConstants as CC
 import ClientGUICommon
 import ClientGUIDialogs
+import ClientGUIListCtrl
 import ClientGUIScrolledPanelsReview
 import ClientGUITopLevelWindows
 import ClientThreading
@@ -80,7 +81,7 @@ class ReviewServicePanel( wx.Panel ):
         
         for panel in subpanels:
             
-            vbox.AddF( panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
         
         self.SetSizer( vbox )
@@ -108,129 +109,6 @@ class ReviewServicePanel( wx.Panel ):
                 
                 self._num_shares.SetLabelText( HydrusData.ConvertIntToPrettyString( num_shares ) + ' shares currently active' )
                 
-            
-        
-        if service_type == HC.LOCAL_BOORU:
-            
-            booru_shares = self._controller.Read( 'local_booru_shares' )
-            
-            self._booru_shares.DeleteAllItems()
-            
-            for ( share_key, info ) in booru_shares.items():
-                
-                name = info[ 'name' ]
-                text = info[ 'text' ]
-                timeout = info[ 'timeout' ]
-                hashes = info[ 'hashes' ]
-                
-                self._booru_shares.Append( ( name, text, HydrusData.ConvertTimestampToPrettyExpires( timeout ), len( hashes ) ), ( name, text, timeout, ( len( hashes ), hashes, share_key ) ) )
-                
-            
-        
-    
-    def DeleteBoorus( self ):
-        
-        with ClientGUIDialogs.DialogYesNo( self, 'Remove all selected?' ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_YES:
-                
-                for ( name, text, timeout, ( num_hashes, hashes, share_key ) ) in self._booru_shares.GetSelectedClientData():
-                    
-                    self._controller.Write( 'delete_local_booru_share', share_key )
-                    
-                
-                self._booru_shares.RemoveAllSelected()
-                
-            
-        
-    
-    def EditBoorus( self ):
-    
-        writes = []
-        
-        for ( name, text, timeout, ( num_hashes, hashes, share_key ) ) in self._booru_shares.GetSelectedClientData():
-            
-            with ClientGUIDialogs.DialogInputLocalBooruShare( self, share_key, name, text, timeout, hashes, new_share = False) as dlg:
-                
-                if dlg.ShowModal() == wx.ID_OK:
-                    
-                    ( share_key, name, text, timeout, hashes ) = dlg.GetInfo()
-                    
-                    info = {}
-                    
-                    info[ 'name' ] = name
-                    info[ 'text' ] = text
-                    info[ 'timeout' ] = timeout
-                    info[ 'hashes' ] = hashes
-                    
-                    writes.append( ( share_key, info ) )
-                    
-                
-            
-        
-        for ( share_key, info ) in writes:
-            
-            self._controller.Write( 'local_booru_share', share_key, info )
-            
-        
-    
-    def EventBooruDelete( self, event ):
-        
-        self.DeleteBoorus()
-        
-    
-    def EventBooruEdit( self, event ):
-        
-        self.EditBoorus()
-        
-    
-    def EventBooruOpenSearch( self, event ):
-        
-        for ( name, text, timeout, ( num_hashes, hashes, share_key ) ) in self._booru_shares.GetSelectedClientData():
-            
-            self._controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_hashes = hashes )
-            
-        
-    
-    def EventCopyExternalShareURL( self, event ):
-        
-        shares = self._booru_shares.GetSelectedClientData()
-        
-        if len( shares ) > 0:
-            
-            ( name, text, timeout, ( num_hashes, hashes, share_key ) ) = shares[0]
-            
-            info = self._service.GetInfo()
-            
-            external_ip = HydrusNATPunch.GetExternalIP() # eventually check for optional host replacement here
-            
-            external_port = info[ 'upnp' ]
-            
-            if external_port is None: external_port = info[ 'port' ]
-            
-            url = 'http://' + external_ip + ':' + HydrusData.ToUnicode( external_port ) + '/gallery?share_key=' + share_key.encode( 'hex' )
-            
-            self._controller.pub( 'clipboard', 'text', url )
-            
-        
-    
-    def EventCopyInternalShareURL( self, event ):
-        
-        shares = self._booru_shares.GetSelectedClientData()
-        
-        if len( shares ) > 0:
-            
-            ( name, text, timeout, ( num_hashes, hashes, share_key ) ) = shares[0]
-            
-            info = self._service.GetInfo()
-            
-            internal_ip = '127.0.0.1'
-            
-            internal_port = info[ 'port' ]
-            
-            url = 'http://' + internal_ip + ':' + str( internal_port ) + '/gallery?share_key=' + share_key.encode( 'hex' )
-            
-            self._controller.pub( 'clipboard', 'text', url )
             
         
     
@@ -330,11 +208,6 @@ class ReviewServicePanel( wx.Panel ):
         return self._service.GetServiceKey()
         
     
-    def RefreshLocalBooruShares( self ):
-        
-        self._DisplayService()
-        
-    
     class _ServicePanel( ClientGUICommon.StaticBox ):
         
         def __init__( self, parent, service ):
@@ -353,12 +226,17 @@ class ReviewServicePanel( wx.Panel ):
             
             #
             
-            self.AddF( self._name_and_type, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._name_and_type, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             HG.client_controller.sub( self, 'ServiceUpdated', 'service_updated' )
             
         
         def _Refresh( self ):
+            
+            if not self:
+                
+                return
+                
             
             name = self._service.GetName()
             service_type = self._service.GetServiceType()
@@ -397,14 +275,19 @@ class ReviewServicePanel( wx.Panel ):
             
             #
             
-            self.AddF( self._file_info_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._file_info_st, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             HG.client_controller.sub( self, 'ServiceUpdated', 'service_updated' )
             
         
         def _Refresh( self ):
             
-            HG.client_controller.CallToThread( self.THREADFetchInfo )
+            if not self:
+                
+                return
+                
+            
+            HG.client_controller.CallToThread( self.THREADFetchInfo, self._service )
             
         
         def ServiceUpdated( self, service ):
@@ -417,24 +300,26 @@ class ReviewServicePanel( wx.Panel ):
                 
             
         
-        def THREADFetchInfo( self ):
+        def THREADFetchInfo( self, service ):
             
             def wx_code( text ):
                 
-                if self:
+                if not self:
                     
-                    self._file_info_st.SetLabelText( text )
+                    return
                     
                 
+                self._file_info_st.SetLabelText( text )
+                
             
-            service_info = HG.client_controller.Read( 'service_info', self._service.GetServiceKey() )
+            service_info = HG.client_controller.Read( 'service_info', service.GetServiceKey() )
             
             num_files = service_info[ HC.SERVICE_INFO_NUM_FILES ]
             total_size = service_info[ HC.SERVICE_INFO_TOTAL_SIZE ]
             
             text = HydrusData.ConvertIntToPrettyString( num_files ) + ' files, totalling ' + HydrusData.ConvertIntToBytes( total_size )
             
-            if self._service.GetServiceType() in ( HC.COMBINED_LOCAL_FILE, HC.FILE_REPOSITORY ):
+            if service.GetServiceType() in ( HC.COMBINED_LOCAL_FILE, HC.FILE_REPOSITORY ):
                 
                 num_deleted_files = service_info[ HC.SERVICE_INFO_NUM_DELETED_FILES ]
                 
@@ -449,7 +334,7 @@ class ReviewServicePanel( wx.Panel ):
         
         def __init__( self, parent, service ):
             
-            ClientGUICommon.StaticBox.__init__( self, parent, 'clientside network' )
+            ClientGUICommon.StaticBox.__init__( self, parent, 'this client\'s network use' )
             
             self._service = service
             
@@ -466,15 +351,20 @@ class ReviewServicePanel( wx.Panel ):
             
             #
             
-            self.AddF( self._address, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( self._functional, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( self._bandwidth_summary, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( self._bandwidth_panel, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            self.Add( self._address, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._functional, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._bandwidth_summary, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._bandwidth_panel, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
             
             HG.client_controller.sub( self, 'ServiceUpdated', 'service_updated' )
             
         
         def _Refresh( self ):
+            
+            if not self:
+                
+                return
+                
             
             credentials = self._service.GetCredentials()
             
@@ -504,7 +394,7 @@ class ReviewServicePanel( wx.Panel ):
                 
                 gauge.SetValue( status, value, range )
                 
-                b_vbox.AddF( gauge, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+                b_vbox.Add( gauge, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
                 
             
             self._bandwidth_panel.SetSizer( b_vbox )
@@ -529,7 +419,7 @@ class ReviewServicePanel( wx.Panel ):
         
         def __init__( self, parent, service ):
             
-            ClientGUICommon.StaticBox.__init__( self, parent, 'serverside hydrus account' )
+            ClientGUICommon.StaticBox.__init__( self, parent, 'hydrus service account' )
             
             self._service = service
             
@@ -553,16 +443,16 @@ class ReviewServicePanel( wx.Panel ):
             
             hbox = wx.BoxSizer( wx.HORIZONTAL )
             
-            hbox.AddF( self._refresh_account_button, CC.FLAGS_LONE_BUTTON )
-            hbox.AddF( self._copy_account_key_button, CC.FLAGS_LONE_BUTTON )
-            hbox.AddF( self._permissions_button, CC.FLAGS_LONE_BUTTON )
+            hbox.Add( self._refresh_account_button, CC.FLAGS_LONE_BUTTON )
+            hbox.Add( self._copy_account_key_button, CC.FLAGS_LONE_BUTTON )
+            hbox.Add( self._permissions_button, CC.FLAGS_LONE_BUTTON )
             
-            self.AddF( self._title_and_expires_st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( self._status_st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( self._next_sync_st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( self._bandwidth_summary, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( self._bandwidth_panel, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            self.AddF( hbox, CC.FLAGS_BUTTON_SIZER )
+            self.Add( self._title_and_expires_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._status_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._next_sync_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._bandwidth_summary, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._bandwidth_panel, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            self.Add( hbox, CC.FLAGS_BUTTON_SIZER )
             
             HG.client_controller.sub( self, 'ServiceUpdated', 'service_updated' )
             
@@ -579,6 +469,11 @@ class ReviewServicePanel( wx.Panel ):
             
         
         def _Refresh( self ):
+            
+            if not self:
+                
+                return
+                
             
             account = self._service.GetAccount()
             
@@ -618,7 +513,7 @@ class ReviewServicePanel( wx.Panel ):
                 
                 gauge.SetValue( status, value, range )
                 
-                b_vbox.AddF( gauge, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+                b_vbox.Add( gauge, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
                 
             
             self._bandwidth_panel.SetSizer( b_vbox )
@@ -725,7 +620,7 @@ class ReviewServicePanel( wx.Panel ):
             
             #
             
-            new_options = HG.client_controller.GetNewOptions()
+            new_options = HG.client_controller.new_options
             
             if not new_options.GetBoolean( 'advanced_mode' ):
                 
@@ -736,26 +631,37 @@ class ReviewServicePanel( wx.Panel ):
             
             hbox = wx.BoxSizer( wx.HORIZONTAL )
             
-            hbox.AddF( self._sync_now_button, CC.FLAGS_LONE_BUTTON )
-            hbox.AddF( self._pause_play_button, CC.FLAGS_LONE_BUTTON )
-            hbox.AddF( self._export_updates_button, CC.FLAGS_LONE_BUTTON )
-            hbox.AddF( self._reset_button, CC.FLAGS_LONE_BUTTON )
+            hbox.Add( self._sync_now_button, CC.FLAGS_LONE_BUTTON )
+            hbox.Add( self._pause_play_button, CC.FLAGS_LONE_BUTTON )
+            hbox.Add( self._export_updates_button, CC.FLAGS_LONE_BUTTON )
+            hbox.Add( self._reset_button, CC.FLAGS_LONE_BUTTON )
             
-            self.AddF( self._metadata_st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( self._download_progress, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( self._processing_progress, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( hbox, CC.FLAGS_BUTTON_SIZER )
+            self.Add( self._metadata_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._download_progress, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._processing_progress, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( hbox, CC.FLAGS_BUTTON_SIZER )
             
             HG.client_controller.sub( self, 'ServiceUpdated', 'service_updated' )
             
         
         def _ExportUpdates( self ):
             
-            def do_it( dest_dir ):
+            def wx_done():
+                
+                if not self:
+                    
+                    return
+                    
+                
+                self._export_updates_button.SetLabelText( 'export updates' )
+                self._export_updates_button.Enable()
+                
+            
+            def do_it( dest_dir, service ):
                 
                 try:
                     
-                    update_hashes = self._service.GetUpdateHashes()
+                    update_hashes = service.GetUpdateHashes()
                     
                     num_to_do = len( update_hashes )
                     
@@ -769,7 +675,7 @@ class ReviewServicePanel( wx.Panel ):
                         
                         try:
                             
-                            job_key.SetVariable( 'popup_title', 'exporting updates for ' + self._service.GetName() )
+                            job_key.SetVariable( 'popup_title', 'exporting updates for ' + service.GetName() )
                             HG.client_controller.pub( 'message', job_key )
                             
                             client_files_manager = HG.client_controller.client_files_manager
@@ -816,8 +722,7 @@ class ReviewServicePanel( wx.Panel ):
                     
                 finally:
                     
-                    wx.CallAfter( self._export_updates_button.SetLabelText, 'export updates' )
-                    wx.CallAfter( self._export_updates_button.Enable )
+                    wx.CallAfter( wx_done )
                     
                 
             
@@ -830,7 +735,7 @@ class ReviewServicePanel( wx.Panel ):
                     self._export_updates_button.SetLabelText( u'exporting\u2026' )
                     self._export_updates_button.Disable()
                     
-                    HG.client_controller.CallToThread( do_it, path )
+                    HG.client_controller.CallToThread( do_it, path, self._service )
                     
                 
             
@@ -842,20 +747,14 @@ class ReviewServicePanel( wx.Panel ):
         
         def _Refresh( self ):
             
+            if not self:
+                
+                return
+                
+            
             service_paused = self._service.IsPaused()
             
-            options = HG.client_controller.GetOptions()
-            
-            all_repo_sync_paused = options[ 'pause_repo_sync' ]
-            
-            if service_paused or all_repo_sync_paused:
-                
-                self._sync_now_button.Disable()
-                
-            else:
-                
-                self._sync_now_button.Enable()
-                
+            self._sync_now_button.Disable()
             
             if service_paused:
                 
@@ -868,7 +767,7 @@ class ReviewServicePanel( wx.Panel ):
             
             self._metadata_st.SetLabelText( self._service.GetNextUpdateDueString() )
             
-            HG.client_controller.CallToThread( self.THREADFetchInfo )
+            HG.client_controller.CallToThread( self.THREADFetchInfo, self._service )
             
         
         def _Reset( self ):
@@ -898,7 +797,7 @@ class ReviewServicePanel( wx.Panel ):
             
             message = 'This will tell the database to process any outstanding update files.'
             message += os.linesep * 2
-            message += 'This is a big task that usually runs during idle time. It locks the entire database. If you interact significantly with the program while it runs, your gui will hang, and then you will have to wait a long time for the processing to completely finish before you get it back.'
+            message += 'This is a big task that usually runs during idle time. It locks the entire database and takes over the ui, stopping you from interacting with it. It is cancellable but may still take some time to return ui control to you.'
             message += os.linesep * 2
             message += 'If you are a new user, click \'no\'!'
             
@@ -930,41 +829,58 @@ class ReviewServicePanel( wx.Panel ):
                 
             
         
-        def THREADFetchInfo( self ):
+        def THREADFetchInfo( self, service ):
             
             def wx_code( download_text, download_value, processing_text, processing_value, range ):
                 
-                if self:
+                if not self:
                     
-                    self._download_progress.SetValue( download_text, download_value, range )
-                    self._processing_progress.SetValue( processing_text, processing_value, range )
+                    return
                     
-                    if processing_value == download_value:
-                        
-                        self._sync_now_button.Disable()
-                        
+                
+                self._download_progress.SetValue( download_text, download_value, range )
+                self._processing_progress.SetValue( processing_text, processing_value, range )
+                
+                if processing_value == download_value:
                     
-                    if download_value == 0:
-                        
-                        self._export_updates_button.Disable()
-                        
-                    else:
-                        
-                        self._export_updates_button.Enable()
-                        
+                    self._sync_now_button.Disable()
                     
-                    if processing_value == 0:
-                        
-                        self._reset_button.Disable()
-                        
-                    else:
-                        
-                        self._reset_button.Enable()
-                        
+                
+                if download_value == 0:
+                    
+                    self._export_updates_button.Disable()
+                    
+                else:
+                    
+                    self._export_updates_button.Enable()
+                    
+                
+                if processing_value == 0:
+                    
+                    self._reset_button.Disable()
+                    
+                else:
+                    
+                    self._reset_button.Enable()
+                    
+                
+                processing_work_to_do = processing_value < download_value
+                
+                service_paused = self._service.IsPaused()
+                
+                all_repo_sync_paused = HG.client_controller.options[ 'pause_repo_sync' ]
+                
+                if service_paused or all_repo_sync_paused or not processing_work_to_do:
+                    
+                    self._sync_now_button.Disable()
+                    
+                else:
+                    
+                    self._sync_now_button.Enable()
                     
                 
             
-            ( download_value, processing_value, range ) = HG.client_controller.Read( 'repository_progress', self._service.GetServiceKey() )
+            ( download_value, processing_value, range ) = HG.client_controller.Read( 'repository_progress', service.GetServiceKey() )
             
             download_text = 'downloaded ' + HydrusData.ConvertValueRangeToPrettyString( download_value, range )
             
@@ -986,7 +902,7 @@ class ReviewServicePanel( wx.Panel ):
             
             self._check_running_button = ClientGUICommon.BetterButton( self, 'check daemon', self._CheckRunning )
             
-            self._ipfs_shares = ClientGUICommon.SaneListCtrl( self, 200, [ ( 'multihash', 120 ), ( 'num files', 80 ), ( 'total size', 80 ), ( 'note', -1 ) ], delete_key_callback = self._Unpin, activation_callback = self._SetNotes )
+            self._ipfs_shares = ClientGUIListCtrl.SaneListCtrl( self, 200, [ ( 'multihash', 120 ), ( 'num files', 80 ), ( 'total size', 80 ), ( 'note', -1 ) ], delete_key_callback = self._Unpin, activation_callback = self._SetNotes )
             
             self._copy_multihash_button = ClientGUICommon.BetterButton( self, 'copy multihashes', self._CopyMultihashes )
             self._show_selected_button = ClientGUICommon.BetterButton( self, 'show selected in main gui', self._ShowSelectedInNewPages )
@@ -1001,14 +917,14 @@ class ReviewServicePanel( wx.Panel ):
             
             button_box = wx.BoxSizer( wx.HORIZONTAL )
             
-            button_box.AddF( self._copy_multihash_button, CC.FLAGS_VCENTER )
-            button_box.AddF( self._show_selected_button, CC.FLAGS_VCENTER )
-            button_box.AddF( self._set_notes_button, CC.FLAGS_VCENTER )
-            button_box.AddF( self._unpin_button, CC.FLAGS_VCENTER )
+            button_box.Add( self._copy_multihash_button, CC.FLAGS_VCENTER )
+            button_box.Add( self._show_selected_button, CC.FLAGS_VCENTER )
+            button_box.Add( self._set_notes_button, CC.FLAGS_VCENTER )
+            button_box.Add( self._unpin_button, CC.FLAGS_VCENTER )
             
-            self.AddF( self._check_running_button, CC.FLAGS_LONE_BUTTON )
-            self.AddF( self._ipfs_shares, CC.FLAGS_EXPAND_BOTH_WAYS )
-            self.AddF( button_box, CC.FLAGS_BUTTON_SIZER )
+            self.Add( self._check_running_button, CC.FLAGS_LONE_BUTTON )
+            self.Add( self._ipfs_shares, CC.FLAGS_EXPAND_BOTH_WAYS )
+            self.Add( button_box, CC.FLAGS_BUTTON_SIZER )
             
             HG.client_controller.sub( self, 'ServiceUpdated', 'service_updated' )
             
@@ -1083,7 +999,12 @@ class ReviewServicePanel( wx.Panel ):
         
         def _Refresh( self ):
             
-            HG.client_controller.CallToThread( self.THREADFetchInfo )
+            if not self:
+                
+                return
+                
+            
+            HG.client_controller.CallToThread( self.THREADFetchInfo, self._service )
             
         
         def _SetNotes( self ):
@@ -1124,7 +1045,7 @@ class ReviewServicePanel( wx.Panel ):
                         
                         hashes = HG.client_controller.Read( 'service_directory', self._service.GetServiceKey(), multihash )
                         
-                        HG.client_controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_hashes = hashes )
+                        HG.client_controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_hashes = hashes, page_name = 'ipfs directory' )
                         
                     
                 finally:
@@ -1182,26 +1103,28 @@ class ReviewServicePanel( wx.Panel ):
                 
             
         
-        def THREADFetchInfo( self ):
+        def THREADFetchInfo( self, service ):
             
             def wx_code( ipfs_shares ):
                 
-                if self:
+                if not self:
                     
-                    self._ipfs_shares.DeleteAllItems()
+                    return
                     
-                    for ( multihash, num_files, total_size, note ) in ipfs_shares:
-                        
-                        sort_tuple = ( multihash, num_files, total_size, note )
-                        
-                        display_tuple = self._GetDisplayTuple( sort_tuple )
-                        
-                        self._ipfs_shares.Append( display_tuple, sort_tuple )
-                        
+                
+                self._ipfs_shares.DeleteAllItems()
+                
+                for ( multihash, num_files, total_size, note ) in ipfs_shares:
+                    
+                    sort_tuple = ( multihash, num_files, total_size, note )
+                    
+                    display_tuple = self._GetDisplayTuple( sort_tuple )
+                    
+                    self._ipfs_shares.Append( display_tuple, sort_tuple )
                     
                 
             
-            ipfs_shares = HG.client_controller.Read( 'service_directories', self._service.GetServiceKey() )
+            ipfs_shares = HG.client_controller.Read( 'service_directories', service.GetServiceKey() )
             
             wx.CallAfter( wx_code, ipfs_shares )
             
@@ -1215,9 +1138,26 @@ class ReviewServicePanel( wx.Panel ):
             
             self._service = service
             
+            self._share_key_info = {}
+            
             self._my_updater = ClientGUICommon.ThreadToGUIUpdater( self, self._Refresh )
             
-            self._name_and_type = ClientGUICommon.BetterStaticText( self )
+            self._service_status = ClientGUICommon.BetterStaticText( self )
+            
+            booru_search_panel = ClientGUIListCtrl.BetterListCtrlPanel( self )
+            
+            self._booru_shares = ClientGUIListCtrl.BetterListCtrl( booru_search_panel, 'local_booru_shares', 10, 36, [ ( 'name', -1 ), ( 'info', 36 ), ( 'expires', 12 ), ( 'files', 12 ) ], self._ConvertDataToListCtrlTuple, delete_key_callback = self._Delete, activation_callback = self._Edit )
+            
+            booru_search_panel.SetListCtrl( self._booru_shares )
+            
+            booru_search_panel.AddButton( 'edit', self._Edit, enabled_only_on_selection = True )
+            booru_search_panel.AddButton( 'delete', self._Delete, enabled_only_on_selection = True )
+            booru_search_panel.AddSeparator()
+            booru_search_panel.AddButton( 'open in new page', self._OpenSearch, enabled_only_on_selection = True )
+            booru_search_panel.AddButton( 'copy internal share url', self._CopyInternalShareURL, enabled_check_func = self._CanCopyURL )
+            booru_search_panel.AddButton( 'copy external share url', self._CopyExternalShareURL, enabled_check_func = self._CanCopyURL )
+            
+            self._booru_shares.Sort()
             
             #
             
@@ -1225,14 +1165,194 @@ class ReviewServicePanel( wx.Panel ):
             
             #
             
-            self.AddF( self._name_and_type, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._service_status, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( booru_search_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             HG.client_controller.sub( self, 'ServiceUpdated', 'service_updated' )
             
         
+        def _CanCopyURL( self ):
+            
+            has_selected = self._booru_shares.HasSelected()
+            service_is_running = self._service.GetPort() is not None
+            
+            return has_selected and service_is_running
+            
+        
+        def _ConvertDataToListCtrlTuple( self, share_key ):
+            
+            info = self._share_key_info[ share_key ]
+            
+            name = info[ 'name' ]
+            text = info[ 'text' ]
+            timeout = info[ 'timeout' ]
+            hashes = info[ 'hashes' ]
+            
+            num_hashes = len( hashes )
+            
+            pretty_name = name
+            pretty_text = text
+            pretty_timeout = HydrusData.ConvertTimestampToPrettyExpires( timeout )
+            pretty_hashes = HydrusData.ConvertIntToPrettyString( num_hashes )
+            
+            display_tuple = ( pretty_name, pretty_text, pretty_timeout, pretty_hashes )
+            sort_tuple = ( name, text, timeout, num_hashes )
+            
+            return ( display_tuple, sort_tuple )
+            
+        
+        def _CopyExternalShareURL( self ):
+            
+            try:
+                
+                external_ip = HydrusNATPunch.GetExternalIP()
+                
+            except Exception as e:
+                
+                wx.MessageBox( HydrusData.ToUnicode( e ) )
+                
+                return
+                
+            
+            internal_port = self._service.GetPort()
+            
+            if internal_port is None:
+                
+                wx.MessageBox( 'The local booru is not currently running!' )
+                
+            
+            external_port = self._service.GetUPnPPort()
+            
+            if external_port is None:
+                
+                external_port = internal_port
+                
+            
+            urls = []
+            
+            for share_key in self._booru_shares.GetData( only_selected = True ):
+                
+                url = 'http://' + external_ip + ':' + HydrusData.ToUnicode( external_port ) + '/gallery?share_key=' + share_key.encode( 'hex' )
+                
+                urls.append( url )
+                
+            
+            text = os.linesep.join( urls )
+            
+            HG.client_controller.pub( 'clipboard', 'text', text )
+            
+        
+        def _CopyInternalShareURL( self ):
+            
+            internal_ip = '127.0.0.1'
+            
+            internal_port = self._service.GetPort()
+            
+            if internal_port is None:
+                
+                wx.MessageBox( 'The local booru is not currently running!' )
+                
+            
+            urls = []
+            
+            for share_key in self._booru_shares.GetData( only_selected = True ):
+                
+                url = 'http://' + internal_ip + ':' + str( internal_port ) + '/gallery?share_key=' + share_key.encode( 'hex' )
+                
+                urls.append( url )
+                
+            
+            text = os.linesep.join( urls )
+            
+            HG.client_controller.pub( 'clipboard', 'text', text )
+            
+        
+        def _Delete( self ):
+            
+            with ClientGUIDialogs.DialogYesNo( self, 'Remove all selected?' ) as dlg:
+                
+                if dlg.ShowModal() == wx.ID_YES:
+                    
+                    for share_key in self._booru_shares.GetData( only_selected = True ):
+                        
+                        HG.client_controller.Write( 'delete_local_booru_share', share_key )
+                        
+                    
+                    self._booru_shares.DeleteSelected()
+                    
+                
+            
+        
+        def _Edit( self ):
+            
+            for share_key in self._booru_shares.GetData( only_selected = True ):
+                
+                info = self._share_key_info[ share_key ]
+                
+                name = info[ 'name' ]
+                text = info[ 'text' ]
+                timeout = info[ 'timeout' ]
+                hashes = info[ 'hashes' ]
+                
+                with ClientGUIDialogs.DialogInputLocalBooruShare( self, share_key, name, text, timeout, hashes, new_share = False) as dlg:
+                    
+                    if dlg.ShowModal() == wx.ID_OK:
+                        
+                        ( share_key, name, text, timeout, hashes ) = dlg.GetInfo()
+                        
+                        info = {}
+                        
+                        info[ 'name' ] = name
+                        info[ 'text' ] = text
+                        info[ 'timeout' ] = timeout
+                        info[ 'hashes' ] = hashes
+                        
+                        HG.client_controller.Write( 'local_booru_share', share_key, info )
+                        
+                    else:
+                        
+                        break
+                        
+                    
+                
+            
+            self._Refresh()
+            
+        
+        def _OpenSearch( self ):
+            
+            for share_key in self._booru_shares.GetData( only_selected = True ):
+                
+                info = self._share_key_info[ share_key ]
+                
+                name = info[ 'name' ]
+                hashes = info[ 'hashes' ]
+                
+                HG.client_controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_hashes = hashes, page_name = 'booru share: ' + name )
+                
+            
+        
         def _Refresh( self ):
             
-            self._name_and_type.SetLabelText( 'This is a Local Booru service. This box will regain its old information and controls in a later version.' )
+            if not self:
+                
+                return
+                
+            
+            port = self._service.GetPort()
+            
+            if port is None:
+                
+                status = 'The local booru is not running.'
+                
+            else:
+                
+                status = 'The local booru should be running on port ' + str( port ) + '.'
+                
+            
+            self._service_status.SetLabelText( status )
+            
+            HG.client_controller.CallToThread( self.THREADFetchInfo, self._service )
             
         
         def ServiceUpdated( self, service ):
@@ -1243,6 +1363,27 @@ class ReviewServicePanel( wx.Panel ):
                 
                 self._my_updater.Update()
                 
+            
+        
+        def THREADFetchInfo( self, service ):
+            
+            def wx_code( booru_shares ):
+                
+                if not self:
+                    
+                    return
+                    
+                
+                self._share_key_info.update( booru_shares )
+                
+                self._booru_shares.SetData( booru_shares.keys() )
+                
+                self._booru_shares.Sort()
+                
+            
+            booru_shares = HG.client_controller.Read( 'local_booru_shares' )
+            
+            wx.CallAfter( wx_code, booru_shares )
             
         
     
@@ -1264,14 +1405,14 @@ class ReviewServicePanel( wx.Panel ):
             
             #
             
-            self.AddF( self._rating_info_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._rating_info_st, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             HG.client_controller.sub( self, 'ServiceUpdated', 'service_updated' )
             
         
         def _Refresh( self ):
             
-            HG.client_controller.CallToThread( self.THREADFetchInfo )
+            HG.client_controller.CallToThread( self.THREADFetchInfo, self._service )
             
         
         def ServiceUpdated( self, service ):
@@ -1284,17 +1425,19 @@ class ReviewServicePanel( wx.Panel ):
                 
             
         
-        def THREADFetchInfo( self ):
+        def THREADFetchInfo( self, service ):
             
             def wx_code( text ):
                 
-                if self:
+                if not self:
                     
-                    self._rating_info_st.SetLabelText( text )
+                    return
                     
                 
+                self._rating_info_st.SetLabelText( text )
+                
             
-            service_info = HG.client_controller.Read( 'service_info', self._service.GetServiceKey() )
+            service_info = HG.client_controller.Read( 'service_info', service.GetServiceKey() )
             
             num_files = service_info[ HC.SERVICE_INFO_NUM_FILES ]
             
@@ -1320,7 +1463,7 @@ class ReviewServicePanel( wx.Panel ):
             
             #
             
-            new_options = HG.client_controller.GetNewOptions()
+            new_options = HG.client_controller.new_options
             
             advanced_mode = new_options.GetBoolean( 'advanced_mode' )
             
@@ -1333,8 +1476,8 @@ class ReviewServicePanel( wx.Panel ):
             
             #
             
-            self.AddF( self._tag_info_st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self.AddF( self._advanced_content_update, CC.FLAGS_LONE_BUTTON )
+            self.Add( self._tag_info_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( self._advanced_content_update, CC.FLAGS_LONE_BUTTON )
             
             HG.client_controller.sub( self, 'ServiceUpdated', 'service_updated' )
             
@@ -1353,7 +1496,7 @@ class ReviewServicePanel( wx.Panel ):
         
         def _Refresh( self ):
             
-            HG.client_controller.CallToThread( self.THREADFetchInfo )
+            HG.client_controller.CallToThread( self.THREADFetchInfo, self._service )
             
         
         def ServiceUpdated( self, service ):
@@ -1366,17 +1509,19 @@ class ReviewServicePanel( wx.Panel ):
                 
             
         
-        def THREADFetchInfo( self ):
+        def THREADFetchInfo( self, service ):
             
             def wx_code( text ):
                 
-                if self:
+                if not self:
                     
-                    self._tag_info_st.SetLabelText( text )
+                    return
                     
                 
+                self._tag_info_st.SetLabelText( text )
+                
             
-            service_info = HG.client_controller.Read( 'service_info', self._service.GetServiceKey() )
+            service_info = HG.client_controller.Read( 'service_info', service.GetServiceKey() )
             
             num_files = service_info[ HC.SERVICE_INFO_NUM_FILES ]
             num_tags = service_info[ HC.SERVICE_INFO_NUM_TAGS ]
@@ -1384,7 +1529,7 @@ class ReviewServicePanel( wx.Panel ):
             
             text = HydrusData.ConvertIntToPrettyString( num_mappings ) + ' total mappings involving ' + HydrusData.ConvertIntToPrettyString( num_tags ) + ' different tags on ' + HydrusData.ConvertIntToPrettyString( num_files ) + ' different files'
             
-            if self._service.GetServiceType() == HC.TAG_REPOSITORY:
+            if service.GetServiceType() == HC.TAG_REPOSITORY:
                 
                 num_deleted_mappings = service_info[ HC.SERVICE_INFO_NUM_DELETED_MAPPINGS ]
                 
@@ -1407,7 +1552,7 @@ class ReviewServicePanel( wx.Panel ):
             
             #
             
-            self.AddF( self._clear_trash, CC.FLAGS_LONE_BUTTON )
+            self.Add( self._clear_trash, CC.FLAGS_LONE_BUTTON )
             
         
         def _ClearTrash( self ):

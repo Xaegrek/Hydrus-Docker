@@ -1,6 +1,7 @@
 import ClientConstants as CC
 import ClientData
 import ClientGUICommon
+import ClientGUIControls
 import ClientGUIDialogs
 import ClientGUIScrolledPanels
 import ClientGUITopLevelWindows
@@ -48,9 +49,9 @@ class PopupDismissAll( PopupWindow ):
         button.Bind( wx.EVT_BUTTON, self.EventButton )
         button.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
         
-        hbox.AddF( self._text, CC.FLAGS_VCENTER )
-        hbox.AddF( ( 20, 20 ), CC.FLAGS_EXPAND_BOTH_WAYS )
-        hbox.AddF( button, CC.FLAGS_VCENTER )
+        hbox.Add( self._text, CC.FLAGS_VCENTER )
+        hbox.Add( ( 20, 20 ), CC.FLAGS_EXPAND_BOTH_WAYS )
+        hbox.Add( button, CC.FLAGS_VCENTER )
         
         self.SetSizer( hbox )
         
@@ -105,9 +106,19 @@ class PopupMessage( PopupWindow ):
         self._gauge_2.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
         self._gauge_2.Hide()
         
-        self._download = ClientGUICommon.TextAndGauge( self )
-        self._download.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
-        self._download.Hide()
+        self._text_yes_no = ClientGUICommon.FitResistantStaticText( self )
+        self._text_yes_no.Wrap( self.WRAP_WIDTH )
+        self._text_yes_no.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
+        self._text_yes_no.Hide()
+        
+        self._yes = ClientGUICommon.BetterButton( self, 'yes', self._YesButton )
+        self._yes.Hide()
+        
+        self._no = ClientGUICommon.BetterButton( self, 'no', self._NoButton )
+        self._no.Hide()
+        
+        self._network_job_ctrl = ClientGUIControls.NetworkJobControl( self )
+        self._network_job_ctrl.Hide()
         
         self._copy_to_clipboard_button = ClientGUICommon.BetterButton( self, 'copy to clipboard', self.CopyToClipboard )
         self._copy_to_clipboard_button.Bind( wx.EVT_RIGHT_DOWN, self.EventDismiss )
@@ -140,23 +151,40 @@ class PopupMessage( PopupWindow ):
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        hbox.AddF( self._pause_button, CC.FLAGS_VCENTER )
-        hbox.AddF( self._cancel_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._pause_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._cancel_button, CC.FLAGS_VCENTER )
         
-        vbox.AddF( self._title, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._text_1, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._gauge_1, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._text_2, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._gauge_2, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._download, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        vbox.AddF( self._copy_to_clipboard_button, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._show_files_button, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._show_tb_button, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._tb_text, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._copy_tb_button, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( hbox, CC.FLAGS_BUTTON_SIZER )
+        yes_no_hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        yes_no_hbox.Add( self._yes, CC.FLAGS_VCENTER )
+        yes_no_hbox.Add( self._no, CC.FLAGS_VCENTER )
+        
+        vbox.Add( self._title, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._text_1, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._gauge_1, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._text_2, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._gauge_2, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._text_yes_no, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( yes_no_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        vbox.Add( self._network_job_ctrl, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._copy_to_clipboard_button, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._show_files_button, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._show_tb_button, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._tb_text, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._copy_tb_button, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( hbox, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
+        
+    
+    def _NoButton( self ):
+        
+        self._job_key.SetVariable( 'popup_yes_no_answer', False )
+        
+        self._job_key.Delete()
+        
+        self._yes.Hide()
+        self._no.Hide()
         
     
     def _ProcessText( self, text ):
@@ -173,6 +201,16 @@ class PopupMessage( PopupWindow ):
             
         
         return text
+        
+    
+    def _YesButton( self ):
+        
+        self._job_key.SetVariable( 'popup_yes_no_answer', True )
+        
+        self._job_key.Delete()
+        
+        self._yes.Hide()
+        self._no.Hide()
         
     
     def Cancel( self ):
@@ -206,11 +244,11 @@ class PopupMessage( PopupWindow ):
         
         if self._job_key.IsPaused():
             
-            self._pause_button.SetBitmap( CC.GlobalBMPs.play )
+            ClientGUICommon.SetBitmapButtonBitmap( self._pause_button, CC.GlobalBMPs.play )
             
         else:
             
-            self._pause_button.SetBitmap( CC.GlobalBMPs.pause )
+            ClientGUICommon.SetBitmapButtonBitmap( self._pause_button, CC.GlobalBMPs.pause )
             
         
     
@@ -220,9 +258,9 @@ class PopupMessage( PopupWindow ):
         
         if result is not None:
             
-            hashes = result
+            ( popup_files, popup_files_name ) = result
             
-            HG.client_controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_hashes = hashes )
+            HG.client_controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_hashes = popup_files, page_name = popup_files_name )
             
         
     
@@ -360,19 +398,43 @@ class PopupMessage( PopupWindow ):
             self._gauge_2.Hide()
             
         
-        popup_download = self._job_key.GetIfHasVariable( 'popup_download' )
+        popup_yes_no_question = self._job_key.GetIfHasVariable( 'popup_yes_no_question' )
         
-        if popup_download is not None:
+        if popup_yes_no_question is not None and not paused:
             
-            ( text, gauge_value, gauge_range ) = popup_download
+            text = popup_yes_no_question
             
-            self._download.SetValue( text, gauge_value, gauge_range )
+            # set and show text, yes, no buttons
             
-            self._download.Show()
+            if self._text_yes_no.GetLabelText() != text:
+                
+                self._text_yes_no.SetLabelText( self._ProcessText( HydrusData.ToUnicode( text ) ) )
+                
+            
+            self._text_yes_no.Show()
+            self._yes.Show()
+            self._no.Show()
             
         else:
             
-            self._download.Hide()
+            self._text_yes_no.Hide()
+            self._yes.Hide()
+            self._no.Hide()
+            
+        
+        popup_network_job = self._job_key.GetIfHasVariable( 'popup_network_job' )
+        
+        if popup_network_job is not None:
+            
+            self._network_job_ctrl.SetNetworkJob( popup_network_job )
+            
+            self._network_job_ctrl.Show()
+            
+        else:
+            
+            self._network_job_ctrl.ClearNetworkJob()
+            
+            self._network_job_ctrl.Hide()
             
         
         popup_clipboard = self._job_key.GetIfHasVariable( 'popup_clipboard' )
@@ -393,13 +455,15 @@ class PopupMessage( PopupWindow ):
             self._copy_to_clipboard_button.Hide()
             
         
-        popup_files = self._job_key.GetIfHasVariable( 'popup_files' )
+        result = self._job_key.GetIfHasVariable( 'popup_files' )
         
-        if popup_files is not None:
+        if result is not None:
+            
+            ( popup_files, popup_files_name ) = result
             
             hashes = popup_files
             
-            text = 'show ' + HydrusData.ConvertIntToPrettyString( len( hashes ) ) + ' files'
+            text = popup_files_name + ' - show ' + HydrusData.ConvertIntToPrettyString( len( hashes ) ) + ' files'
             
             if self._show_files_button.GetLabelText() != text:
                 
@@ -477,8 +541,8 @@ class PopupMessageManager( wx.Frame ):
         self._dismiss_all = PopupDismissAll( self )
         self._dismiss_all.Hide()
         
-        vbox.AddF( self._message_vbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        vbox.AddF( self._dismiss_all, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._message_vbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        vbox.Add( self._dismiss_all, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         self.SetSizer( vbox )
         
@@ -496,34 +560,24 @@ class PopupMessageManager( wx.Frame ):
         HydrusData.ShowException = ClientData.ShowExceptionClient
         HydrusData.ShowText = ClientData.ShowTextClient
         
-        self.Bind( wx.EVT_TIMER, self.TIMEREvent )
-        
-        self._timer = wx.Timer( self )
-        
-        self._timer.Start( 500, wx.TIMER_CONTINUOUS )
-        
         job_key = ClientThreading.JobKey()
         
         job_key.SetVariable( 'popup_text_1', u'initialising popup message manager\u2026' )
         
-        wx.CallAfter( self.AddMessage, job_key )
+        self._update_job = HG.client_controller.CallRepeatingWXSafe( self, 0.5, 0.25, self.REPEATINGUpdate )
         
-        wx.CallAfter( self._Update )
+        HG.client_controller.CallLaterWXSafe( self, 0.5, self.AddMessage, job_key )
         
-        wx.CallAfter( job_key.Delete )
-        
-        wx.CallAfter( self._Update )
+        HG.client_controller.CallLaterWXSafe( self, 1.0, job_key.Delete )
         
     
     def _CheckPending( self ):
         
         size_and_position_needed = False
         
-        num_messages_displayed = self._message_vbox.GetItemCount()
-        
         self._pending_job_keys = [ job_key for job_key in self._pending_job_keys if not job_key.IsDeleted() ]
         
-        if len( self._pending_job_keys ) > 0 and num_messages_displayed < self._max_messages_to_display:
+        while len( self._pending_job_keys ) > 0 and self._message_vbox.GetItemCount() < self._max_messages_to_display:
             
             job_key = self._pending_job_keys.pop( 0 )
             
@@ -531,7 +585,7 @@ class PopupMessageManager( wx.Frame ):
             
             window.Update()
             
-            self._message_vbox.AddF( window, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._message_vbox.Add( window, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             size_and_position_needed = True
             
@@ -588,9 +642,13 @@ class PopupMessageManager( wx.Frame ):
             parent = self.GetParent()
             
             # changing show status while parent iconised in Windows leads to grey window syndrome
-            going_to_bug_out_at_hide_or_show = HC.PLATFORM_WINDOWS and parent.IsIconized()
+            windows_and_iconised = HC.PLATFORM_WINDOWS and parent.IsIconized()
             
-            new_options = HG.client_controller.GetNewOptions()
+            possibly_on_hidden_virtual_desktop = not ClientGUITopLevelWindows.MouseIsOnMyDisplay( parent )
+            
+            going_to_bug_out_at_hide_or_show = windows_and_iconised or possibly_on_hidden_virtual_desktop
+            
+            new_options = HG.client_controller.new_options
             
             if new_options.GetBoolean( 'hide_message_manager_on_gui_iconise' ):
                 
@@ -661,7 +719,7 @@ class PopupMessageManager( wx.Frame ):
                 
                 if parent.IsShown():
                     
-                    my_position = parent.ClientToScreenXY( my_x, my_y )
+                    my_position = parent.ClientToScreen( ( my_x, my_y ) )
                     
                     if my_position != self.GetPosition():
                         
@@ -684,6 +742,8 @@ class PopupMessageManager( wx.Frame ):
                         
                         self.Layout()
                         
+                        self.Refresh()
+                        
                     
                 
             else:
@@ -704,7 +764,7 @@ class PopupMessageManager( wx.Frame ):
             
             wx.MessageBox( text )
             
-            self._timer.Stop()
+            self._update_job.Cancel()
             
             self.CleanBeforeDestroy()
             
@@ -712,11 +772,79 @@ class PopupMessageManager( wx.Frame ):
             
         
     
+    def _GetAllMessageJobKeys( self ):
+        
+        job_keys = []
+        
+        sizer_items = self._message_vbox.GetChildren()
+        
+        for sizer_item in sizer_items:
+            
+            message_window = sizer_item.GetWindow()
+            
+            job_key = message_window.GetJobKey()
+            
+            job_keys.append( job_key )
+            
+        
+        job_keys.extend( self._pending_job_keys )
+        
+        return job_keys
+        
+    
+    def _TryToMergeMessage( self, job_key ):
+        
+        if not job_key.HasVariable( 'popup_files_mergable' ):
+            
+            return False
+            
+        
+        result = job_key.GetIfHasVariable( 'popup_files' )
+        
+        if result is not None:
+            
+            ( hashes, name ) = result
+            
+            existing_job_keys = self._GetAllMessageJobKeys()
+            
+            for existing_job_key in existing_job_keys:
+                
+                if existing_job_key.HasVariable( 'popup_files_mergable' ):
+                    
+                    result = existing_job_key.GetIfHasVariable( 'popup_files' )
+                    
+                    if result is not None:
+                        
+                        ( existing_hashes, existing_name ) = result
+                        
+                        if existing_name == name:
+                            
+                            if isinstance( existing_hashes, list ):
+                                
+                                existing_hashes.extend( hashes )
+                                
+                            elif isinstance( existing_hashes, set ):
+                                
+                                existing_hashes.update( hashes )
+                                
+                            
+                            return True
+                            
+                        
+                    
+                
+            
+        
+        return False
+        
+    
     def _Update( self ):
         
         if HG.view_shutdown:
             
-            self._timer.Stop()
+            self._update_job.Cancel()
+            
+            self.CleanBeforeDestroy()
             
             self.Destroy()
             
@@ -748,9 +876,19 @@ class PopupMessageManager( wx.Frame ):
         
         try:
             
+            was_merged = self._TryToMergeMessage( job_key )
+            
+            if was_merged:
+                
+                return
+                
+            
             self._pending_job_keys.append( job_key )
             
-            self._CheckPending()
+            if ClientGUITopLevelWindows.MouseIsOnMyDisplay( self.GetParent() ):
+                
+                self._CheckPending()
+                
             
         except:
             
@@ -827,19 +965,20 @@ class PopupMessageManager( wx.Frame ):
         self._SizeAndPositionAndShow()
         
     
-    def TIMEREvent( self, event ):
+    def REPEATINGUpdate( self ):
         
         try:
             
-            self._Update()
-            
-        except wx.PyDeadObjectError:
-            
-            self._timer.Stop()
+            if ClientGUITopLevelWindows.MouseIsOnMyDisplay( self.GetParent() ):
+                
+                self._Update()
+                
+                self._CheckPending()
+                
             
         except:
             
-            self._timer.Stop()
+            self._update_job.Cancel()
             
             raise
             
@@ -857,17 +996,49 @@ class PopupMessageDialogPanel( ClientGUIScrolledPanels.ReviewPanelVetoable ):
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._message_window, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( self._message_window, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
-        self.Bind( wx.EVT_TIMER, self.TIMEREvent )
+        self._windows_minimised = []
         
-        self._timer = wx.Timer( self )
-        
-        self._timer.Start( 500, wx.TIMER_CONTINUOUS )
+        self._MinimiseOtherWindows()
         
         self._message_pubbed = False
+        
+        self._update_job = HG.client_controller.CallRepeatingWXSafe( self, 0.5, 0.25, self.REPEATINGUpdate )
+        
+    
+    def _MinimiseOtherWindows( self ):
+        
+        for tlw in wx.GetTopLevelWindows():
+            
+            if tlw == self:
+                
+                continue
+                
+            
+            if not isinstance( tlw, ( ClientGUITopLevelWindows.Frame, ClientGUITopLevelWindows.NewDialog ) ):
+                
+                continue
+                
+            
+            import ClientGUI
+            
+            if isinstance( tlw, ClientGUI.FrameGUI ):
+                
+                continue
+                
+            
+            if not tlw.IsShown() or tlw.IsIconized():
+                
+                continue
+                
+            
+            tlw.Iconize()
+            
+            self._windows_minimised.append( tlw )
+            
         
     
     def _ReleaseMessage( self ):
@@ -878,6 +1049,18 @@ class PopupMessageDialogPanel( ClientGUIScrolledPanels.ReviewPanelVetoable ):
             
             self._message_pubbed = True
             
+            self._RestoreOtherWindows()
+            
+        
+    
+    def _RestoreOtherWindows( self ):
+        
+        for tlw in self._windows_minimised:
+            
+            tlw.Restore()
+            
+        
+        self._windows_minimised = []
         
     
     def _Update( self ):
@@ -923,18 +1106,16 @@ class PopupMessageDialogPanel( ClientGUIScrolledPanels.ReviewPanelVetoable ):
                 
             else:
                 
-                wx.MessageBox( 'Unfortunately, this job cannot be cancelled. If it really is taking too long, please kill the client through task manager.' )
+                raise HydrusExceptions.VetoException( 'Unfortunately, this job cannot be cancelled. If it really is taking too long, please kill the client through task manager.' )
                 
             
         
     
-    def TIMEREvent( self, event ):
+    def REPEATINGUpdate( self ):
         
         try:
             
             if self._job_key.IsDone():
-                
-                self._timer.Stop()
                 
                 parent = self.GetParent()
                 
@@ -942,21 +1123,15 @@ class PopupMessageDialogPanel( ClientGUIScrolledPanels.ReviewPanelVetoable ):
                     
                     self.GetParent().DoOK()
                     
-            
-                self._timer.Start( 500, wx.TIMER_CONTINUOUS )
                 
             else:
                 
                 self._Update()
                 
             
-        except wx.PyDeadObjectError:
-            
-            self._timer.Stop()
-            
         except:
             
-            self._timer.Stop()
+            self._update_job.Cancel()
             
             raise
             

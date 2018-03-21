@@ -20,20 +20,20 @@ class HydrusLogger( object ):
         
         self._problem_with_previous_stdout = False
         
+        self._OpenLog()
+        
         sys.stdout = self
         sys.stderr = self
-        
-        self._OpenLog()
         
         return self
         
     
     def __exit__( self, exc_type, exc_val, exc_tb ):
         
-        self._CloseLog()
-        
         sys.stdout = self._previous_sys_stdout
         sys.stderr = self._previous_sys_stderr
+        
+        self._CloseLog()
         
         return False
         
@@ -45,7 +45,7 @@ class HydrusLogger( object ):
     
     def _GetLogPath( self ):
         
-        current_time_struct = time.gmtime()
+        current_time_struct = time.localtime()
         
         ( current_year, current_month ) = ( current_time_struct.tm_year, current_time_struct.tm_mon )
         
@@ -110,7 +110,7 @@ class HydrusLogger( object ):
                 
             else:
                 
-                prefix = time.strftime( '%Y/%m/%d %H:%M:%S: ', time.localtime() )
+                prefix = time.strftime( '%Y/%m/%d %H:%M:%S: ' )
                 
             
             message = prefix + value

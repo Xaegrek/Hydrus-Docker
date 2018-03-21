@@ -206,7 +206,14 @@ def ParseFileArguments( path ):
     
     try:
         
-        ( size, mime, width, height, duration, num_frames, num_words ) = HydrusFileHandling.GetFileInfo( path )
+        mime = HydrusFileHandling.GetMime( path )
+        
+        if mime in HC.IMAGES and HydrusImageHandling.IsDecompressionBomb( path ):
+            
+            raise HydrusExceptions.ForbiddenException( 'File seemed to be a Decompression Bomb!' )
+            
+        
+        ( size, mime, width, height, duration, num_frames, num_words ) = HydrusFileHandling.GetFileInfo( path, mime )
         
     except HydrusExceptions.SizeException:
         
@@ -238,7 +245,7 @@ def ParseFileArguments( path ):
         
         try:
             
-            thumbnail = HydrusFileHandling.GenerateThumbnail( path )
+            thumbnail = HydrusFileHandling.GenerateThumbnail( path, mime )
             
         except Exception as e:
             
@@ -425,6 +432,11 @@ class HydrusResource( Resource ):
         
         self._CleanUpTempFile( request )
         
+        if request.channel is None:
+            
+            raise HydrusExceptions.ServerException( 'Channel was closed! Probably a connectionLost that was not caught!' )
+            
+        
         response_context = request.hydrus_response_context
         
         status_code = response_context.GetStatusCode()
@@ -445,11 +457,6 @@ class HydrusResource( Resource ):
             size = os.path.getsize( path )
             
             mime = response_context.GetMime()
-            
-            if mime == HC.APPLICATION_UNKNOWN:
-                
-                mime = HydrusFileHandling.GetMime( path )
-                
             
             content_type = HC.mime_string_lookup[ mime ]
             
@@ -554,11 +561,20 @@ class HydrusResource( Resource ):
         try: HydrusData.DebugPrint( failure.getTraceback() )
         except: pass
         
-        try: request.write( failure.getTraceback() )
-        except: pass
+        if request.channel is not None:
+            
+            try: request.setResponseCode( 500 )
+            except: pass
+            
+            try: request.write( failure.getTraceback() )
+            except: pass
+            
         
-        try: request.finish()
-        except: pass
+        if not request.finished:
+            
+            try: request.finish()
+            except: pass
+            
         
     
     def _errbackHandleProcessingError( self, failure, request ):
@@ -584,7 +600,7 @@ class HydrusResource( Resource ):
             
             response_context = ResponseContext( 403, mime = default_mime, body = default_encoding( failure.value ) )
             
-        elif failure.type in ( HydrusExceptions.NotFoundException, HydrusExceptions.DataMissing ):
+        elif failure.type in ( HydrusExceptions.NotFoundException, HydrusExceptions.DataMissing, HydrusExceptions.FileMissingException ):
             
             response_context = ResponseContext( 404, mime = default_mime, body = default_encoding( failure.value ) )
             

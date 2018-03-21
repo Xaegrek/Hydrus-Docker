@@ -418,7 +418,7 @@ class TestBandwidthTracker( unittest.TestCase ):
         
         bandwidth_tracker = HydrusNetworking.BandwidthTracker()
         
-        self.assertEqual( bandwidth_tracker.GetCurrentMonthSummary(), 'used 0.0B in 0 requests this month' )
+        self.assertEqual( bandwidth_tracker.GetCurrentMonthSummary(), 'used 0B in 0 requests this month' )
         
         now = HydrusData.GetNow()
         
@@ -447,7 +447,7 @@ class TestBandwidthTracker( unittest.TestCase ):
             bandwidth_tracker.ReportDataUsed( 1024 )
             bandwidth_tracker.ReportRequestUsed()
             
-            self.assertEqual( bandwidth_tracker.GetCurrentMonthSummary(), 'used 1024B in 1 requests this month' )
+            self.assertEqual( bandwidth_tracker.GetCurrentMonthSummary(), 'used 1.0KB in 1 requests this month' )
             
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 0 ), 0 )
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_REQUESTS, 0 ), 0 )
@@ -477,10 +477,10 @@ class TestBandwidthTracker( unittest.TestCase ):
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 0 ), 0 )
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_REQUESTS, 0 ), 0 )
             
-            self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 1 ), 204 )
+            self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 1 ), 0 )
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_REQUESTS, 1 ), 0 )
             
-            self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 2 ), 204 )
+            self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 2 ), 0 )
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_REQUESTS, 2 ), 0 )
             
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 6 ), 1024 )
@@ -505,10 +505,10 @@ class TestBandwidthTracker( unittest.TestCase ):
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 0 ), 0 )
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_REQUESTS, 0 ), 0 )
             
-            self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 1 ), 217 )
+            self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 1 ), 64 )
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_REQUESTS, 1 ), 2 )
             
-            self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 2 ), 217 )
+            self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 2 ), 64 )
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_REQUESTS, 2 ), 2 )
             
             self.assertEqual( bandwidth_tracker.GetUsage( HC.BANDWIDTH_TYPE_DATA, 6 ), 1088 )

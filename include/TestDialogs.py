@@ -1,8 +1,10 @@
 import ClientConstants as CC
 import ClientDefaults
 import ClientGUIDialogs
+import ClientGUIScrolledPanelsEdit
 import ClientGUIScrolledPanelsManagement
 import ClientGUITopLevelWindows
+import ClientThreading
 import collections
 import HydrusConstants as HC
 import os
@@ -11,12 +13,18 @@ import unittest
 import wx
 import HydrusGlobals as HG
 
-def HitButton( button ): wx.PostEvent( button, wx.CommandEvent( wx.EVT_BUTTON.typeId, button.GetId() ) )
-
-def HitCancelButton( window ): wx.PostEvent( window, wx.CommandEvent( wx.EVT_BUTTON.typeId, wx.ID_CANCEL ) )
-
-def HitOKButton( window ): wx.PostEvent( window, wx.CommandEvent( wx.EVT_BUTTON.typeId, wx.ID_OK ) )
-
+def HitButton( button ):
+    
+    wx.QueueEvent( button, wx.CommandEvent( commandEventType = wx.EVT_BUTTON.typeId, id = button.GetId() ) )
+    
+def HitCancelButton( window ):
+    
+    wx.QueueEvent( window, wx.CommandEvent( commandEventType = wx.EVT_BUTTON.typeId, id = wx.ID_CANCEL ) )
+    
+def HitOKButton( window ):
+    
+    wx.QueueEvent( window, wx.CommandEvent( commandEventType = wx.EVT_BUTTON.typeId, id = wx.ID_OK ) )
+    
 def CancelChildDialog( window ):
     
     children = window.GetChildren()
@@ -40,16 +48,14 @@ def OKChildDialog( window ):
             HitOKButton( child )
             
         
-
+    
 def PressKey( window, key ):
     
-    event = wx.KeyEvent( wx.EVT_KEY_DOWN.typeId )
+    window.SetFocus()
     
-    event.m_keyCode = key
-    event.SetEventObject( window )
-    event.SetId( window.GetId() )
+    uias = wx.UIActionSimulator()
     
-    wx.PostEvent( window, event )
+    uias.Char( key )
     
 class TestDBDialogs( unittest.TestCase ):
     
@@ -69,21 +75,19 @@ class TestDBDialogs( unittest.TestCase ):
     
     def test_dialog_manage_subs( self ):
         
-        HG.test_controller.SetRead( 'serialisable_named', [] )
-        
         title = 'subs test'
         
-        with ClientGUITopLevelWindows.DialogManage( None, title ) as dlg:
+        with ClientGUITopLevelWindows.DialogEdit( None, title ) as dlg:
             
-            panel = ClientGUIScrolledPanelsManagement.ManageSubscriptionsPanel( dlg )
+            panel = ClientGUIScrolledPanelsEdit.EditSubscriptionsPanel( dlg, [] )
             
             dlg.SetPanel( panel )
             
-            wx.CallAfter( panel.Add )
+            HG.test_controller.CallLaterWXSafe( dlg, 2, panel.Add )
             
-            wx.CallLater( 2000, OKChildDialog, panel )
+            HG.test_controller.CallLaterWXSafe( dlg, 4, OKChildDialog, panel )
             
-            wx.CallLater( 4000, HitCancelButton, dlg )
+            HG.test_controller.CallLaterWXSafe( dlg, 6, HitCancelButton, dlg )
             
             result = dlg.ShowModal()
             
@@ -167,8 +171,8 @@ class TestNonDBDialogs( unittest.TestCase ):
         
         with ClientGUIDialogs.DialogSelectFromList( None, 'select from a list of strings', list_of_tuples ) as dlg:
             
-            wx.CallLater( 500, dlg._list.Select, 1 )
-            wx.CallLater( 1000, PressKey, dlg._list, wx.WXK_RETURN )
+            HG.test_controller.CallLaterWXSafe( self, 0.5, dlg._list.Select, 1 )
+            HG.test_controller.CallLaterWXSafe( self, 1, PressKey, dlg._list, wx.WXK_RETURN )
             
             result = dlg.ShowModal()
             

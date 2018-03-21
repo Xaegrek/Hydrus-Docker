@@ -1,12 +1,16 @@
+import calendar
 import ClientConstants as CC
 import ClientData
 import ClientTags
+import datetime
 import HydrusConstants as HC
 import HydrusData
+import HydrusExceptions
 import HydrusGlobals as HG
 import HydrusSerialisable
 import HydrusTags
 import re
+import time
 import wx
 
 IGNORED_TAG_SEARCH_CHARACTERS = u'[](){}"\''
@@ -263,6 +267,7 @@ class FileQueryResult( object ):
 class FileSearchContext( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_FILE_SEARCH_CONTEXT
+    SERIALISABLE_NAME = 'File Search Context'
     SERIALISABLE_VERSION = 1
     
     def __init__( self, file_service_key = CC.COMBINED_FILE_SERVICE_KEY, tag_service_key = CC.COMBINED_TAG_SERVICE_KEY, include_current_tags = True, include_pending_tags = True, predicates = None ):
@@ -426,7 +431,7 @@ class FileSystemPredicates( object ):
         
         self._duplicate_predicates = []
         
-        new_options = HG.client_controller.GetNewOptions()
+        new_options = HG.client_controller.new_options
         
         forced_search_limit = new_options.GetNoneableInteger( 'forced_search_limit' )
         
@@ -454,20 +459,59 @@ class FileSystemPredicates( object ):
             
             if predicate_type == HC.PREDICATE_TYPE_SYSTEM_AGE:
                 
-                ( operator, years, months, days, hours ) = value
+                ( operator, age_type, age_value ) = value
                 
-                age = ( ( ( ( ( ( ( years * 12 ) + months ) * 30 ) + days ) * 24 ) + hours ) * 3600 )
-                
-                now = HydrusData.GetNow()
-                
-                # this is backwards because we are talking about age, not timestamp
-                
-                if operator == '<': self._common_info[ 'min_timestamp' ] = now - age
-                elif operator == '>': self._common_info[ 'max_timestamp' ] = now - age
-                elif operator == u'\u2248':
+                if age_type == 'delta':
                     
-                    self._common_info[ 'min_timestamp' ] = now - int( age * 1.15 )
-                    self._common_info[ 'max_timestamp' ] = now - int( age * 0.85 )
+                    ( years, months, days, hours ) = age_value
+                    
+                    age = ( ( ( ( ( ( ( years * 12 ) + months ) * 30 ) + days ) * 24 ) + hours ) * 3600 )
+                    
+                    now = HydrusData.GetNow()
+                    
+                    # this is backwards (less than means min timestamp) because we are talking about age, not timestamp
+                    
+                    if operator == '<':
+                        
+                        self._common_info[ 'min_timestamp' ] = now - age
+                        
+                    elif operator == '>':
+                        
+                        self._common_info[ 'max_timestamp' ] = now - age
+                        
+                    elif operator == u'\u2248':
+                        
+                        self._common_info[ 'min_timestamp' ] = now - int( age * 1.15 )
+                        self._common_info[ 'max_timestamp' ] = now - int( age * 0.85 )
+                        
+                    
+                elif age_type == 'date':
+                    
+                    ( year, month, day ) = age_value
+                    
+                    # convert this dt, which is in local time, to a gmt timestamp
+                    
+                    day_dt = datetime.datetime( year, month, day )
+                    timestamp = int( time.mktime( day_dt.timetuple() ) )
+                    
+                    if operator == '<':
+                        
+                        self._common_info[ 'max_timestamp' ] = timestamp
+                        
+                    elif operator == '>':
+                        
+                        self._common_info[ 'min_timestamp' ] = timestamp + 86400
+                        
+                    elif operator == '=':
+                        
+                        self._common_info[ 'min_timestamp' ] = timestamp
+                        self._common_info[ 'max_timestamp' ] = timestamp + 86400
+                        
+                    elif operator == u'\u2248':
+                        
+                        self._common_info[ 'min_timestamp' ] = timestamp - 86400 * 30
+                        self._common_info[ 'max_timestamp' ] = timestamp + 86400 * 30
+                        
                     
                 
             
@@ -707,7 +751,8 @@ class FileSystemPredicates( object ):
 class Predicate( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_PREDICATE
-    SERIALISABLE_VERSION = 1
+    SERIALISABLE_NAME = 'File Search Predicate'
+    SERIALISABLE_VERSION = 2
     
     def __init__( self, predicate_type = None, value = None, inclusive = True, min_current_count = 0, min_pending_count = 0, max_current_count = None, max_pending_count = None ):
         
@@ -797,6 +842,12 @@ class Predicate( HydrusSerialisable.SerialisableBase ):
             
             self._value = ( serialisable_hash.decode( 'hex' ), hash_type )
             
+        elif self._predicate_type == HC.PREDICATE_TYPE_SYSTEM_AGE:
+            
+            ( operator, age_type, age_value ) = serialisable_value
+            
+            self._value = ( operator, age_type, tuple( age_value ) )
+            
         else:
             
             self._value = serialisable_value
@@ -805,6 +856,25 @@ class Predicate( HydrusSerialisable.SerialisableBase ):
         if isinstance( self._value, list ):
             
             self._value = tuple( self._value )
+            
+        
+    
+    def _UpdateSerialisableInfo( self, version, old_serialisable_info ):
+        
+        if version == 1:
+            
+            ( predicate_type, serialisable_value, inclusive ) = old_serialisable_info
+            
+            if predicate_type == HC.PREDICATE_TYPE_SYSTEM_AGE:
+                
+                ( operator, years, months, days, hours ) = serialisable_value
+                
+                serialisable_value = ( operator, 'delta', ( years, months, days, hours ) )
+                
+            
+            new_serialisable_info = ( predicate_type, serialisable_value, inclusive )
+            
+            return ( 2, new_serialisable_info )
             
         
     
@@ -1026,13 +1096,71 @@ class Predicate( HydrusSerialisable.SerialisableBase ):
                 
             elif self._predicate_type == HC.PREDICATE_TYPE_SYSTEM_AGE:
                 
-                base = u'age'
+                base = u'time imported'
                 
                 if self._value is not None:
                     
-                    ( operator, years, months, days, hours ) = self._value
+                    ( operator, age_type, age_value ) = self._value
                     
-                    base += u' ' + operator + u' ' + str( years ) + u'y' + str( months ) + u'm' + str( days ) + u'd' + str( hours ) + u'h'
+                    if age_type == 'delta':
+                        
+                        ( years, months, days, hours ) = age_value
+                        
+                        DAY = 86400
+                        MONTH = DAY * 30
+                        YEAR = MONTH * 12
+                        
+                        time_delta = 0
+                        
+                        time_delta += hours * 3600
+                        time_delta += days * DAY
+                        time_delta += months * MONTH
+                        time_delta += years * YEAR
+                        
+                        if operator == '<':
+                            
+                            pretty_operator = u'since '
+                            
+                        elif operator == '>':
+                            
+                            pretty_operator = u'before '
+                            
+                        elif operator == u'\u2248':
+                            
+                            pretty_operator = u'around '
+                            
+                        
+                        base += u': ' + pretty_operator + HydrusData.ConvertTimeDeltaToPrettyString( time_delta ) + u' ago'
+                        
+                    elif age_type == 'date':
+                        
+                        ( year, month, day ) = age_value
+                        
+                        dt = datetime.datetime( year, month, day )
+                        
+                        # make a timestamp (IN GMT SECS SINCE 1970) from the local meaning of 2018/02/01
+                        timestamp = int( time.mktime( dt.timetuple() ) )
+                        
+                        if operator == '<':
+                            
+                            pretty_operator = u'before '
+                            
+                        elif operator == '>':
+                            
+                            pretty_operator = u'since '
+                            
+                        elif operator == '=':
+                            
+                            pretty_operator = u'on the day of '
+                            
+                        elif operator == u'\u2248':
+                            
+                            pretty_operator = u'a month either side of '
+                            
+                        
+                        # convert this GMT TIMESTAMP to a pretty local string
+                        base += u': ' + pretty_operator + HydrusData.ConvertTimestampToPrettyTime( timestamp, include_24h_time = False )
+                        
                     
                 
             elif self._predicate_type == HC.PREDICATE_TYPE_SYSTEM_NUM_PIXELS:
@@ -1101,52 +1229,59 @@ class Predicate( HydrusSerialisable.SerialisableBase ):
                     
                     ( operator, value, service_key ) = self._value
                     
-                    service = HG.client_controller.services_manager.GetService( service_key )
-                    
-                    service_type = service.GetServiceType()
-                    
-                    pretty_value = HydrusData.ToUnicode( value )
-                    
-                    if service_type == HC.LOCAL_RATING_LIKE:
+                    try:
                         
-                        if value == 0:
+                        service = HG.client_controller.services_manager.GetService( service_key )
+                        
+                        service_type = service.GetServiceType()
+                        
+                        pretty_value = HydrusData.ToUnicode( value )
+                        
+                        if service_type == HC.LOCAL_RATING_LIKE:
                             
-                            pretty_value = 'dislike'
+                            if value == 0:
+                                
+                                pretty_value = 'dislike'
+                                
+                            elif value == 1:
+                                
+                                pretty_value = 'like'
+                                
                             
-                        elif value == 1:
+                        elif service_type == HC.LOCAL_RATING_NUMERICAL:
                             
-                            pretty_value = 'like'
+                            if isinstance( value, float ):
+                                
+                                allow_zero = service.AllowZero()
+                                num_stars = service.GetNumStars()
+                                
+                                if allow_zero:
+                                    
+                                    star_range = num_stars
+                                    
+                                else:
+                                    
+                                    star_range = num_stars - 1
+                                    
+                                
+                                pretty_x = int( round( value * star_range ) )
+                                pretty_y = num_stars
+                                
+                                if not allow_zero:
+                                    
+                                    pretty_x += 1
+                                    
+                                
+                                pretty_value = HydrusData.ConvertValueRangeToPrettyString( pretty_x, pretty_y )
+                                
                             
                         
-                    elif service_type == HC.LOCAL_RATING_NUMERICAL:
+                        base += u' for ' + service.GetName() + u' ' + operator + u' ' + pretty_value
                         
-                        if isinstance( value, float ):
-                            
-                            allow_zero = service.AllowZero()
-                            num_stars = service.GetNumStars()
-                            
-                            if allow_zero:
-                                
-                                star_range = num_stars
-                                
-                            else:
-                                
-                                star_range = num_stars - 1
-                                
-                            
-                            pretty_x = int( round( value * star_range ) )
-                            pretty_y = num_stars
-                            
-                            if not allow_zero:
-                                
-                                pretty_x += 1
-                                
-                            
-                            pretty_value = HydrusData.ConvertValueRangeToPrettyString( pretty_x, pretty_y )
-                            
+                    except HydrusExceptions.DataMissing:
                         
-                    
-                    base += u' for ' + service.GetName() + u' ' + operator + u' ' + pretty_value
+                        base = u'system:unknown rating service system predicate'
+                        
                     
                 
             elif self._predicate_type == HC.PREDICATE_TYPE_SYSTEM_SIMILAR_TO:
@@ -1176,9 +1311,16 @@ class Predicate( HydrusSerialisable.SerialisableBase ):
                     if current_or_pending == HC.CONTENT_STATUS_PENDING: base += u' pending to '
                     else: base += u' currently in '
                     
-                    service = HG.client_controller.services_manager.GetService( service_key )
-                    
-                    base += service.GetName()
+                    try:
+                        
+                        service = HG.client_controller.services_manager.GetService( service_key )
+                        
+                        base += service.GetName()
+                        
+                    except HydrusExceptions.DataMissing:
+                        
+                        base = u'unknown file service system predicate'
+                        
                     
                 
             elif self._predicate_type == HC.PREDICATE_TYPE_SYSTEM_TAG_AS_NUMBER:

@@ -8,6 +8,1042 @@
 		<div class="content">
 			<h3>changelog</h3>
 			<ul>
+				<li><h3>version 298</h3></li>
+				<ul>
+					<li>wrote a new 'bytescontrol' and related noneablebytescontrol that allows for a uniform way to choose a bytes size value with a wider range--and deployed it all over the place</li>
+					<li>hitting a mapped shortcut for 'manage file notes' should now ok the 'manage file notes' dialog as well as open it</li>
+					<li>the manage file notes text control will now start with its caret at the end of the document</li>
+					<li>manage siblings/parents now state how many pairs they have</li>
+					<li>as an experiment, manage parents now only lists pertinent information in its listctrl. this is hacky but potentially a big improvement to the workflow here, feedback would be appreciated</li>
+					<li>added a new menu entry, 'network->pause->all new network traffic', which will indefinitely pause any new network jobs. this value will persist through a restart</li>
+					<li>'pause subscriptions' is moved from 'services' to 'network'</li>
+					<li>'pause import/export folders' is moved to 'file' and all the import/export folder stuff is sent down to its own submenu</li>
+					<li>in lieu of proper session inspection gui, added some debug 'reset login' entries to the network menu for pixiv and hf</li>
+					<li>if a page has files but none are selected, it will now say the total size in the status bar</li>
+					<li>the edit bandwidth rules control and its subsidiary dialog use some saner and more user-friendly layout and presentation</li>
+					<li>the previous search distance on the 'review bandwidth usage' frame is now remembered</li>
+					<li>fixed some bad logic where a 'copy_bmp' event could trigger despite the current media being None or a non-static image</li>
+					<li>you can no longer open multiple copies of the subscriptions or import/export folder manage dialogs if you hit the menu entry multiple times while the first is waiting for the jobs to finish</li>
+					<li>like import folders and subscriptions, manage export folders now waits for currently running export folders to quit before opening</li>
+					<li>export folders run lighter and quit faster on client shutdown</li>
+					<li>the domain manager will give a better error if a URL submitted to it lacks a schema (the http or https part)</li>
+					<li>fixed a bunch of unicode error handling</li>
+					<li>fixed an issue with similar files metadata orphans prohibiting new file imports</li>
+					<li>finished up a simple shared shortcut processing object and replaced most old temp duplicate shortcut code with it</li>
+					<li>misc ui cleanup</li>
+					<li>misc text rendering fixes</li>
+					<li>misc shortcut code refactoring</li>
+				</ul>
+				<li><h3>version 297</h3></li>
+				<ul>
+					<li>finished a prototype 'file notes' system. thumbnails and media viewer canvas now support 'manage->file notes' in their right-click menus. this launches a simple text box which will save its contents to db</li>
+					<li>added 'manage_file_notes' shortcut to the 'media' shortcut set</li>
+					<li>tag summary generators now have a simple show/hide checkbox and (for thumbnails) custom colours for background and text including alpha channel!</li>
+					<li>fixed a variety of timing and display logic related to subscription query DEAD vs next check time calculation</li>
+					<li>all currently dead subscription queries will be revived on update, just in case they were formerly set dead by accident</li>
+					<li>the 'fetch tags even if url known and file already in db' option is moved from the download/subscription panel's cog icon to tag import options</li>
+					<li>cleaned up tag import options layout, controls, internal workflow, and help button</li>
+					<li>added 'select all/none' buttons to tag import options panels with multiple namespaces</li>
+					<li>if a subscription is blocked by bandwidth, the manage subscriptions dialog will display that in its 'recent error/delay' column</li>
+					<li>the edit subscription dialog will show similar bandwidth blocking info, on a per-query basis, under a new 'recent delays' column</li>
+					<li>the review bandwidth usage panel will no longer show some unusual results by default that you can see with 'show all' hit anyway</li>
+					<li>the review bandwidth usage panel will show the usage at the current search distance in a new column</li>
+					<li>the review bandiwdth usage panel will show number of requests after data usage. this might be info-overload, so I might alter the syntax or roll it back entirely</li>
+					<li>fixed an issue with hentai foundry parser pulling images placed in the image description area instead of main image. this particularly affected the artist 'teku'</li>
+					<li>tags for deviant art and tumblr and thread watchers, which were formerly stored in volatile session memory--meaning half-completed import queues were losing their tags through a program restart--are now saved to the new import object directly</li>
+					<li>removed all the old volatile session memory patch code</li>
+					<li>added the new import object through a larger part of the parsing pipeline</li>
+					<li>deleted the old remains of the giphy parser--if it comes back, it'll all be rewritten in the new system</li>
+					<li>harmonised some other import pipeline code to the new system</li>
+					<li>added a new 'management and preview panels' submenu to the 'pages' menu</li>
+					<li>added an option to control 'save sash positions on close' to this menu</li>
+					<li>added an entry to force-save the current sash positions to this menu</li>
+					<li>added an entry to 'restore' the currently saved sash positions to all pages to this menu (this is useful if your window resizes real small and all your pages get crushed up)</li>
+					<li>rejiggered how URL Classes are matched with URLs to make sure some Post URLs are not lost (this was affecting Hentai Foundry Post URLs, which were sometimes not displaying in the media viewer despite matching)</li>
+					<li>fixed an issue where the duplicate filter page's jobs would not trigger an update after a job finished</li>
+					<li>fixed an outside chance of a crash after running a duplicate filter page job</li>
+					<li>improved how strings are coerced to unicode--now the preferred system encoding will be tried before utf-16, which should improve support for é-type characters in various non-unicode sources (like neighbouring .txt files)</li>
+					<li>fixed an issue with the client's local booru and flash files (and some other file fetching and mime reporting is a bit faster and neater overall)</li>
+					<li>the options should be more reliable about redrawing all thumbnail banner summaries on an option ok now</li>
+					<li>the options->media->media zooms option will now remove any <=0.0 values when it saves</li>
+					<li>fixed up some old test code</li>
+					<li>improved how some thread-to-gui update reporting code works</li>
+					<li>deleted some old network object code</li>
+					<li>converted manage subscriptions panel to an edit panel--a decoupling refactor I will likely ultimately make across the program</li>
+					<li>wrote a help page for content parsers</li>
+					<li>did the first half of a help page for page parsers</li>
+					<li>misc refactoring</li>
+					<li>misc cleanup</li>
+				</ul>
+				<li><h3>version 296</h3></li>
+				<ul>
+					<li>the 'allow decompression bombs' option is now moved to 'file import options'. it defaults to False</li>
+					<li>file import options now allow max size and max resolution rules. they default to None</li>
+					<li>file import options now allows a max gif size rule to deal with THE SFM COMMUNITY. it defaults to 32MB</li>
+					<li>file imports will give better quality errors if they fail due to file import option exclusion rules</li>
+					<li>file import fail errors will now also specify the incorrect amount--e.g. if a file is 64KB but the minimum limit is 256KB, it will state this in the error</li>
+					<li>wrote a bunch of unit tests to make sure the new complicated file import options object works good</li>
+					<li>finished the tag summary edit ui and added a new 'tag summaries' page to the options</li>
+					<li>you can set the thumbnail top, thumbnail bottom right, and media viewer top summaries here, and everything should link up right!</li>
+					<li>the old options to hide thumbnail top and thumbnail bottom right text are removed from the options->gui page</li>
+					<li>tag summaries now include pending tags again</li>
+					<li>tag summaries will order tags according to hydrus numeric tag sorting rules (0 < 0a < 0b < 1 < 9 < 10)</li>
+					<li>tag summaries will collapse namespace groups that all start with decimals into a "min-max" phrase instead of the whole list (so 'collecting' a chapter will list p1-23 for the page phrase instead of each number in turn)</li>
+					<li>fixed some potential error popups from the autocomplete dropdown when not in float mode (this hit non-windows users more often)</li>
+					<li>split the parser help pages up a bit more and updated the client ui html links</li>
+					<li>finished off the formulae help pages</li>
+					<li>updated to wx 4.0.1 on all platforms. it promises increased stability!</li>
+					<li>default tag import options are now moved to the 'importing' options panel, alongside the default file import options</li>
+					<li>the database will deal with and recover from rollback exceptions more reliably. rollback-loops should be fixed, but the original event will now also produce a request to restart the client (which will safely reset everything) anyway</li>
+					<li>improved how I create and layout the 'help for this panel -->' help buttons</li>
+					<li>the job scheduler now regularly checks for and clears out dead wx-related jobs (this saves a bit of memory)</li>
+					<li>cleaned up an old tag retrieval method that was wasting CPU. some larger pages with many thousands of tags should do tag calculation after selection and so on a bit faster</li>
+					<li>fixed a thread shutdown test that wasn't working until app shutdown time</li>
+					<li>improved some more thread shutdown code</li>
+					<li>deleted some old thread-inefficient calllater and wx-safe timer code</li>
+					<li>emergency server errors that occur during the response writing stage should be handled better by the client</li>
+					<li>emergency server errors are more robust in general serverside</li>
+					<li>improved the quality of the errors thrown by the new network engine's login system</li>
+					<li>improved some test timing and key press simulation code</li>
+					<li>misc refactoring</li>
+					<li>misc improvements</li>
+				</ul>
+				<li><h3>version 295</h3></li>
+				<ul>
+					<li>fixed the runtimeerror popups that would come up on restore from minimise or main gui move after the complete destruction of a general search page</li>
+					<li>cleaned up some main gui move code generally, and removed a memory leak on the way</li>
+					<li>file queries can now cancel at multiple checkpoints during the first phase, saving a bunch of CPU time on certain large queries that are replaced mid-search</li>
+					<li>after a file query has been going three seconds, a little 'stop' button will appear beside the regular autocomplete input. clicking this will cancel the current query! it will stop when it next hits one of the checkpoints above</li>
+					<li>the floating autocomplete dropdown should be less flickery in some circumstances</li>
+					<li>dejanked some more file query code</li>
+					<li>added a 'clear orphan file records' entry to the database->maintain menu. this looks for and purges orphan file rows as you may have seen a notification about recently. this mostly affects the duplicate filter system</li>
+					<li>fixed up the delete file code to be a bit more robust--it should lead to fewer orphans in future</li>
+					<li>all the parsing edit panels have new layout: they no longer have info panels but instead a help button that points to the html help, and the edit and test panels are now beside each other rather than in notebook pages</li>
+					<li>harmonised a bunch of the parser ui test panel code, refactored how the results are stored</li>
+					<li>the test panel now presents a better 'preview' of what it contains (the actual text control has like 64KB text limit on some OSes and has unreliable text encoding rules, so using it as the raw container for the example data has lead to problems), and we now read and write the example data with a couple of new copy to/paste from clipboard buttons</li>
+					<li>wrote another new test panel for subsidiary page parsers that does the separation formula stuff a bit better. the test results now come back for all posts as well, rather than just the first</li>
+					<li>added a new 'deeply_nested_dialog' frame key to options->gui for the parsing ui to better lay out five or six nested dialogs in a nice 'topleft' way</li>
+					<li>the 'topleft' frame padding is reduced from 50 to 24 pixels to better fit in deeply nested dialogs</li>
+					<li>misc parsing ui improvements and little fixes</li>
+					<li>the manage url classes and manager parsers dialogs now have a better 'add defaults' button that allows you to just select the defaults you want (by name) from a checklistbox</li>
+					<li>wrote a parser for 420chan and added it to the defaults. it should automatically add and link up when you update</li>
+					<li>if the install_dir/db directory is not writable-to (e.g. you have installed the program to a protected location like "C:\Program Files"), the client and server will default to ~/Hydrus as the db directory</li>
+					<li>wrote a new 'TagSummaryGenerator' class that will do 'bunch of tags'->'nice summary string' conversions for the thumbnail banners and export filenames</li>
+					<li>substituted some static tagsummarygenerators to do thumbnail banners</li>
+					<li>did the same for the media viewer top-center namespace summary</li>
+					<li>started some edit ui for tagsummarygenerators--I'll have some proper customisable stuff in the near future</li>
+					<li>moved the background memory maintenance and misc daemons to the new job scheduler, reducing thread count and idle CPU some more</li>
+					<li>added a debug 'show scheduled jobs' entry for the new job scheduler system</li>
+					<li>decompression bomb failures will no longer count towards a subscription's fail count, so having a bunch of them won't abandon a sync</li>
+					<li>fixed and otherwise improved a potential crash condition when a thumbnail panel closes while a menu is popup'd on it</li>
+					<li>to forestall this program instability, the thumbnail window will no longer replace while its menu is open. the behaviour after this delayed window delivery is slightly borked, but it isn't a crash so I'm ok with it for now</li>
+					<li>removed some other jank from the thumbnail media panel swap code</li>
+					<li>non-cancellable modal popups will no longer have the 'close' button. trying to close them with the dialog's X button will still give the 'sorry lad, can't cancel' error</li>
+					<li>rating and file service system predicates for services that no longer exist will now render a neat 'unknown x system predicate' presentation string rather than throwing an error</li>
+					<li>searches in 'all known tags'/'specific tag domain' no longer provide system:untagged, wew</li>
+					<li>some delayed events are now posted in a more thread-safe way</li>
+					<li>misc refactoring</li>
+				</ul>
+				<li><h3>version 294</h3></li>
+				<ul>
+					<li>fixed video scan</li>
+					<li>fixed up some import folder logic--they now run 'look for new files' checks separate from 'import anything still in the queue', so they can now catch up on outstanding files more easily</li>
+					<li>the ten minute file-processing break is reverted--import folders now just 'save' every ten minutes, to forestall lost work on a crash</li>
+					<li>import folders now have an explicit 'check regularly' checkbox to control whether you want it to check regularly or only when you tell it to. the paused status now means 'do not ever work'</li>
+					<li>import folders now make a 'working' popup, like subscriptions do, that shows new file discovery progress and found file import progress. it has a cancel button that will stop the current job and can be hidden in the import folder's options. existing import folders will default to ON for this, so you'll likely see one of these right after you update</li>
+					<li>import folders can now publish their files to a new page! this effectively cuts out the button step. furthermore, if a page already exists with the import folder's name (e.g. a previous page the import folder created is still around), the import folder will publish the new files to _that_ page, updating it</li>
+					<li>file popup buttons with the same name will now 'merge'! multiple work cycles of a subscription or import folder will now just update the first button rather than spamming several</li>
+					<li>running import folders will respond faster to a client shutdown event</li>
+					<li>wrote some better controller-level thread management, including surplus thread deletion--idle CPU should be reduced on import-busy clients</li>
+					<li>wrote some code to deal with sub-second times a bit better in certain places</li>
+					<li>finished off a new scheduled job queue that collapses an old multiple-thread-when-idle system down into just one</li>
+					<li>many things are moved to the new job scheduling system--all the old calllater calls, and the popup message timers as well</li>
+					<li>completely removed the old wx timers the autocomplete input was using, as they were just too much of a hassle. any crashing these were causing is now gone--it all works on the simpler scheduled job queue now</li>
+					<li>the autocomplete dropdowns are better at judging when to engage their timers and so now use far less idle CPU</li>
+					<li>fixed a crash that could occur sometime after starting a duplicate filter maintenance task from the dupe filter page</li>
+					<li>fixed several unlikely but plausible crashes on the admin-side of petition processing</li>
+					<li>wrote a bunch of help for the url classes and new parsing system--it isn't finished yet, but then neither is the new system!</li>
+					<li>if the client fails to initialise the db, it will now try to present the error in a bit of screenshottable-gui before the program quits</li>
+					<li>improved thread watcher error handling when the given url is unwatchable</li>
+					<li>lots of timer related cleanup and tiny fixes</li>
+					<li>misc fixes</li>
+				</ul>
+				<li><h3>version 293</h3></li>
+				<ul>
+					<li>fixed the issue with options dialog not opening again after a save--I apologise for the inconvenience</li>
+					<li>the default system:time imported predicate (as set in options) is reset to the default '< 7 days'</li>
+					<li>fixed another potential crash with the manage tags dialog (in fact with any dialog that has an embedded autocomplete or any other autocomplete with a non-floating dropdown list, such as the import file path tagging dialog)</li>
+					<li>the sankaku user-agent has been updated to be a generic Firefox string "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:56.0) Gecko/20100101 Firefox/56.0", which seems to work with their new rules. if your sank has been broken and you haven't touched the settings that do this stuff, your sank should be magically fixed on update</li>
+					<li>the default global hydrus user-agent has been updated to the more polite and compatible "Mozilla/5.0 (compatible; Hydrus Client)". if your previous global user-agent is currently 'hydrus client' (the old default), you'll be updated</li>
+					<li>import folders now deal with interruptions more skillfully and take a break and save their progress every ten minutes</li>
+					<li>the manage import folders dialog now waits properly for any currently running import folders to quit and save themselves before opening itself (like how the manage subs dialog does it)</li>
+					<li>import folders deal with some error states in a better way and are able to cancel out of their loops more reliably when an error occurs</li>
+					<li>added a new checkbox option to options->tags that lets your 'write' autocomplete inputs (ones where you can submit new tags, like in manage tags) select the first result with non-zero count by default. this means it will skip over the first result if it is just nonsense like 'boyp' that you typed to get the results</li>
+					<li>linked all the final behind the scenes stuff in the thread watcher together with the new parsing system. this stuff remains complicated and non-user-friendly, so please feel free to completely ignore it and the following batch of points:</li>
+					<li>-</li>
+					<li>wrote new url classes and parsers for 4chan and 8chan--they should all be automatically linked up on update</li>
+					<li>the new thread parsers will use the first part of the first post's comment if no subject is set</li>
+					<li>the domain manager can now cope with URL->API URL links</li>
+					<li>manage url class links now displays the current expected api pairs of URL class links and filters out what cannot be currently parsed as a result</li>
+					<li>manage url class links now only displays watchable urls in the bottom listctrl and permits parsers to be linked!</li>
+					<li>the domain manager can now try to link url classes with parsers based on example urls!</li>
+					<li>a button to fill in missing links is now available on the manage url class links panel</li>
+					<li>content parsers that produce urls now define different url types--file, post, and 'next gallery page'</li>
+					<li>content parsers can now parse a 'source timestamp' type</li>
+					<li>veto content parsers now use a StringMatch object to do their matching. existing veto content parsers will be updated and _should_ work about the same as before (unless the previous string was crazy in regex rules) using a regex match</li>
+					<li>html formulas now pick up the 'string' value more reliably in complicated or mangled html</li>
+					<li>html and json parsing formulas can now work without any rules, in which case they action the top level node (this is useful to replicate the json/html for subsidiary page parsing)</li>
+					<li>activated some of the new file import objects' features for the new parsing system--now, they store tags and known hashes as informed by what is parsed. this information is tested and used in import</li>
+					<li>the db can now test all the hash types--md5, sha1, sha256, sha512--during pre-import checking</li>
+					<li>the new parsing system now takes a temporary 'parsing context' that will eventually be able to receive and serve temporary variables but at the moment just holds a 'url' entry if the parser would like to use the url used to fetch the data anywhere</li>
+					<li>all the new parsing ui now has a button to edit the parsing context, and the example parsing context is saved to the topmost page parser object</li>
+					<li>wrote some url classes for 420chan.org--they will be added on update</li>
+					<li>fixed an issue with the 4chan thread url class</li>
+					<li>-</li>
+					<li>the standard new listctrl panel wrapper can now now provide a special 'export to pngs' for certain named objects that will quickly export one object per png</li>
+					<li>the 'import from png' dialog as launched from the standard new listctrl panel wrapper now allows multiple png selection</li>
+					<li>the default parsers (and now the url classes as well) are stored in install_dir/static/defaults. they are read from here when you create a db or ask to load from defaults, so feel free to play around with this</li>
+					<li>the manage services dialog now has an additional Yes/No warning/confirmation dialog if it expects to delete any services on dialog ok</li>
+					<li>page tabs escape mnemonic characters (typically '&', which in ui labelling rules makes the following character an underlined shortcut) more reliably</li>
+					<li>in an attempt to stop subs making so many separate small file popups, the subscription daemon will now only naturally check every four hours (previously one hour) and will wait up to ten minutes for bandwidth to free up before dumping out (previously 30 seconds). these values will be user-configurable in a future update</li>
+					<li>fixed import for some unusual apngs</li>
+					<li>corrected some more GMT/local time stuff with the new system:time imported 'date' mode</li>
+					<li>misc GMT/local time fixes (profile logs names themselves correctly, etc..)</li>
+					<li>improved how the thread watcher reports thread-check errors in unusual situations</li>
+					<li>fixed an issue generating network contexts when the initial domain is 'localhost'</li>
+					<li>improved some misc program stability</li>
+					<li>started a new job scheduler object to reduce idle thread count and CPU usage--will play around with it a bit more and see about integrating it in the coming weeks</li>
+				</ul>
+				<li><h3>version 292</h3></li>
+				<ul>
+					<li>extended system:age to support searching by fixed calendar date, e.g. "system:age > 2018/01/24"</li>
+					<li>'system:age' is also renamed to 'system:time imported' and presents nicer strings</li>
+					<li>I believe I have fixed the manage tags dialog crash</li>
+					<li>the manage tags dialog now loads related tags, file lookup script info, and recent tags off the main ui thread, meaning the dialog itself should launch much faster in almost all situations</li>
+					<li>cleaned up how a bunch of autocomplete<->manage tags events occur</li>
+					<li>'set_search_focus' works in the manage tags dialog again, drawing from the new shortcut system</li>
+					<li>fixed ctrl+scrollwheel on autocomplete entry, which now correctly scrolls the selection over the results again</li>
+					<li>cleaned up a bunch of the taglist scroll and selection code, particularly for tag children/parent selection events</li>
+					<li>fixed a potential crash bug initiated by en early exit from the export files dialog</li>
+					<li>fixed a potential crash bug initiated by an early petition processing page delete</li>
+					<li>fixed a potential crash bug initiated by an edit repository close during access key fetching</li>
+					<li>the thumbnail view should be a bit less jittery--the scrollbar should fade neater on mouseover, and maybe the thumbs are smoother as well (I turned off a now-superfluous double-buffering mode, please report any visual bugs)</li>
+					<li>added 'check_all_import_folders' to main_gui shortcut actions</li>
+					<li>menus off the main menubar that are out of date (this often happens to 'pages' after a session addition/delete) will now be disabled (greyed out) until they are back in sync</li>
+					<li>the duplicate filter now detects media it cannot display more carefully. if it runs across undisplayable media due to file orphan status, it will skip over it. if there is nothing else to display, it will ask the user to inform hydrus dev</li>
+					<li>added json support to the parsing engine!</li>
+					<li>wrote a new json parsing formula object</li>
+					<li>wrote a new 'compound' parsing formula object that combines multiple formulae together</li>
+					<li>wrote new panel for editing formulae with some cleaner button workflow</li>
+					<li>added multiple 'separated' content parsing solutions to page parsers and wrote all new gui to reflect that</li>
+					<li>expanded the new separated content parsing solutions to be full-blown nested sub-page-parsers, wew</li>
+					<li>put some more general work into the new parsing engine--the new page parser object now saves and serialises, so it can be imported and exported. I don't expect to change it much more, but don't rely on that! this is all still under construction</li>
+					<li>added 'file hash' content type to content parsers and improved ui support for when string conversion rules generate bytes data etc...</li>
+					<li>new parsing objects now render their parsable content correctly in the 'produces' column</li>
+					<li>misc cleanup of new and existing parsing dialogs</li>
+					<li>fixed the handling of escape/cancel events on the 'select from a list of strings' dialog</li>
+					<li>on update, users with a certain kind of orphaned file will be informed of the numbers and a request to inform hydrus dev</li>
+					<li>fixed exporting serialisable object to png, which was failing due to a bmp data change in the new wx</li>
+					<li>fixed a couple of places where I was switching GMT and local time around</li>
+					<li>deleted some old useless tag editing and commandevent code</li>
+				</ul>
+				<li><h3>version 291</h3></li>
+				<ul>
+					<li>expanded the permissible shortcut keys to all reasonable ASCII characters, such as comma and ampersand and the types of brackets</li>
+					<li>fixed a delayed crash sometimes caused by the file import frame (the one launched by dropping some files on the client or going file->import files)</li>
+					<li>the file import frame does its file parsing job in a generally more sensible way, particularly when new drops occur while parsing is ongoing</li>
+					<li>fixed a crash that could be initiated by the manage tags dialog setting the favourite tags late</li>
+					<li>fixed a crash that could be initiated by manage parents closing before results came in</li>
+					<li>fixed a rare possible crash that could be initiated by a review service panel delivering results late</li>
+					<li>when media pages load, they will be more thread-crash-polite to wx</li>
+					<li>wrote a new 'PageParser' object that will be the primary parser in the new downloader engine. this can deal with a variety of complicated parsing situations. it is still a work in progress, not yet ready for proper use</li>
+					<li>started new 'manage parsers' dialog for the new parsing system and arranged a bunch of things around that to make the eventual transition easier</li>
+					<li>edited some more old 'parsing scripts' ui to again make the transition easier. file lookup scripts will be converted to something new as we move to the new parsing system</li>
+					<li>fixed some bugs in contentparser instantiation</li>
+					<li>fixed a bug in the html tag rule edit dialog that wouldn't allow attribute pair editing</li>
+					<li>the names in the manage tags file lookup script dropdown are now sorted</li>
+					<li>removed some old redundant error-hiding code from the pubsub system</li>
+					<li>a common 'is my page closed' check is now a lot simpler and faster</li>
+					<li>fixed an edge shutdown bug where log messages were not able to be written to the log file</li>
+					<li>some media viewer objects delete themselves more safely</li>
+					<li>maybe fixed a rare menu refresh bug in linux</li>
+					<li>improved how hydrus deletes temp paths--if they are 'in use by another process', it will now put them aside and try again later. this error typically occurs when file mimetype parsing fails, and due to the error context hanging around, an open file handle is still in scope.</li>
+					<li>the client is better about recovering from missing tags in the db--in certain circumstances, it will now generate a 'unknown tag:random hex' as a simple placeholder that can be better used to investigate the error, rather than dumping out</li>
+					<li>downgraded os x opencv to 3.1.0 to hoyefully increase compatibility</li>
+					<li>the server closes a little more neatly</li>
+					<li>upnp errors are more verbose</li>
+					<li>misc code cleanup</li>
+				</ul>
+				<li><h3>version 290</h3></li>
+				<ul>
+					<li>content (tag and rating) shortcuts in the 'media' shortcut set now work on the thumbnail view!</li>
+					<li>tags in lexicophically sorted taglists will now sort numerically if their subtags start with decimals (e.g. page:3 will come before page:20 now)</li>
+					<li>trying to add/edit a subscription query that is a dupe will now give you a messagebox saying no, and pasting multiple queries will filter out the dupes and inform you (so, if you aren't sure if some of your list of ten artists to add is already in your big 'artist sub', just paste them anyway--it'll take out the dupes for you)</li>
+					<li>string converters now support regex substitution! (I expect to eventually integrate this into the filename tag parsing panel!)</li>
+					<li>'modal' popup messages (that create a new dialog and stop interaction with the program, like the one launched for repository processing) will now minimise non-main-gui frames while they work. these frames will be restored when the job is done (this should relieve the problem of this modal dialog sometimes letting other semi-stay_on_top frames obscure it while still prohibiting interaction, wew</li>
+					<li>simplified and sped up how importers decide whether to do file work or wait</li>
+					<li>made file importers do ui-polite pauses during the file import loop more intelligently--if the files make no big change to db or ui (e.g file was known already deleted because of its url), no wait will occur at all, meaning redundant lean queue-sections should work real quick</li>
+					<li>fixed an issue with multiply-nested submenus sometimes not deleting themselves neatly and resulting in highlight-related RuntimeErrors.</li>
+					<li>fixed an issue where the 'select from list' dialog could sometimes be ok'd without a valid entry--I believe this may be have been causing a delayed crash as well</li>
+					<li>added a 'ui timer profile' mode, which profiles some common unified ui update loops that draw animations and keep downloader ui synced and so on</li>
+					<li>the 'delete processed' file import status right-click menu entry will no longer show if it has the same count as the 'successful' line</li>
+					<li>the options->colours panel has some better layout and the namespace listbox asks a yes/no  to delete if you double-click/enter a colour</li>
+					<li>dropping a raw file url onto the client will now automatically pend it to a raw url importer (previously, it would be put in the input box, but after rethinking how this could go wrong, I concluded it wasn't such a big deal). if you use this a lot, see how you like it, and let me know if you would want an option to revert to the old behaviour</li>
+					<li>updated domain manager so it tracks url class identity in a neater way (renaming them will no longer break links or display options)</li>
+					<li>improved some widget feedback of edit url class panel</li>
+					<li>simplified the manage url class links panel</li>
+					<li>url classes now normalise gallery and page urls differently (page urls strip all non-declared data, gallery urls just switch scheme). this may change in future</li>
+					<li>url classes can now convert a normalised url to an api url--for instance for informing the program that an imageboard thread url has an api version that'll be better to check</li>
+					<li>the domain manager can now determine arbitrary url parsability capability, and this is just starting to be integrated into url drag-and-drop--try dropping a known url class on the client, like a booru link: it'll now tell you it sees what it is but can't yet parse it!</li>
+					<li>the 4chan and 8chan thread url classes will reset to defaults again this week--replacing with url classes that convert to the api versions--and you'll get the new api url classes themselves</li>
+					<li>if missing, the primary tables in client.caches.db can now regenerate on boot. they aren't properly repopulated yet, but the client will boot and you'll get an error message telling you what to do next</li>
+					<li>improved .txt and clipboard tag import unicode support</li>
+					<li>removed leading BOM (byte order mark) from .txt and clipboard tag imports</li>
+					<li>improved some clipboard text fetching code</li>
+					<li>added a new 'hover window profile mode' to the debug menu--it will print the logic info behind any media viewer's hover window show/hide decision</li>
+					<li>tweaked the locale-setting code, which was stopping some users (on Win10 creator's update, it seems) from booting the client</li>
+					<li>added system:rating to 'all known files' query contexts (so you can now search for deleted files that have ratings)</li>
+					<li>the manage import folders dialog now has a redtext warning about subdirectories</li>
+					<li>some file importers deal with shutdown events more gracefully</li>
+					<li>lz4 is no longer required. if it is absent, or the version is too old, a simple statement will be printed to the log and it will not be used in either the client or server</li>
+					<li>updated to ffmpeg 3.4.1 on windows</li>
+					<li>updated opencv to 3.4 on windows and linux (had trouble with os x--will continue working on it next week)</li>
+					<li>fixed an important grammar typo in the help</li>
+				</ul>
+				<li><h3>version 289</h3></li>
+				<ul>
+					<li>fixed an issue where scrollbars were only appearing on taglists after a resize event</li>
+					<li>fixed the raw filename component of file drag and drop events from the client to external programs</li>
+					<li>fixed the tag lookup scripts</li>
+					<li>fixed some wx menuhighlight issues</li>
+					<li>improved some shutdown code</li>
+					<li>fixed the add/edit namespace colours options panel, which needed to be updated to deal with the new wx's better alpha channel reporting</li>
+					<li>fixed an issue when hitting 'open externally' on a media collection</li>
+					<li>fixed a crash on client shutdown whenever closed pages were in the undo menu</li>
+					<li>think I fixed another shutdown crash</li>
+					<li>fixed a rare issue with the collect by dropdown not being able to generate a string to display</li>
+					<li>misc wx fixes</li>
+					<li>added a 'importing' page to the options dialog, which now sets the default file import options for quiet and loud file import contexts</li>
+					<li>the old and no longer used 'exclude deleted files' option is now removed from the 'files and trash' panel</li>
+					<li>finished off default url matches for all downloaders that come with the program--these will be set on update, so if you have custom ones, please export them before you update so you can import them again!</li>
+					<li>improved how urls are matched and presented for the user in the media viewer</li>
+					<li>added a 'delete "successful" file imports from the queue' entry to the file import status button right-click menu--this only removes 'successful' and 'already in db', leaving anomalies</li>
+					<li>improved locale instantiation in the client and added locale strings to the help->about dialog</li>
+					<li>you can now set the page name prefix for a paused thread checker. it defaults to a unicode pause character: ?</li>
+					<li>thread watchers will no longer pause on a network error during a check--they now have a 'delay' system like subscriptions, and on a network error, they will delay four hours (unless you hit 'check now')</li>
+					<li>patched in some simple 'connection cutoff' network error handling, we'll see how it does</li>
+					<li>wrote in some more proper error handling for a specific connection cutoff error that is being produced</li>
+					<li>the similar files search tree regen code now clears out orphaned files. if you have had blank 'unknown' files appear in similar files searches, please run database->regen->similar files search tree</li>
+					<li>bitmap buttons on download pages will now update using less CPU and will flicker less</li>
+					<li>improved some video rendering error reporting</li>
+					<li>fixed the 'author name' regex favourite default, which had a superfluous asterisk. if you would like to fix it yourself, please try: [^\\]+(?=\s-)</li>
+					<li>added 'flush log' debug command</li>
+					<li>client.pyw now makes a safe 'system' ui error popup if it fails to boot</li>
+				</ul>
+				<li><h3>version 288</h3></li>
+				<ul>
+					<li>updated to wxPython Phoenix (4.0) build!</li>
+					<li>all builds now require the new wx, so if you run from source, please consult the help files for new info on figuring this out</li>
+					<li>did a ton of wx refactoring</li>
+					<li>merged a large number of timers</li>
+					<li>wrote a new wx-aware timer to replace some of the more awkward old timers that could not be neatly merged</li>
+					<li>replaced wx.calllaters (the new ones aren't always garbage collecting nicely) with the new custom timer object</li>
+					<li>misc wx deprecation refactoring</li>
+					<li>cleaned up some wx test code</li>
+					<li>fixed some crashing wx test code</li>
+					<li>fixed 'select from list of strings' object, which was no longer processing enter key properly</li>
+					<li>cleaned up a bunch of ui object interaction code</li>
+					<li>cleaned up a bunch of wx-related shutdown code</li>
+					<li>fixed an issue with the splash window not shutting down cleanly</li>
+					<li>fixed a shutdown db-gui status report crash</li>
+					<li>was unable to get flash embed windows working properly without edge-case crashing on windows, so they are disabled for now (you'll likely get an 'open externally' button instead)</li>
+					<li>animations now clean up their memory buffer faster in certain circumstances--all users who view animations in the preview window should notice significantly leaner 'idle' memory usage over time</li>
+					<li>fixed a very important inefficiency bug that meant select->inbox/archive on large pages with more than a handful of inbox files was taking extremely long periods of 100% CPU</li>
+					<li>wrote a faster way of fetching some media and their paths</li>
+					<li>copying files to clipboard is now much faster</li>
+					<li>initialising any large file drag-and-drop event is now much faster</li>
+					<li>certain redundant image pre-fetching will no longer be done</li>
+					<li>'open externally' panels will no longer draw a (slightly buggy and useless) animation bar if the underlying media would have had one</li>
+					<li>added a new 'menu profile mode' that will profile any menu click</li>
+					<li>cleaned up the debug menu</li>
+					<li>deleted some old options code that is no longer used</li>
+				</ul>
+				<li><h3>version 287</h3></li>
+				<ul>
+					<li>thumbnails can now be drag-and-dropped to other pages!</li>
+					<li>dragging and dropping thumbs to another page tab will remove them from the source and append them to the destination, maintaining file order!</li>
+					<li>DnDing thumbs to a 'page of pages' tab will put the files in the next lowest selected media page</li>
+					<li>DnDing thumbs to a blank notebook area (or a page of pages without a selected media page) will create a new page for the thumbs</li>
+					<li>holding down ctrl when you drop thumbnails will not remove them from the source</li>
+					<li>please forgive the thumbnail DnD cursor, which for now will be in the 'copy' state, despite the internal DnD being move by default</li>
+					<li>improved page tab drag and drop drop logic--dropping onto the page area itself will no longer send the page to the right-end of the current notebook</li>
+					<li>the 'file import options' object now supports three 'presentation' booleans--for new/already_in_inbox/already_in_archive files--so you can customise whether new thumbnails appear based on each state. page imports will by default show everything, while 'quieter' import queues like import folders and subscriptions will continue to just show only 'new' files in their files popup buttons. if you have a gui page with 10k+ items in its queue, try reducing the presentation to speed it up!</li>
+					<li>all existing import queues will be updated when they are next loaded--but please note that for simplicity and safety they will all initialise to the 'quiet' presentation method, so if you have ongoing download pages in any of your gui sessions (including thread watchers!), they will only add 'new' thumbnails unless you edit them. I apologise for the inconvenience</li>
+					<li>the regular hdd import now has a file import options button!</li>
+					<li>subscription query 'finished' file popups are now merged up to the subscription level--so, a sub with five queries that each get 20 new files in a run will now ultimately leave one popup with 100 files</li>
+					<li>file popups (as produced by subscriptions and a couple other places) now preserve their import order!</li>
+					<li>if a subscription with many queries runs out of bandwidth, it should now only give you one 'no more bandwidth to download files' message, rather than one for every outstanding query to sync</li>
+					<li>added a checkbox to turn on/off the new random subscription syncing to the options->downloading panel</li>
+					<li>the file import status button's menu now supports import/export of sources to clipboard/png! it _should_ also support unicode. be careful not to paste paths into a url cache, or urls from one gallery site to another, or you'll just get errors--this is prototype, so please keep like with like for now</li>
+					<li>the png import/export system now supports raw string payloads</li>
+					<li>the new listctrlpanel can now hang its buttons in multiple rows</li>
+					<li>the manage subscriptions panel now has an 'overwrite checker options' button to mass-set checker options</li>
+					<li>the manage subscriptions panel now has a 'select subs' button that selects subs based on a basic query text search</li>
+					<li>separating merged subscriptions now sets better new subscription names of 'old_sub_name: query_text'</li>
+					<li>saving a session from a page of pages with a custom name will no longer suggest a session name prepended by [USER]</li>
+					<li>doubled the subscription and downloader instance default bandwidth rules to 400 and 200 rqs/day</li>
+					<li>the 'load_images_with_pil' and 'disable_cv_for_gifs' options are now officially BUGFIX in the options--unless you know you need them on, turn them off!</li>
+					<li>added some safeguards to the new dialog-panel system's OK stuff, which sometimes catches a duplicate OK event</li>
+					<li>shuffled some db update status texts around</li>
+				</ul>
+				<li><h3>version 286</h3></li>
+				<ul>
+					<li>simplified how thread watcher assigns DEAD and 404 status--it should do it more reliably now</li>
+					<li>thread watchers now publish their page names (including updating dead/404 status) right after they check</li>
+					<li>the save session menu under pages now lists the exsting sessions for quick-save--if you select one of these, it will throw up a yes/no overwrite confirmation dialog</li>
+					<li>'appending' sessions now loads them in a new page of pages named as the session name!</li>
+					<li>right-clicking on a page of pages now gives you a 'save this page of pages to a session' option</li>
+					<li>right-clicking on the page tabs lets you append a session anywhere</li>
+					<li>'load' session is now 'clear and load', and it throws a yes/no dialog for confirmation</li>
+					<li>the gallery pending queries box now allows multiple selection with ctrl/shift clicks. it'll even move up/down correctly on non-contiguous selections!</li>
+					<li>the gallery query input is now a new combined textctrl-and-paste button control that will appear in other places across the program</li>
+					<li>the page of images input now also uses this new control</li>
+					<li>the page of images and raw urls queues will now ignore any input that does not start with 'http'</li>
+					<li>pasting a list of texts from the clipboard will now typically strip the pasted content of leading or trailing whitespace</li>
+					<li>some text and tag cleaning is a bit faster and neater</li>
+					<li>the file import status panel now supports 'open sources' on its right-click menu--it opens in your web browser or file explorer as appropriate. (linux can't do file explorer though)</li>
+					<li>thumbnails will no longer 'fade' when their pages are not visible, reducing CPU load in several contexts</li>
+					<li>thumbnail fade will use less CPU overhead on very fast computers</li>
+					<li>the timer loops that all import pages use to keep themselves updated are now harmonised into one loop at the top gui level (this should reduce some idle CPU overhead and improve some ui responsiveness)</li>
+					<li>content (tag and rating) shortcuts can now be set to 'flip on/off' or 'set'</li>
+					<li>the manage subscriptions dialog now waits for any currently syncing subs to cancel and save themselves before opening itself (keeping it all synced and rollback-proof)</li>
+					<li>added a 'watchable' url class type and wrote examples for 4chan/8chan thread urls</li>
+					<li>added 4chan/8chan file url classes to the examples, which if added will auto-hide them from the media viewer</li>
+					<li>fixed 'add parameter' in edit url match panel</li>
+					<li>simplified some stuff in the existing parsing system</li>
+					<li>added preliminary 'url type' support to the parsing system</li>
+					<li>the html formula parsing object can now return the full child html of the node it finds</li>
+					<li>the new url and html stuff doesn't do anything yet--but it will in the new downloader engine</li>
+					<li>added a bunch more booru entries to the url classes defaults. I will continue filling these out, hopefully setting comprehensive defaults next week</li>
+					<li>the advanced mode thumbnail right-click menu lets you reparse and regen thumbnails for any files! if you have rotated or stretched files, you can now fix them from the menu!</li>
+					<li>added new tools to let the client update media file metadata and thumbnails live!</li>
+					<li>the new reparse and regen should update file metadata and thumbnails live!</li>
+					<li>improved how some 'quiet' errors are printed to the log. they'll now have the full trace of the error as well as the stack</li>
+					<li>added a daemon_report_mode debug mode. it throws up a popup every time a daemon fires its callable</li>
+					<li>fixed an issue with the editstringtostringdictcontrol</li>
+					<li>fixed an issue with loading (and updating to a new version) import pages or import folders with some kinds of unicode paths</li>
+					<li>you can now set the 'woah, you should close some pages' warning value under options->gui. its default remains 165 pages</li>
+					<li>system:similar_to searches should be a lot faster on clients with many files</li>
+					<li>the manage subscriptions and edit subscription panels now both list their num_urls summary column as '22' if all done but '11/22' if not. this column also sorts based on percentage completion, then num total, then num done</li>
+					<li>the database migration dialog now uses the new listctrl--its buttons are now also clever, and will disable when they are invalid</li>
+					<li>misc fixes</li>
+					<li>fixed an index bug in the new listctrl after certain types of 'setdata' call</li>
+					<li>cleaned up some search code</li>
+					<li>some veto code cleanup</li>
+					<li>cleaned and harmonised how text is pulled from the clipboard</li>
+				</ul>
+				<li><h3>version 285</h3></li>
+				<ul>
+					<li>added 'network' main gui menu and moved network stuff from services to it</li>
+					<li>split the new domain manager stuff up into separate dialogs and menu entries on the new network menu</li>
+					<li>manage url classes dialog now lists url type in the listctrl</li>
+					<li>added url class links info (which will permit client-specific settings and downloader mappings for url classes) to the domain manager</li>
+					<li>wrote a 'url class links' dialog and added it to the new network menu (only the 'display on media viewer' part works atm)</li>
+					<li>the domain manager now filters urls on the media viewer depending on whether they have a url match and are set to display in the new links panel</li>
+					<li>updated the local booru service code to the new service system</li>
+					<li>the local booru's shares can be reviewed again under review services</li>
+					<li>the local booru's port and bandwidth settings can be set again under manage services</li>
+					<li>the different gui parts of the local booru are updated to new controls</li>
+					<li>fixed a local booru 404 reporting error</li>
+					<li>the edit subscription panel now has a 'paste queries' button that lets you add queries en masse</li>
+					<li>added 'manage_file_urls' to shortcuts system</li>
+					<li>added several 'get_similar_to_x' actions to the shortcuts system</li>
+					<li>the manage upnp dialog now initialises its mappings on another thread and fails better when UpnP mappings cannot be fetched</li>
+					<li>connection and readtimeout network exceptions are now recognised more specifically by the client. subscriptions will only delay for an hour on one of these exceptions</li>
+					<li>improved the resilience of the HF login code after wake from sleep (when networking is often not available for a couple of seconds)</li>
+					<li>like the recent subscription query randomisation update, subscriptions themselves are now synced in random order (this stops a subscription named 'aadvark' always getting first bite into available bandwidth)</li>
+					<li>fixed import for jpegs that have unparsable exif data</li>
+					<li>fixed a bug in 'next month' bandwidth estimate calculation when the month is December, wew</li>
+					<li>fixed some logic that was setting max page at 165 rather than the intended 200 and added a dialog that even lets you engage the debug override at 200 if you are insane</li>
+					<li>all audio mime detection and duration parsing is now done through ffmpeg. hsaudiotag is no longer needed to run the program</li>
+					<li>since the old listctrl sort crash bug is still hitting some people, I've disabled sort on the old listctrl class. feel free to try to sort any listctrls now, no matter your situation. I will continue replacing the old class with the new working class over time</li>
+					<li>updated another listctrl</li>
+					<li>a ton of misc controller options/manager access refactoring</li>
+					<li>cleared out some old code</li>
+					<li>moved Time controls to their own file and added velocity and checker options stuff as well</li>
+					<li>wrote a new edit panel for single controls and updated the time delta button to use it</li>
+					<li>misc refactoring</li>
+				</ul>
+				<li><h3>version 284</h3></li>
+				<ul>
+					<li>fixed subscription queries turning dead on the initial sync</li>
+					<li>all dead subscription queries have been set to check again in case they can revive</li>
+					<li>added query file velocity to edit subscription panel</li>
+					<li>subscription network contexts now reflect the new multiple subscription query system, and are named "sub_name: query_text". as every query now counts as its own separate subscription network context, this will stop query-heavy subscriptions from throttling so much on bandwidth limits</li>
+					<li>finished URLMatch object, which matches and normalises URLs into certain 'classes' like 'gelbooru post url'</li>
+					<li>expanded some URLMatch subdomain options</li>
+					<li>fixed some test logic in URLMatch</li>
+					<li>finished the last of the EditURLMatchPanel</li>
+					<li>split the 'manage network rules' dialog into two panels--it now has a 'url classes' tab</li>
+					<li>wrote a panel for managing url matches</li>
+					<li>added export/import/duplicate buttons to EditURLMatchesPanel</li>
+					<li>wrote some URLMatches for hentai-foundry as an initial test of the system and added a temp button to add them--please check them out to see how it all works</li>
+					<li>all, invert, inbox, and archive (and none, lol) thumbnail 'select' menu items now have counts</li>
+					<li>invert is now at the bottom</li>
+					<li>the thumbnail select menu now has local/remote entries if applicable (this typically is only true in 'all known files' file domain)</li>
+					<li>added png/clipboard export/import/duplicate code to the generic new listctrl button wrapper panel, which will save a bunch of time as the png/clipboard sharing system expands</li>
+					<li>added a human-facing serialisable name to all objects on the new serialisation system and tied the new import/export code into it for png presentation</li>
+					<li>the edit import folder dialog will now complain (but not veto) on an ok event if any of the entered paths do not exist</li>
+					<li>if you attempt to manually run an import folder while import folders are globally paused, you'll get a little popup telling you so</li>
+					<li>added an experimental 'thumbnail fill' setting to options->gui. it zooms the existing thumbnails so they fill the whole thumb space. feedback on this from those who would be interested in a prettier system would be appreciated</li>
+					<li>added 'paste tags' buttons to filename tagging options panel</li>
+					<li>the paths/urls in the file import cache are now their own object that holds the creation/modified/source times and current status and note. this object can also hold prospective urls, tags, and hashes for future use</li>
+					<li>a bunch of file import actions are faster</li>
+					<li>all the different importers now use this new file import object</li>
+					<li>fixed a screen position calculation in the new drag and drop filtering code that was accidentally including too many possible drop candidates on drops in the top-left corner of the main gui (if you had trouble moving tabs to the left, this should be it fixed!)</li>
+					<li>fixed a problem display volume/chapter/page tags that included unicode characters in thumbnail banners and media viewers</li>
+					<li>fixed a rare media display bug in the dupe filter</li>
+					<li>fixed some 'C++ part of panel has been deleted' bugs in review services if the frame is shut down before delayed db info is fetched</li>
+					<li>cleaned up some more 'C++ deleted' errors in import files selection dialog</li>
+					<li>fixed the network context custom header panel 'add' action, which wasn't saving the value of the panel</li>
+					<li>fixed a bunch of bugs in the newish QueueListBox class</li>
+					<li>SynchroniseRepositories daemon will be better about quitting early on application shutdown</li>
+					<li>cleaned up some pending pretty timestamp grammar</li>
+					<li>when the client cannot clean up a temporary file, it will print more error information</li>
+					<li>added pylzma to the 'running from source' library recommendations. this is not required, but if available it adds ZWS flash support</li>
+				</ul>
+				<li><h3>version 283</h3></li>
+				<ul>
+					<li>subscription popups show a bit more info about their individual queries</li>
+					<li>subscription popups hide the sub-query info in text and file buttons if it is the same as the subscription name</li>
+					<li>subscriptions now work through their queries' downloading phases in random order (so a heavy query named 'aardvark' won't repeatedly choke the sub's other queries if bandwidth is tight)</li>
+					<li>if a subscription query dies, a notification popup will now be made</li>
+					<li>changed a logical edge case that may have been killing some subscription queries after the first sync</li>
+					<li>re-enabled pixiv artist search, as it still uses the old gallery style</li>
+					<li>added tentative support for 'ZWS' flash files</li>
+					<li>if there is more than one import folder, the 'check import folder now' submenu now has a 'check all' entry</li>
+					<li>TimeDelta controls that have the 'days' entry (as in thread/subscription checker options panels) now have a max period of 10 years for those _really_ slow threads</li>
+					<li>fixed an issue where the 'quick namespaces' section of the new filename tagging options panel was not initialising correctly when it loaded data from a previously serialised import folder (this was the "unhashable type: 'list'" bug in the edit import folder panel)</li>
+					<li>the filename tagging dialog now works on the new panel system. it also has an entry under options->gui: 'local_import_filename_tagging'</li>
+					<li>polished StringMatch object</li>
+					<li>polished EditStringMatchPanel</li>
+					<li>html formulas now have a string match object</li>
+					<li>improved parsing error system</li>
+					<li>miscellaneous improvements to the parsing system</li>
+					<li>misc fixes to StringMatch and parsing system</li>
+					<li>the main gui will no longer interpret text drops on child frames as url drops. this fix just quashes the drop--it doesn't allow the initially desired drop on the child frame to occur. I will keep thinking about this</li>
+					<li>the dupe filter's 'no media to display' text now says 'Looking for more pairs--please wait'</li>
+					<li>the 'remove' media action is now labelled 'remove from view' to reduce 'is it a delete?' confusion</li>
+					<li>fixed an icon initialisation order problem that meant pre-boot errors were unable to display</li>
+					<li>fixed a graceful-shutdown-on-boot-error bug</li>
+					<li>the custom 'listboxtags' controls now post an event on their contents changing</li>
+					<li>the tag censorship panel now updates its status text when its listboxes change due to a mouse double-click event</li>
+					<li>fixed file import 'source time' column sometimes showing '3e-05 years' kind of garbage that was due to a missed float->int conversion</li>
+					<li>cleaned up how some page names are thrown around, which should stop some stray [USER] prefixes slipping though</li>
+					<li>the adminside petition management checklistbox will now escape mnemonic characters (typically '&') and hence display them correctly on sibling pairs and so on</li>
+					<li>wrote a 'help my client will not boot.txt' that explains the new debug builds and some other common fixes to try</li>
+					<li>'all known files' file search domain is now hidden behind advanced mode</li>
+					<li>fixed another instance of flashwin causing a failed boot</li>
+					<li>cleaned up some old broken unit tests</li>
+					<li>some misc help improvements</li>
+					<li>updated Windows build to new version of sqlite</li>
+				</ul>
+				<li><h3>version 282</h3></li>
+				<ul>
+					<li>rolled back to an older version of pyinstaller that does not seem to have the embedded flash window problems windows users experienced</li>
+					<li>added an error handler to wx.lib.flashwin import--if it fails to import, the client will print the error to the log and thereafter show 'open externally' buttons instead of the embedded flash window</li>
+					<li>created a 'filename tagging options' object to handle the instance-non-specific auto-tagging parts of the filename tagging dialog</li>
+					<li>moved all the appropriate tag generation code to this new object</li>
+					<li>extracted the simple and advanced panels in the filename tagging dialog to a separate panel</li>
+					<li>wrote a new wrapper panel to edit filename tagging options objects directly</li>
+					<li>cleaned up some tag generation code--it'll now all be siblinged/parented/censored the same way</li>
+					<li>import folders now use the filename tagging options object, harmonising this tag parsing code</li>
+					<li>edit import folder gui now has an add/edit/delete listctrl to manage the new tag_service->filename_tagging_object relationship (this replaces the old .txt management button and summary text)</li>
+					<li>finished the StringConverter class in the new parsing engine. it applies a series of transformations to text</li>
+					<li>wrote a panel to edit string converters</li>
+					<li>wrote a panel to edit string converters' individual transformations</li>
+					<li>updated html formulas to use string converters instead of the old cull_and_add system</li>
+					<li>html formula edit panels can now edit their new string converters</li>
+					<li>file lookup scripts now 'stringconvert' their file identifier strings--this should allow the 'md5:md5_hash' fix we've been talking about (i.e. by first encoding to hex and then prepending 'md5:')</li>
+					<li>the help->about window now shows the client's default temp directory</li>
+					<li>thumbnail regeneration--particularly full-size regen and resized png gen--should be much faster in the client</li>
+					<li>the debug exes are now included in the windows build</li>
+					<li>the debug exes are now included in the non-windows builds</li>
+					<li>the test exe is no longer included in the windows install (can't remember it ever being useful, and it is like 10MB now)</li>
+					<li>unfortunately, a recentish change to how pixiv serves gallery page results has broken the hydrus pixiv downloader. this will have to wait for the downloader overhaul, and even then, it might be _slightly_ tricky. pixiv downloader entries are now hidden, and existing pixiv subscriptions will be paused on update</li>
+					<li>the thumbnail select submenu now clarifies 'all (all in x)' if all are in the inbox or archive</li>
+					<li>you can now archive/delete filter from the thumbnail menu on a single file</li>
+					<li>lowered the http session inactivity timeout even more, to 45 minutes</li>
+					<li>fixed a couple of instances of the new subscription dialogs being unable to mass-retry failures</li>
+					<li>ffmpeg parsing errors now print more info about broken file path</li>
+					<li>some daemons will be snappier about shutting down on application shutdown</li>
+					<li>took out the sometimes invalid 'booting' phrase in the during disk cache population status report</li>
+					<li>the client will now warn you about page instability at 165 pages after one user reported instability at 175. 200 is still the strict limit.</li>
+					<li>downloader pages and subscriptions will fail more gracefully if their downloaders cannot be loaded (e.g. they used a since-deleted booru)</li>
+					<li>fixed listctrl panel button enabled/disabled status when the child listctrl starts empty</li>
+					<li>the new listctrl can now select data in a cleverer way</li>
+					<li>misc fixes</li>
+					<li>misc refactoring</li>
+				</ul>
+				<li><h3>version 281</h3></li>
+				<ul>
+					<li>subscriptions can now support multiple queries!</li>
+					<li>subscriptions now use the new thread checker system to set their check periods!</li>
+					<li>improved some check timing calculations to deal with subscription timestamps</li>
+					<li>existing subscriptions will update</li>
+					<li>subscriptions can now see any 'delay' reason on their edit page and can scrub it there as well</li>
+					<li>subscriptions no longer track 'last error'. everything goes through the delay system and keeps track of reason</li>
+					<li>added 'last new file time' to the subscription listctrls</li>
+					<li>subscriptions now generate separate 'file button' popups for each query, and file button popups now include their name in the button label</li>
+					<li>the subscription listctrl is now breddy wide. I will be adding some way of hiding columns (with persistent memory) on the new listctrl at some point in the future, so please bear with it for now</li>
+					<li>manage subs now has a wrapper panel and buttons that disable when invalid</li>
+					<li>tumblr simple 'video' posts should now be supported! turns out they are just mp4s</li>
+					<li>in the client, static image thumbnails are now generated with opencv</li>
+					<li>files that give truncated image errors should now import ok. they'll render with errors. if cv is up to date and working ok, they should have good thumbnails as well (otherwise they will have all-black thumbs)</li>
+					<li>updated manage regex favourites dialog to the new panel system</li>
+					<li>regex favourites are now editable under the new options->regex page</li>
+					<li>ongoing import or export folders will now stop working if their respective manage dialogs are opened</li>
+					<li>import folders can now stop working if the client shuts down during the initial file parse phase</li>
+					<li>export folders will now stop working immediately if the client shuts down</li>
+					<li>export folders can now stop working during the file copy stage</li>
+					<li>the splash screen is now a little wider and taller</li>
+					<li>the splash screen now has a subtext row for misc technical data</li>
+					<li>the boot and exit splash screens show a bit more data about several things</li>
+					<li>the repository sync daemons should be a bit snappier about responding to a client shutdown</li>
+					<li>the import files dialog is now a non-modal frame! (you can now continue to use the client while this frame parses files) you can even open up several at once!</li>
+					<li>the 'import file path tagging' dialog should now never be taller than its spawning screen and also slide up and left if it spawns with its bottom-right corner off-screen (this dialog is still on the old system, however, so the newer sizing stuff that does this stuff automatically is not yet available)</li>
+					<li>sliding up-and-left should now also occur on spawn for frames on the new system</li>
+					<li>the advanced 'process now' repository button will now disable itself if there is no work to do!</li>
+					<li>if simple downloads like gallery pages are larger than 100MB, the client will throw an error (this is a stopgap for an ongoing issue)</li>
+					<li>the 'maintenance and processing' page has a bit more warning text</li>
+					<li>the new listctrl wrapper panel now supports menu buttons</li>
+					<li>libpng's iccp terminal warnings from loading the flash/pdf/zip thumbnails should now be gone!</li>
+					<li>misc refactoring</li>
+				</ul>
+				<li><h3>version 280</h3></li>
+				<ul>
+					<li>the client should now recognise EXIF file rotation and flipping in resolution discovery, thumbnail generation, and image rendering. existing files will be borked, so will have to either be manually deleted&reimported, or wait for a maintenance routine that will retroactively fix all these</li>
+					<li>videos with a non 1:1 sample aspect ratio (wew lad) should now import with correct resolutions</li>
+					<li>all 'tag import options' are now managed with the new button</li>
+					<li>deleted all old tag option management gui, including deleting ClientGUICollapsible entirely</li>
+					<li>with the simpler tag import options, increased max page count to 200</li>
+					<li>page of images downloader now has two pause separate buttons for queue and files processing</li>
+					<li>the page of images downloader should no longer too-quickly blank out its parser status at the end of queue processing</li>
+					<li>the default hydrus bandwidth rules now no longer has the choking 'requests per day' limitation that was messing up large mappings uploads. (it is now just 64MB/day)</li>
+					<li>your hydrus default bandwidth rules will reset to this on update</li>
+					<li>POST requests (which in for our purposes are always user-driven) no longer obey bandwidth rules</li>
+					<li>fixed a bug when sometimes hitting the file limit or hitting a siteside 404 in the gallery downloader</li>
+					<li>a rare bug due to empty string menu labels is now no longer possible. empty string labels, if they slip through, will be replaced with 'invalid label'</li>
+					<li>you can no longer choose the empty string as a gui session name</li>
+					<li>improved how network jobs keep track of all applicable network contexts vs the preferred session and login contexts</li>
+					<li>cleaned up a bunch of login code, improved verification testing</li>
+					<li>fleshed out domain login system</li>
+					<li>in the networking engine, the read timeout is now six times the connect timeout--we'll see if this reduces some hydrus and other read timeout problems we've seen</li>
+					<li>increased the server transaction period from 10s to 120s--we'll see if this helps reduce some spiky server POST lag or what</li>
+					<li>the default tag import options panel now edits on double-click, rather than deletes. it also yes/no dialogs on a delete action. this control is still trash, but it now works more like the rest of the program</li>
+				</ul>
+				<li><h3>version 279</h3></li>
+				<ul>
+					<li>moved the hydrus service object over to the new networking engine</li>
+					<li>hydrus services now appear in the bandwidth review panel</li>
+					<li>hydrus requests now obey larger network bandwidth rules (this mostly means 'global')</li>
+					<li>service bandwidth usage and rules are no longer managed from manage services--it is now under review bandwidth usage, like all other network contexts</li>
+					<li>updated some network engine stuff for misc hydrus states like 'server busy'</li>
+					<li>fixed a bug in the server code where the session key cookie had an invalid expiration timestamp--servers should update this week to make sure new clients can log in properly</li>
+					<li>hydrus network requests will force-set User-Agent as 'hydrus client/(network_version)' as the network version is used in the protocol to determine compatibility</li>
+					<li>fleshed out the hydrus specific network job, giving it the various bandwidth tracking and version checking responsibilities the service object used to have</li>
+					<li>moved session cookie decay (only matters for Hentai Foundry atm) to the new session manager (was previously hacked into the login manager)</li>
+					<li>moved some hydrus response parsing stuff around, added content type awareness to the new network job</li>
+					<li>updated several unusual hydrus 'static/test' requests used to test credentials and fetch access key and so on to the new system</li>
+					<li>added a special 'test service' service to better accomodate these requests</li>
+					<li>wrote a static login script for hydrus services</li>
+					<li>polished up login management system overall</li>
+					<li>import folders now support a 'check now' state, like subscriptions, that will cause them to check immediately</li>
+					<li>import folders can be 'check now'ed from the file menu under a new submenu! if you would like to have a 'manual' import folder, try pausing it and just running it from this menu!</li>
+					<li>added an optimisation to the file search algorithm to search ratings queries super fast when they lack tag or file system preds to otherwise speed them up</li>
+					<li>updated the booru presets that now support https to be https</li>
+					<li>added a 'restore defaults' button to the manage boorus dialog--you can restore specifics or all of them</li>
+					<li>optimised how fading thumbnails are blitted to screen, which may provide a huge performance boost for high-res/small-thumb clients</li>
+					<li>pages that have been renamed by the user will no longer be rename-overwritten by any auto-renaming system (currently just thread watchers, I think, but this will expand in future). unfortunately, this is not retroactive--only pages renamed from now on will be aware that they were user-renamed</li>
+					<li>in advanced mode, the pages menu now states how many pages are currently open</li>
+					<li>the 'page of images' downloader will now say '(x already in queue)' when it reports how many urls were found, if any were already in the queue. (this should clear up some confusion where it would previously say '0 new urls' even when it found some stuff)</li>
+					<li>the gallery downloader will do essentially the same, but on a per-page basis. the text is a little crushed, so I may revisit this</li>
+					<li>fixed an issue with the manage services dialog not being able to rename dupe-named services on edit subdialog ok</li>
+					<li>the manage services dialog now uses the new listctrl! the listed services are no longer a horrific unsorted mess!</li>
+					<li>fixed the file import status button not showing on raw url downloader or import folder edit dialog</li>
+					<li>improved how some directory tree merging code deals with read_only files in the source</li>
+					<li>maybe fixed some unusual selection behaviour with the booru selection popup dialog. it now has a real ok button, rather than a mickey-mouse hidden one</li>
+					<li>completely deleted the old networking engine!</li>
+					<li>cleaned out some unused imports from the networking code and related entries from running_from_source.html</li>
+					<li>changed up and fixed some odd bugs in how how repositories test some error/isfunctional stuff vs regular paused status</li>
+					<li>hydrus network contexts now have a prettier name</li>
+					<li>ip address-based network contexts will no longer spam the bandwidth tracker with their useless subdomains</li>
+					<li>network jobs that are unable to attempt validation or login will now error immediately rather than waiting indefinitely</li>
+					<li>fixed up a bunch of test code that was broken due to the mismatch of network engines</li>
+					<li>broke some other test code due to the network engine transfer!</li>
+					<li>the client is more resilient about broken 'twisted' installs, and _should_ be able to boot without it. this may or may not apply to the built release--more work can be done here</li>
+					<li>some network job refactoring</li>
+					<li>clientside service code cleanup</li>
+					<li>misc fix that I can't remember</li>
+					<li>misc cleanup</li>
+					<li>misc refactoring</li>
+				</ul>
+				<li><h3>version 278</h3></li>
+				<ul>
+					<li>fixed the tumblr raw url converter to now point to the data.tumblr.com domain</li>
+					<li>added a hardcoded ssl verify exception for data.tumblr.com, which has an incorrectly defined ssl cert (at least for public-facing interactions), wew</li>
+					<li>all existing db urls and file import cache urls for media.tumblr.com will be updated to data.tumblr.com on update! (everything _should_ just magically work again)</li>
+					<li>fixed apng import, which the decompressionbomb detection code was not handling correctly</li>
+					<li>collapsed the different instatiations of the 'file import status' button down to one class</li>
+					<li>the file import status button now has a right-click menu that supports 'retry failures' and 'delete processed', if applicable</li>
+					<li>misc import status cache cleanup and refactoring</li>
+					<li>you can now edit or completely turn off the [404] and [DEAD] thread watcher page name prefixes under options->downloading</li>
+					<li>thread watchers should more reliably keep 404 status</li>
+					<li>'open selection in a new page' now preserves file order!</li>
+					<li>'view this file's duplicates' now sorts the files!</li>
+					<li>options->gui now has an option to change how often 'last session' is saved</li>
+					<li>'last session' will no longer autosave to the database if there are no changes</li>
+					<li>tags exported to neighbouring .txt files are now correctly sibling-collapsed</li>
+					<li>tags imported or exported via neighbouring .txt files are now correctly tag censored</li>
+					<li>the manage tags dialog will now protest with a yes/no dialog if you attempt to cancel it with uncommitted changes</li>
+					<li>the manage parents and siblings dialogs will now protest with a yes/no on an ok event if there are 'uncommitted' pairs in the lower boxes (e.g. if you forgot to click the 'add' button)</li>
+					<li>fixed an issue that would sometimes stop old sessions from loading properly</li>
+					<li>the duplicates page now does its maintenance jobs in modal popups!</li>
+					<li>attempting to apply a duplicate status to more than 100 pairs now throws up a warning yes/no dialog</li>
+					<li>the manage urls dialog now has copy/paste buttons</li>
+					<li>added a (somewhat debug) option to disable the mouse hide&anchor behaviour on slow Windows canvas drags to options->media</li>
+					<li>added a 'regen all phashes' command to the database regen menu</li>
+					<li>the disk cache options in help now have a help button to explain good values for ssd vs hdd</li>
+					<li>the edit bandwidth rules dialog now uses the new listctrl</li>
+					<li>merged the old and new login managers</li>
+					<li>misc login work</li>
+					<li>misc refactoring</li>
+					<li>misc cleanup</li>
+				</ul>
+				<li><h3>version 277</h3></li>
+				<ul>
+					<li>expanded the domain manager into a legit serialisable object that holds data and saves itself on changes. to begin with, it supports custom http headers for particular on network contexts</li>
+					<li>the global User-Agent (which now defaults to 'hydrus client') is set through this new manager, as attached to the 'global' network context</li>
+					<li>wrote a basic panel to edit custom http headers under services->manage network rules (this panel will be fleshed out with more in future--please ignore if you are not an advanced user)</li>
+					<li>wrote a panel to edit an individual custom http header</li>
+					<li>wrote a panel to edit/select network contexts. this will get a bunch more use elsewhere as the overhaul continues</li>
+					<li>flushed out and tested the new popup yes/no button system</li>
+					<li>sanakucomplex.com has a User-Agent entry in the new custom header system--on the first sank request, you will be presented with a yes/no popup asking if it is ok to use.</li>
+					<li>if you ok the user-agent, sankaku now seems to work again!</li>
+					<li>sankakucomplex.com network context will get some specific conservative bandwidth rules (80 rqs per 7m, 1 rq per 4s) on update</li>
+					<li>added an option to options->gui to reverse the page tab shift behaviour</li>
+					<li>'don't scroll down on key navigation event if thumb is at least this % visible' value is now 75%. it is also editable under options->gui</li>
+					<li>the hydrus icon used on frames is now the non-transparent version that shows up better on dark backgrounds</li>
+					<li>the standard hydrus.ico used in web favicons and the executable builds is now also non-transparent (this should also propagate up to OS shortcuts and taskbar icons wherever the frame icon is not inherited)</li>
+					<li>file export drag and drop events will now defocus the currently focused media on successful drop (e.g. if you drag a video to an external media player, it will stop rendering clientside), just like for open externally</li>
+					<li>database analyze maintenance should be more reliable with respect to fresh repository syncs</li>
+					<li>reduced default impermanent session timeout in new networking engine to 60m (should fix/reduce some hentai foundry 503s)</li>
+					<li>misc ui improvements and speedup</li>
+					<li>misc fixes</li>
+				</ul>
+				<li><h3>version 276</h3></li>
+				<ul>
+					<li>the new thread watcher object will no longer produce check periods shorter than the time since the latest file. this effectively throttles checking on threads that were posting very fast but have since suddenly stopped completely</li>
+					<li>thread watchers now parse their thread subject and place this in the left management panel</li>
+					<li>thread watchers now name their pages based on the thread subject, if one exists</li>
+					<li>an option to permit or deny thread watchers renaming their pages is now under options->downloading</li>
+					<li>dead and 404 threads now disable their checker pause button--to attempt to revive, hit 'check now'</li>
+					<li>thread watchers now preface their page name with [DEAD] or [404] when appropriate</li>
+					<li>misc thread watcher code improvements</li>
+					<li>added basic import support for zip, rar, and 7z files. they get no useful metadata (yet) and have a default 'archive' thumbnail</li>
+					<li>the client will now by default detect and not import decompression bombs before they blat your computer. an option to allow them nonetheless is under options->media</li>
+					<li>the server will now not parse or accept decompression bomb uploads in POST requests</li>
+					<li>added a 'refresh all pages' entry to page of pages's right-click menu</li>
+					<li>added 'send this page down to a new page of pages' to page right-click menu</li>
+					<li>added 'send all pages to the right to a new page of pages' to page right-click menu</li>
+					<li>fixed a page of pages drag and drop issue when dropping the last page of a notebook onto the same notebook tab</li>
+					<li>fixed some index calculation problems when DnDing page tabs to the right on the same notebook</li>
+					<li>sending a refresh event to a 'show selection in a new page' page (which has no search predicates and so cannot 'refresh' its search) will now trigger a sort event (like importers got last week)</li>
+					<li>thumbnails at the bottom of the current view but are at least 90% in view will no longer scroll into view when selected</li>
+					<li>click events will no longer scroll thumbnails that are semi-out of view into view</li>
+					<li>improved how all 'wait until the client ain't so busy' checks work. importers that have a whole slew of 'already in db' to catch up on should now not clog the gui so much</li>
+					<li>similarly, under ideal conditions where nothing is busy, importers will iterate over their files more quickly</li>
+					<li>the network engine now has a 'verification' loop that doesn't do anything yet, and a stub domain engine is generated to be consulted in this</li>
+					<li>wrote some verification code, extended popup messages to support yes/no questions</li>
+					<li>polished some domain engine code</li>
+					<li>fixed an issue where file repositories were not recording deleted files in certain cases</li>
+					<li>all file repositories will be reset on update</li>
+					<li>the date entries on the review bandwidth bar chart now have leading zeroes on 0-9 months to ensure the sort correctly (this month's 2017-10 entry was sorting before 2017-8, wew!)</li>
+					<li>the migrate database dialog now shows approximate total thumbnail size</li>
+					<li>gave the migrate database help a quick pass</li>
+					<li>gave the 'help my db is broke.txt' file a quick pass</li>
+				</ul>
+				<li><h3>version 275</h3></li>
+				<ul>
+					<li>if you hold shift down while dropping a page tab, the client will not 'chase' that page to show it (try it out!)</li>
+					<li>the gui will be more snappy about dealing with drag-and-drop drops (of types file import, page tab rearrange, and url drop), returning the mouse to normal state instantly on drop and dealing with the event in a subsequent action</li>
+					<li>dropping url text on the client will specifically inform the source program not to delete the dragged text (that the operation was copy, not move), if it is interested in hearing that</li>
+					<li>page drag-and-drops should transition a little less flickerily</li>
+					<li>all file import status objects can now track 'source time', typically to represent upload time</li>
+					<li>file imports now populate 'source time' based on the earliest of creation/modified time! (this will be used later to parse as a tag)</li>
+					<li>thread watchers now populate 'source time' based on post time!</li>
+					<li>finished a watcher options object for the new thread checker system</li>
+					<li>wrote a panel to edit watcher options</li>
+					<li>converted the thread object to the new watcher system</li>
+					<li>thread watchers now have two pause buttons--one for the file queue, one for the checker</li>
+					<li>compressed thread watcher ui layout</li>
+					<li>converted the thread left-panel ui and options->downloading page to reflect the new watcher system</li>
+					<li>improved the watcher options to generate better timings for fresh threads</li>
+					<li>cleaned up some thread watcher check time code</li>
+					<li>the total/selected mime summary on the status bar is a little prettier and will now report by individual mime sometimes</li>
+					<li>generating the total/select mime summaries are now faster on pages with >1,000 files (it'll just use 'file')</li>
+					<li>a 'refresh' action on an import page now triggers a sort event</li>
+					<li>added 'flip_darkmode' shortcut command to 'main_gui' and 'media_viewer' shortcut sets</li>
+					<li>added copy_file/path/hash/bmp actions to the 'media' shortcut set, removed the hardcoded ctrl+c for copy_file. I added ctrl+c to the defaults, but existing users will have to re-add it manually if they want it!</li>
+					<li>simplified some page ui update code</li>
+					<li>import pages will no longer update their left-panel ui (which uses a bit of cpu) when they are not in view</li>
+					<li>polished some new string and url matching code the domain engine will be using</li>
+					<li>wrote a panel to edit string match objects</li>
+					<li>wrote a new panel to handle simple ordered lists of data in a better way</li>
+					<li>wrote most of a panel to edit url match objects</li>
+					<li>misc domain manager work</li>
+					<li>fixed an issue with the old listctrl where object name de-duplication was sometimes not permitting (1)-type names to be cleaned up</li>
+					<li>fixed some inelegant time duration->text conversions</li>
+					<li>improved complete process shutdown reliability when some downloads are waiting on bandwidth on shutdown</li>
+					<li>did some misc listctrl update work</li>
+				</ul>
+				<li><h3>version 274</h3></li>
+				<ul>
+					<li>the help menu now has an easy on/off check entry for the darkmode colourset</li>
+					<li>changing any individual colour or the entire colourset will now immediately refresh almost all custom-coloured controls with the new colour</li>
+					<li>added a BUGFIX option to options->gui to permanently fix all discord file drag-and-drop events (as long as they contain <= 10 files and total < 50MB)</li>
+					<li>you can now set specific 'open externally' launch paths on a per-mime basis under options->files and trash</li>
+					<li>improved error reporting on a bad file launch</li>
+					<li>improved the network engine to recover from and reattempt in-progress response read errors (previously reported as ReadTimeout)</li>
+					<li>fixed the 'scroll to focused thumbnail' calculations on key events (when hitting up/down arrow key on thumbnail grid, the page wasn't scrolling correctly as needed)</li>
+					<li>known urls no longer display with the scheme (http or https) in the media viewer top-right summary</li>
+					<li>known urls in the media viewer top-right summary now tooltip their full url</li>
+					<li>wrote a new button for editing tag import options. it has a good summary tooltip. it is only in the manage import folder dialog atm, but I will replicate it across the rest of the program in the coming weeks</li>
+					<li>in some situations, the file import status window will list some timestamp note info for 'already in db' and 'deleted' statuses. see if you like it</li>
+					<li>the new listctrl will generally give its data to other consumers in ui sorted order (this fixes some stuff like 'copy sources' in the file import status window, which was copying them in random order)</li>
+					<li>manage tag parents now uses the new listctrl (and is hence now safely sortable)</li>
+					<li>manage tag sibings now uses the new listctrl (and is hence now safely sortable)</li>
+					<li>some behind-the-scenes of manage parents/siblings is a bit neater</li>
+					<li>improved some thumbnail internal media structures to fetch specific media based on hash much much faster, particularly for pages with 10,000+ thumbs. this should speed up large imports and other content update events that can result in thumb redraws</li>
+					<li>fixed an issue where dismissing a popup message could spawn the entire result of the queue, ignoring the 'show 10 max' rule</li>
+					<li>completely finished the menu rewrite! all menus now work on the new system</li>
+					<li>deleted a ton of old and now obselete menu event processing code</li>
+					<li>some boot/shutdown terminal printing should be more reliable</li>
+					<li>misc refactoring</li>
+					<li>misc cleanup</li>
+				</ul>
+				<li><h3>version 273</h3></li>
+				<ul>
+					<li>converted the gui colour options to the new options system</li>
+					<li>added a 'darkmode' colour set and extended the colour options page to support it!</li>
+					<li>added a secret discord-compatible drag and drop mode. start a file transfer drag and drop with ctrl held down to initiate. keep ctrl held down, as this is secretly a 'move' drag and drop, and you want to keep it a 'copy' one. it should work for discord dnd, at least to the web version. I have an idea on how to do this better, but feedback on this would be appreciated.</li>
+					<li>converted 'import options - files' collapsible panel to a button that launches a dialog. this reduces total gui object count when many importers are open and reduces overall ui lag and limits. the button shows a summary of its current options as its tooltip. furthermore, all of this sometimes confusing nomenclature is now uniformly presented as 'file import options'</li>
+					<li>added a BUGFIX option to gui options page to force hover windows to display at all times</li>
+					<li>improved last week's gelbooru 404 fix--page urls generated pre-v272 should now be more reliable</li>
+					<li>in a further attempt to improve workspace support, popup messages will no longer update in any way if the mouse is not on the same display as the main gui</li>
+					<li>fixed an issue where dupe import urls could be queued up in a file import queue if they came in the same batch. this was essentially harmless but lead to some mixed x/y progress counts and row indices</li>
+					<li>fixed an issue where url drops were not filling in the url entry when a new raw url page had to be created on a currently selected page of pages. this may have affected a couple of other page spawning situations</li>
+					<li>may have fixed an issue with the mouse shortcut-setting button, where for some users scroll events were not registering</li>
+					<li>manage subs dialog now has the new help button up top</li>
+					<li>manage subs dialog's sub verbs are now wrapping into a single menu button that I can expand more easily in future</li>
+					<li>sped up thumbnail access a bit on certain well-defragged hard disk drives</li>
+					<li>made thumbnail fading a little smoother in some situations</li>
+					<li>rendered images that aren't otherwise pushing any memory limits will now stay cached for less time (10 mins) while thumbnails will hang around for longer (24 hours)--this was previously 20 mins for both. you should now see less thumbnail page 'refreshing' after returning to the client after inactivity</li>
+					<li>sketched out basic classes for login and domain engines</li>
+					<li>sketched out basic class for url matching</li>
+					<li>sketched out basic classes for matching and transforming strings in certain login/domain situations</li>
+					<li>updated the manage export folders dialog's listctrl to the new control</li>
+					<li>updated the last media viewer menu code to the new system</li>
+					<li>removed some old proxy code that was sometimes intruding on the new networking engine. proper proxy support will come in a later version</li>
+					<li>fixed some test code</li>
+					<li>misc refactoring</li>
+				</ul>
+				<li><h3>version 272</h3></li>
+				<ul>
+					<li>finished moving the last misc network consumers to the new networking engine</li>
+					<li>greatly simplified and harmonised some of the new network job response processing</li>
+					<li>the gelbooru 404 issue should be fixed!</li>
+					<li>added a parsing patch for rule34hentai.net's mp4 links, which was causing 'link not found' failures on the hydrus parsing end. please tell your R34 subs to retry their fails</li>
+					<li>wrote a patch (actually updated an existing patch that had fallen to bitrot) for the danbooru booru (and extended it to anything else with 'Running Danbooru' in its html) to try to fetch the full-size image if one exists. this may not last long, so I do not recommend regular users rely on it, but feel free to play with it until I have a better fix in the new downloader engine</li>
+					<li>you can now add 'thread watcher' to the default import tag options. it has 'filename' and explicit tags options. unlike gallery downloaders, thread watchers will not inherit from the 'default' import tag options entry--you need to set the specific entry</li>
+					<li>added regular number key support to the new shortcut system</li>
+					<li>fixed the borked splash screen drag coordinate calculation</li>
+					<li>heavy session loads should be more polite to CPUs and window managers</li>
+					<li>pages should generally spawn with their proper name (rather than a flicker of 'page') no matter their spawning context</li>
+					<li>fixed osx page tab drag-and-drop coordinate calculations</li>
+					<li>figured a way to make os x page tab drag-and-drop start on a single left-mouse-down event</li>
+					<li>in an effort to improve popup display on systems with virtual desktops, the popup message parent window will now not go from hidden to shown while the mouse is on a display screen other than the main gui</li>
+					<li>fixed a wacky bug where clicking on a page tab, then on its sort dropdown, then on a different tab, would invoke the Deep Ones to commence a page tab drag and drop event</li>
+					<li>fixed an index issue when unclosing some pages in certain orders</li>
+					<li>increased pre-processing disk cache population time</li>
+					<li>tweaked regular memory maintenance disk cache population timings</li>
+					<li>fixed shortcut-driven tag petition events when the tag has a sibling (e.g. if you have sibling pair (a->b) and a shortcut (key->flip a), hitting 'key' will now correctly flip a (appearing as b) on and off in the media viewer)</li>
+					<li>fixed some ugly layout sizing calculations on the path tagging dialog</li>
+					<li>updated the path tagging listctrl to the new control</li>
+					<li>updated the quick namespaces listctrl to the new control</li>
+					<li>updated the regexbutton's menu to the new menu system</li>
+					<li>fixed some typo errors with the regexbutton's entries!</li>
+					<li>removed the old gallery downloader unit tests, as these operated on the old network and downloader engine--new, granular tests will be reintroduced for the new parsing components as they are written</li>
+					<li>cleaned up some shortcut key code</li>
+					<li>misc refactoring</li>
+					<li>misc improvements</li>
+				</ul>
+				<li><h3>version 271</h3></li>
+				<ul>
+					<li>fixed an issue where the notebook 'motion' event was being consumed, disallowing the regular OS 'highlighting' on tab mouseover</li>
+					<li>fixed page tab drag and drop crash for Linux</li>
+					<li>fixed page tab drag and drop coordinate calculation for OS X</li>
+					<li>page tab drag and drop should now work for all platforms</li>
+					<li>new 'page of pages' pages now start with a blank file search page</li>
+					<li>fixed several issues with row display in the new listctrl</li>
+					<li>added a # index column to the file import status window, so you can resort the 'to be imported' order reliably</li>
+					<li>fixed an issue where the 'delete_file' application command was not firing on an appropriately mapped shortcut</li>
+					<li>fixed an issue where automatic bandwidth override would only fire if its page was in view. it now occurs at all times</li>
+					<li>fixed an issue where the file import status frame, as launched from manage subscriptions, would sometimes be non-responsive (typically for Linux)</li>
+					<li>fixed the 'pattern shortcuts' button on the export files dialog, which was misbehaving for certain choices for some window managers</li>
+					<li>fixed an unusual error where middle-clicking to create a new page while a menu was open would lock the application from receiving new key/mouse events until program focus was lost, wew lad</li>
+					<li>updated some old network code to the new engine</li>
+					<li>added some delay to network connection error reattempts so that instant fails due to local network disconnect (e.g. while computer is waking from sleep) do not consume all the reattempts too quickly</li>
+					<li>greatly simplified low-time-delta bandwidth testing and reporting, improving essential accuracy and overall feel</li>
+					<li>gallery download errors will now print additional info to the log--let's see if we can gather more info on the gelbooru 404s</li>
+					<li>wrote a patch for users of 2.X opencv who were running from source, who were unable to boot</li>
+					<li>due to hardware failure, had to make a new Linux build computer. some libraries are updated, but build _should_ be the same--let me know if not</li>
+					<li>updated to opencv 3.3 for all releases</li>
+					<li>misc old menu code updates</li>
+				</ul>
+				<li><h3>version 270</h3></li>
+				<ul>
+					<li>added page tab drag and drop (windows only, have to iron out critical bugs for linux/os x).</li>
+					<li>dragging onto the middle of a normal tab will put the source tab there</li>
+					<li>dragging onto the edge of a tab will try to insert the tab there</li>
+					<li>dragging onto the middle of a page of pages tab will insert the tab onto the end of that page's list</li>
+					<li>dragging a page up a notebook level will work ok</li>
+					<li>dragging a notebook into itself will do nothing and not crash the client :^)</li>
+					<li>new pages that come from the main gui level (such as from pages menu or file import) now open in the deepest open notebook (previously, they would always appear in the top row)</li>
+					<li>fixed some misc page of pages bugs</li>
+					<li>fixed a bandwidth calculation that meant 1s time delta rules were working at 50% capacity (e.g. 1rq per 1s rule for domains were actually running at 1rq per 2s)</li>
+					<li>improved a bandwidth estimate calculation that was cutting out early in some situations for large time deltas</li>
+					<li>tag manager's page up/down shortcuts no longer mistakenly navigate the archive/delete filter</li>
+					<li>added a network timeout option to the 'connection' options page</li>
+					<li>reduced some hover window show/hide flicker when the media viewer is fullscreen and the OS has a taskbar that pops in for non-fullscreen windows (this mostly affected Linux)</li>
+					<li>fixed a long-time issue with yes/no dialog layout</li>
+					<li>improved some rendering of EXIF-rotated and -flipped jpegs. I expect to add more support for this (and retroactive image metadata-parsing to figure out correct reversed resolution--atm rotated images remain stretched) in the coming weeks</li>
+					<li>fixed an error when cancelling the booru-picker dialog from the page chooser dialog</li>
+					<li>if no files or all files are selected, the 'invert' select choice will no longer be shown (in this case, it redundantly does the same job as 'all' and 'none')</li>
+					<li>fixed an issue where setting namespace sort as default would persist through a client reboot</li>
+					<li>fixed an issue where force idle debug mode was not waking sleeping daemons</li>
+					<li>increased frequency of mappings processing reporting</li>
+					<li>wrote an exception and the needed maintenance code for the 'repairfilesystem' dialog to allow a proceed action if the only remaining incorrect paths are thumbnail paths--in this case, the client will create empty prefix folders and prompt the user to regen thumbnails</li>
+					<li>export filenames are now clipped to make <255 total characters in path</li>
+					<li>removed the old 'processing phase' option, which was no longer in use</li>
+					<li>removed the proxy settings from the 'connection' options page--the new engine does not use this old system, but if there is demand, a more flexible system will return</li>
+					<li>misc image rendering pipeline updates</li>
+					<li>misc improvements</li>
+				</ul>
+				<li><h3>version 269</h3></li>
+				<ul>
+					<li>nested pages now supported!</li>
+					<li>moved all page management (session load/save, new/close page, page navigation, page name maintenance, etc...) code from the main gui to the new PagesNotebook object</li>
+					<li>expanded the session object to hold nested page information</li>
+					<li>added a 'page of pages' page to the 'special' new page entry!</li>
+					<li>numerous other gui-notebook page-related event fixes and improvements</li>
+					<li>figured out cross-platform menu and other mouse event support for nested notebooks, but there may still be holes--please let me know if your new pages ever appear in the wrong tier!</li>
+					<li>ways to move pages up and down rows will come in the coming weeks!</li>
+					<li>main gui status bar now shows total bandwidth this session as well as current speed</li>
+					<li>added a cog button to network job controls that allow for manual- and auto-bandwidth-override</li>
+					<li>added a 'blocked?' column to the review bandwidth panel to quickly see which network contexts are currently available to do work</li>
+					<li>added a button to reset 'default' and 'global' bandwidth rules to review bandwidth panel</li>
+					<li>merged the network request start test and consumption code into one transaction, stopping some accidental overconsumption when the engine was under heavy load</li>
+					<li>did some logic work to make sure unusual network context rule/usage situations are visible on the review bandwidth panel for editing</li>
+					<li>network jobs now report more information as they get ready to start, including while they are held up waiting for a download slot</li>
+					<li>added a simple 'network profile mode' to the debug menu that atm just prints a summary of new jobs</li>
+					<li>fixed an error that could sometimes be a crash when 'review services' was opened while no pages were open in the main gui</li>
+					<li>fixed the pixiv login test button with a hacky workaround--I will make extensive proper login testing gui when I move to the login engine</li>
+					<li>fixed an issue in the youtube downloader</li>
+					<li>if the bandwidth or session managers are missing on boot, empty defaults will be created in their stead</li>
+					<li>bumped the max page limit up to 150--I expect to increase it more in the coming months as I rejigger how some gui stuff is laid out</li>
+					<li>renamed 'sort by age' to 'time imported'</li>
+					<li>fixed and improved some test code</li>
+					<li>cleaned up some shutdown code</li>
+					<li>should have fixed a rare unicode conversion issue when printing to log</li>
+					<li>misc improvements</li>
+				</ul>
+				<li><h3>version 268</h3></li>
+				<ul>
+					<li>split the sort dropdown into two, splitting the sort type and sort order</li>
+					<li>file sorting works more intelligently behind the scenes in several ways</li>
+					<li>added 'sort by number of tags' to sort options</li>
+					<li>session pages now remember their sort status!</li>
+					<li>sessions also more reliably remember their actual thumbnail order for all pages (typically, this matters for importers atm)</li>
+					<li>network job controls now report an estimate of how long they will have to wait for bandwidth</li>
+					<li>subscriptions will now show some 'no more bandwidth to download files' text if they have to stop because of bandwidth rules</li>
+					<li>subscription 'should I start/continue' testing now has a little padding to forestall some potential unexpected long delays in operation due to edge cases</li>
+					<li>the edit subscription dialog now uses the new file import status control</li>
+					<li>fixed an issue with hentai foundry filters not applying (they added some categories since the downloader last worked, breaking the POST form), hence hiding most non-vanilla results</li>
+					<li>finished the 'database->migrate database' dialog and its help and removed the 'under construction' labels. the new help page is also now linked from the standard index.html</li>
+					<li>fixed an issue where pages would sometimes never initialise (due to being queued up after an infinite job like the network engine's mainloop!)</li>
+					<li>improved how all long-job threads are spawned</li>
+					<li>improved some more thread scheduling logic that meant some long-term jobs could be stacked undesirably</li>
+					<li>expanded how the new listctrl updates and deletes its data</li>
+					<li>reduced flicker on the new listctrl update events</li>
+					<li>the file import status window now uses the new listctrl</li>
+					<li>the manage subscriptions dialog now uses the new listctrl</li>
+					<li>collections now track their tags more accurately</li>
+					<li>moved the 'delete original files after success' checkbox up to reduce misclicks on ok'ing the file import dialog and added a bit of red warning text whenever it is on</li>
+					<li>sped up some behind-the-scenes content processing for large pages</li>
+					<li>improved how the program cleans some things up during exit</li>
+					<li>the issue with some clients not clearing their exit splash screen until a mouseover event should be fixed</li>
+					<li>at 120 open pages, the client will inform the user about the approaching max page limit</li>
+					<li>by default, import folders no longer delete anything. default is to ignore original files in all cases</li>
+					<li>deleted some old unusued code</li>
+					<li>misc cleanup</li>
+					<li>misc improvements</li>
+				</ul>
+				<li><h3>version 267</h3></li>
+				<ul>
+					<li>drag-and-dropping a 4chan or 8chan url onto the client will now automatically open a thread watcher for that url</li>
+					<li>fixed an issue where web domain or subscription network contexts that included unicode characters in their context data were unable to serialise and save to the db, causing error spam when the bandwidth manager attempted to save itself</li>
+					<li>subscriptions will now show a network job control in their popup as they do network work</li>
+					<li>subscriptions will cancel more reliably during gallery parse</li>
+					<li>subscriptions now have some 'delay' logic that will stop them sometimes restarting as soon as they are cancelled or otherwise have to stop mid-work</li>
+					<li>subscriptions will now tolerate up to five 'already in cache' urls per page parse until it considers the page 'already seen'. this is to catch the odd additional late insert and avoid the problem of a page updating and shuffling everything up one as the subscription walks through pages</li>
+					<li>maintenance modal popup messages should no longer appear if their jobs are very quick</li>
+					<li>queued up modal popup messages will no longer flicker their dialogs on a de-minimise</li>
+					<li>should have fixed an issue where modal popup messages could sometimes error out on a close attempt, locking the client's whole gui and requiring a force quit</li>
+					<li>fixed an issue where the modal popup message dialog was OKing on a close attempt of a non-cancellable job, despite presenting user text indicating otherwise</li>
+					<li>did a bunch of data work on pages</li>
+					<li>page tab names will now be clipped to 20 characters by default</li>
+					<li>pages now show (num_files) after their name by default, although you can set this for only import pages or turn it off completely</li>
+					<li>options for these new behaviours are in options->gui--and page names will update immediately on dialog ok</li>
+					<li>subscription and import folder 'show files' events (and a couple of other misc occasions) will now launch their page tab with the sub/folder name rather than a flat 'files'</li>
+					<li>wrote a new listctrl class with custom sort code that does not suffer from the 'crash when sorted while many pages open' bug. it also handles data in a simpler way for hydrus</li>
+					<li>review bandwidth listctrl now uses this new class and should now not crash your client. I will replace all the other listctrls with the new class over the coming weeks</li>
+					<li>temporarily, no old listctrls will auto-sort themselves (as this causes a crash for many users)! if you do not suffer from the crash, please sort them yourselves for now</li>
+					<li>reduced some large-scale gui import lag:</li>
+					<li>reduced content processing CPU load on clients with many thumbnails open</li>
+					<li>massively reduced content processing CPU load on non-current pages</li>
+					<li>offloaded newly-imported file thumbnail detection and generation to a non-gui thread</li>
+					<li>migrate database dialog now lets you move the whole database and all portable locations, which requires a client shutdown</li>
+					<li>the raw url downloader will no longer have a problem with pasted url lists that include empty newlines</li>
+					<li>all the downloaders/importers now sleep on cleverer event objects so they will burn less idle cpu and wake as soon as they have new work to do</li>
+					<li>fixed and otherwise improved some gallery downloader timing logic</li>
+					<li>hdd import pages now use the file import status control</li>
+					<li>the thread watcher's controls now try to wrap in a single sizer. it uses less space, but might sperg out, let me know if it is a problem. I'll replace the whole watcher timing system in the new engine anyway</li>
+					<li>fixed a gelbooru (and possibly others) booru parsing bug that meant half of the pages in the gallery walk were being skipped (e.g. 'mogudan' was producing ~350 files when there were actually 690 in the list)</li>
+					<li>fixed some dialog panel layout scrollbar-cutoff in sevaral Linux places and perhaps elsewhere</li>
+					<li>cleaned debug menu a little and added a save 'last session' entry</li>
+					<li>fixed an issue where some kinds of media would error on notification of new url association</li>
+					<li>clients will now save small transaction progress reliably within ten seconds no matter how idle they are</li>
+					<li>deleted the old 'gui capitalisation' option--I never got around to expanding it beyond a handful of menu labels, it was always too much to work on for too little reward</li>
+					<li>improved support for certain broken videos--these will import ok, but full rendering might be borked to different degrees, so let me know how it goes.</li>
+					<li>cleared out some old content processing code</li>
+					<li>cleared out some old unused db data</li>
+					<li>removed all old 'waiting politely' download settings and gui code</li>
+					<li>misc prep work for wx update</li>
+					<li>misc gui code refactoring</li>
+					<li>misc downloader cleanup and timing tweaks</li>
+					<li>misc improvements</li>
+				</ul>
 				<li><h3>version 266</h3></li>
 				<ul>
 					<li>converted gallery downloaders to the new network engine</li>

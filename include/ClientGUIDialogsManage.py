@@ -2,25 +2,29 @@ import ClientCaches
 import ClientConstants as CC
 import ClientData
 import ClientDefaults
+import ClientDownloading
 import ClientDragDrop
 import ClientExporting
 import ClientFiles
 import ClientGUIACDropdown
-import ClientGUICollapsible
 import ClientGUICommon
 import ClientGUIListBoxes
+import ClientGUIListCtrl
 import ClientGUIDialogs
-import ClientDownloading
+import ClientGUIImport
 import ClientGUIOptionsPanels
 import ClientGUIPredicates
 import ClientGUIScrolledPanelsEdit
+import ClientGUIShortcuts
 import ClientGUISeedCache
+import ClientGUITime
 import ClientGUITopLevelWindows
 import ClientImporting
 import ClientMedia
 import ClientRatings
 import ClientSearch
 import ClientServices
+import ClientThreading
 import collections
 import HydrusConstants as HC
 import HydrusData
@@ -40,7 +44,6 @@ import re
 import string
 import time
 import traceback
-import urllib
 import wx
 import yaml
 
@@ -49,12 +52,6 @@ import yaml
 ID_NULL = wx.NewId()
 
 ID_TIMER_UPDATE = wx.NewId()
-
-# Hue is generally 200, Sat and Lum changes based on need
-
-COLOUR_SELECTED = wx.Colour( 217, 242, 255 )
-COLOUR_SELECTED_DARK = wx.Colour( 1, 17, 26 )
-COLOUR_UNSELECTED = wx.Colour( 223, 227, 230 )
 
 def GenerateMultipartFormDataCTAndBodyFromDict( fields ):
     
@@ -82,6 +79,22 @@ class DialogManageBoorus( ClientGUIDialogs.Dialog ):
         self._remove.Bind( wx.EVT_BUTTON, self.EventRemove )
         self._remove.SetForegroundColour( ( 128, 0, 0 ) )
         
+        menu_items = []
+        
+        menu_items.append( ( 'normal', 'all', 'restore all defaults', self._RestoreDefault ) )
+        menu_items.append( ( 'separator', 0, 0, 0 ) )
+        
+        default_booru_data = list( ClientDefaults.GetDefaultBoorus().items() )
+        
+        default_booru_data.sort()
+        
+        for ( name, booru ) in default_booru_data:
+            
+            menu_items.append( ( 'normal', name, 'add this booru from the defaults', HydrusData.Call( self._RestoreDefault, booru ) ) )
+            
+        
+        self._restore_default = ClientGUICommon.MenuButton( self, 'restore default', menu_items )
+        
         self._export = wx.Button( self, label = 'export' )
         self._export.Bind( wx.EVT_BUTTON, self.EventExport )
         
@@ -104,28 +117,67 @@ class DialogManageBoorus( ClientGUIDialogs.Dialog ):
         #
         
         add_remove_hbox = wx.BoxSizer( wx.HORIZONTAL )
-        add_remove_hbox.AddF( self._add, CC.FLAGS_VCENTER )
-        add_remove_hbox.AddF( self._remove, CC.FLAGS_VCENTER )
-        add_remove_hbox.AddF( self._export, CC.FLAGS_VCENTER )
+        add_remove_hbox.Add( self._add, CC.FLAGS_VCENTER )
+        add_remove_hbox.Add( self._remove, CC.FLAGS_VCENTER )
+        add_remove_hbox.Add( self._restore_default, CC.FLAGS_VCENTER )
+        add_remove_hbox.Add( self._export, CC.FLAGS_VCENTER )
         
         ok_hbox = wx.BoxSizer( wx.HORIZONTAL )
-        ok_hbox.AddF( self._ok, CC.FLAGS_VCENTER )
-        ok_hbox.AddF( self._cancel, CC.FLAGS_VCENTER )
+        ok_hbox.Add( self._ok, CC.FLAGS_VCENTER )
+        ok_hbox.Add( self._cancel, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
-        vbox.AddF( self._boorus, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( add_remove_hbox, CC.FLAGS_SMALL_INDENT )
-        vbox.AddF( ok_hbox, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( self._boorus, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( add_remove_hbox, CC.FLAGS_SMALL_INDENT )
+        vbox.Add( ok_hbox, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
-        self.SetDropTarget( ClientDragDrop.FileDropTarget( self.Import, None ) )
+        self.SetDropTarget( ClientDragDrop.FileDropTarget( self, filenames_callable = self.Import ) )
     
         ( x, y ) = self.GetEffectiveMinSize()
         
         self.SetInitialSize( ( 980, y ) )
         
         wx.CallAfter( self._ok.SetFocus )
+        
+    
+    def _RestoreDefault( self, booru = None ):
+        
+        if booru is None:
+            
+            for booru in ClientDefaults.GetDefaultBoorus().values():
+                
+                self._RestoreDefault( booru )
+                
+            
+        else:
+            
+            name = booru.GetName()
+            
+            if self._boorus.KeyExists( name ):
+                
+                message = '\'' + name + '\' already exists--are you sure you want to overwrite it with the default entry?'
+                
+                with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
+                    
+                    if dlg.ShowModal() == wx.ID_YES:
+                        
+                        self._boorus.Select( name )
+                        
+                        page = self._boorus.GetPage( name )
+                        
+                        page.Update( booru )
+                        
+                    
+                
+            else:
+                
+                page = self._Panel( self._boorus, booru, is_new = True )
+                
+                self._boorus.AddPage( name, name, page, select = True )
+                
+            
         
     
     def EventAdd( self, event ):
@@ -361,8 +413,8 @@ class DialogManageBoorus( ClientGUIDialogs.Dialog ):
             
             gridbox = ClientGUICommon.WrapInGrid( self._search_panel, rows )
             
-            self._search_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            self._search_panel.AddF( self._example_html_search, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._search_panel.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            self._search_panel.Add( self._example_html_search, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             rows = []
@@ -373,30 +425,30 @@ class DialogManageBoorus( ClientGUIDialogs.Dialog ):
             
             gridbox = ClientGUICommon.WrapInGrid( self._image_panel, rows )
             
-            self._image_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            self._image_panel.AddF( self._example_html_image, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._image_panel.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            self._image_panel.Add( self._example_html_image, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
             hbox = wx.BoxSizer( wx.HORIZONTAL )
             
-            hbox.AddF( self._tag_classname, CC.FLAGS_VCENTER )
-            hbox.AddF( self._namespace, CC.FLAGS_VCENTER )
-            hbox.AddF( self._add, CC.FLAGS_VCENTER )
+            hbox.Add( self._tag_classname, CC.FLAGS_VCENTER )
+            hbox.Add( self._namespace, CC.FLAGS_VCENTER )
+            hbox.Add( self._add, CC.FLAGS_VCENTER )
             
-            self._tag_panel.AddF( self._tag_classnames_to_namespaces, CC.FLAGS_EXPAND_BOTH_WAYS )
-            self._tag_panel.AddF( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            self._tag_panel.AddF( self._example_html_tags, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._tag_panel.Add( self._tag_classnames_to_namespaces, CC.FLAGS_EXPAND_BOTH_WAYS )
+            self._tag_panel.Add( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            self._tag_panel.Add( self._example_html_tags, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
-            self._booru_panel.AddF( self._search_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self._booru_panel.AddF( self._image_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self._booru_panel.AddF( self._tag_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+            self._booru_panel.Add( self._search_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._booru_panel.Add( self._image_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._booru_panel.Add( self._tag_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( self._booru_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( self._booru_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             self.SetSizer( vbox )
             
@@ -587,19 +639,19 @@ class DialogManageContacts( ClientGUIDialogs.Dialog ):
         def ArrangeControls():
             
             add_remove_hbox = wx.BoxSizer( wx.HORIZONTAL )
-            add_remove_hbox.AddF( self._add_manually, CC.FLAGS_VCENTER )
-            add_remove_hbox.AddF( self._add_contact_address, CC.FLAGS_VCENTER )
-            add_remove_hbox.AddF( self._remove, CC.FLAGS_VCENTER )
-            add_remove_hbox.AddF( self._export, CC.FLAGS_VCENTER )
+            add_remove_hbox.Add( self._add_manually, CC.FLAGS_VCENTER )
+            add_remove_hbox.Add( self._add_contact_address, CC.FLAGS_VCENTER )
+            add_remove_hbox.Add( self._remove, CC.FLAGS_VCENTER )
+            add_remove_hbox.Add( self._export, CC.FLAGS_VCENTER )
             
             ok_hbox = wx.BoxSizer( wx.HORIZONTAL )
-            ok_hbox.AddF( self._ok, CC.FLAGS_VCENTER )
-            ok_hbox.AddF( self._cancel, CC.FLAGS_VCENTER )
+            ok_hbox.Add( self._ok, CC.FLAGS_VCENTER )
+            ok_hbox.Add( self._cancel, CC.FLAGS_VCENTER )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
-            vbox.AddF( self._contacts, CC.FLAGS_EXPAND_BOTH_WAYS )
-            vbox.AddF( add_remove_hbox, CC.FLAGS_SMALL_INDENT )
-            vbox.AddF( ok_hbox, CC.FLAGS_BUTTON_SIZER )
+            vbox.Add( self._contacts, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( add_remove_hbox, CC.FLAGS_SMALL_INDENT )
+            vbox.Add( ok_hbox, CC.FLAGS_BUTTON_SIZER )
             
             self.SetSizer( vbox )
             
@@ -616,7 +668,7 @@ class DialogManageContacts( ClientGUIDialogs.Dialog ):
         
         self.SetInitialSize( ( 980, y ) )
         
-        self.SetDropTarget( ClientDragDrop.FileDropTarget( self.Import, None ) )
+        self.SetDropTarget( ClientDragDrop.FileDropTarget( filenames_callable = self.Import ) )
         
         self.EventContactChanged( None )
         
@@ -953,22 +1005,22 @@ class DialogManageContacts( ClientGUIDialogs.Dialog ):
             
             def ArrangeControls():
                 
-                gridbox = wx.FlexGridSizer( 0, 2 )
+                gridbox = wx.FlexGridSizer( 2 )
                 
                 gridbox.AddGrowableCol( 1, 1 )
                 
-                gridbox.AddF( wx.StaticText( self._contact_panel, label = 'name' ), CC.FLAGS_VCENTER )
-                gridbox.AddF( self._name, CC.FLAGS_EXPAND_BOTH_WAYS )
-                gridbox.AddF( wx.StaticText( self._contact_panel, label = 'contact address' ), CC.FLAGS_VCENTER )
-                gridbox.AddF( self._contact_address, CC.FLAGS_EXPAND_BOTH_WAYS )
-                gridbox.AddF( wx.StaticText( self._contact_panel, label = 'public key' ), CC.FLAGS_VCENTER )
-                gridbox.AddF( self._public_key, CC.FLAGS_EXPAND_BOTH_WAYS )
+                gridbox.Add( wx.StaticText( self._contact_panel, label = 'name' ), CC.FLAGS_VCENTER )
+                gridbox.Add( self._name, CC.FLAGS_EXPAND_BOTH_WAYS )
+                gridbox.Add( wx.StaticText( self._contact_panel, label = 'contact address' ), CC.FLAGS_VCENTER )
+                gridbox.Add( self._contact_address, CC.FLAGS_EXPAND_BOTH_WAYS )
+                gridbox.Add( wx.StaticText( self._contact_panel, label = 'public key' ), CC.FLAGS_VCENTER )
+                gridbox.Add( self._public_key, CC.FLAGS_EXPAND_BOTH_WAYS )
                 
-                self._contact_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+                self._contact_panel.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
                 
                 vbox = wx.BoxSizer( wx.VERTICAL )
                 
-                vbox.AddF( self._contact_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+                vbox.Add( self._contact_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
                 
                 self.SetSizer( vbox )
                 
@@ -1068,18 +1120,11 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
         
         ClientGUIDialogs.Dialog.__init__( self, parent, 'manage export folders' )
         
-        self._export_folders = ClientGUICommon.SaneListCtrlForSingleObject( self, 120, [ ( 'name', 120 ), ( 'path', -1 ), ( 'type', 120 ), ( 'query', 120 ), ( 'period', 120 ), ( 'phrase', 120 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
+        self._export_folders = ClientGUIListCtrl.BetterListCtrl( self, 'export_folders', 6, 40, [ ( 'name', 20 ), ( 'path', -1 ), ( 'type', 12 ), ( 'query', 16 ), ( 'period', 10 ), ( 'phrase', 20 ) ], self._ConvertExportFolderToListCtrlTuples, delete_key_callback = self.Delete, activation_callback = self.Edit )
         
         export_folders = HG.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER )
         
-        for export_folder in export_folders:
-            
-            path = export_folder.GetName()
-            
-            ( display_tuple, sort_tuple ) = self._ConvertExportFolderToTuples( export_folder )
-            
-            self._export_folders.Append( display_tuple, sort_tuple, export_folder )
-            
+        self._export_folders.AddDatas( export_folders )
         
         self._add_button = wx.Button( self, label = 'add' )
         self._add_button.Bind( wx.EVT_BUTTON, self.EventAdd )
@@ -1099,23 +1144,23 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
         
         file_buttons = wx.BoxSizer( wx.HORIZONTAL )
         
-        file_buttons.AddF( self._add_button, CC.FLAGS_VCENTER )
-        file_buttons.AddF( self._edit_button, CC.FLAGS_VCENTER )
-        file_buttons.AddF( self._delete_button, CC.FLAGS_VCENTER )
+        file_buttons.Add( self._add_button, CC.FLAGS_VCENTER )
+        file_buttons.Add( self._edit_button, CC.FLAGS_VCENTER )
+        file_buttons.Add( self._delete_button, CC.FLAGS_VCENTER )
         
         buttons = wx.BoxSizer( wx.HORIZONTAL )
         
-        buttons.AddF( self._ok, CC.FLAGS_VCENTER )
-        buttons.AddF( self._cancel, CC.FLAGS_VCENTER )
+        buttons.Add( self._ok, CC.FLAGS_VCENTER )
+        buttons.Add( self._cancel, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
         intro = 'Here you can set the client to regularly export a certain query to a particular location.'
         
-        vbox.AddF( ClientGUICommon.BetterStaticText( self, intro ), CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._export_folders, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( file_buttons, CC.FLAGS_BUTTON_SIZER )
-        vbox.AddF( buttons, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( ClientGUICommon.BetterStaticText( self, intro ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._export_folders, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( file_buttons, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( buttons, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
@@ -1131,7 +1176,7 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
     
     def _AddFolder( self ):
         
-        new_options = HG.client_controller.GetNewOptions()
+        new_options = HG.client_controller.new_options
         
         phrase = new_options.GetString( 'export_phrase' )
         
@@ -1149,16 +1194,14 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
                 
                 export_folder = dlg.GetInfo()
                 
-                self._export_folders.SetNonDupeName( export_folder )
+                export_folder.SetNonDupeName( self._GetExistingNames() )
                 
-                ( display_tuple, sort_tuple ) = self._ConvertExportFolderToTuples( export_folder )
-                
-                self._export_folders.Append( display_tuple, sort_tuple, export_folder )
+                self._export_folders.AddDatas( ( export_folder, ) )
                 
             
         
     
-    def _ConvertExportFolderToTuples( self, export_folder ):
+    def _ConvertExportFolderToListCtrlTuples( self, export_folder ):
         
         ( name, path, export_type, file_search_context, period, phrase ) = export_folder.ToTuple()
         
@@ -1184,41 +1227,45 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
         return ( display_tuple, sort_tuple )
         
     
+    def _GetExistingNames( self ):
+        
+        existing_names = { export_folder.GetName() for export_folder in self._export_folders.GetData() }
+        
+        return existing_names
+        
+    
     def Delete( self ):
         
         with ClientGUIDialogs.DialogYesNo( self, 'Remove all selected?' ) as dlg:
             
             if dlg.ShowModal() == wx.ID_YES:
                 
-                self._export_folders.RemoveAllSelected()
+                self._export_folders.DeleteSelected()
                 
             
         
     
     def Edit( self ):
         
-        indices = self._export_folders.GetAllSelected()
+        export_folders = self._export_folders.GetData( only_selected = True )
         
-        for index in indices:
-            
-            export_folder = self._export_folders.GetObject( index )
-            
-            original_name = export_folder.GetName()
+        for export_folder in export_folders:
             
             with DialogManageExportFoldersEdit( self, export_folder ) as dlg:
                 
                 if dlg.ShowModal() == wx.ID_OK:
                     
+                    self._export_folders.DeleteDatas( ( export_folder, ) )
+                    
                     export_folder = dlg.GetInfo()
                     
-                    if export_folder.GetName() != original_name:
-                        
-                        self._export_folders.SetNonDupeName( export_folder )
-                        
+                    export_folder.SetNonDupeName( self._GetExistingNames() )
                     
-                    ( display_tuple, sort_tuple ) = self._ConvertExportFolderToTuples( export_folder )
+                    self._export_folders.AddDatas( ( export_folder, ) )
                     
-                    self._export_folders.UpdateRow( index, display_tuple, sort_tuple, export_folder )
+                else:
+                    
+                    return
                     
                 
             
@@ -1243,7 +1290,7 @@ class DialogManageExportFolders( ClientGUIDialogs.Dialog ):
         
         existing_db_names = set( HG.client_controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER ) )
         
-        export_folders = self._export_folders.GetObjects()
+        export_folders = self._export_folders.GetData()
         
         good_names = set()
         
@@ -1306,7 +1353,7 @@ class DialogManageExportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         self._period_box = ClientGUICommon.StaticBox( self, 'export period' )
         
-        self._period = ClientGUICommon.TimeDeltaButton( self._period_box, min = 3 * 60, days = True, hours = True, minutes = True )
+        self._period = ClientGUITime.TimeDeltaButton( self._period_box, min = 3 * 60, days = True, hours = True, minutes = True )
         
         #
         
@@ -1346,7 +1393,7 @@ class DialogManageExportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         gridbox = ClientGUICommon.WrapInGrid( self._path_box, rows )
         
-        self._path_box.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._path_box.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         #
         
@@ -1359,34 +1406,34 @@ If you select synchronise, be careful!'''
         st = wx.StaticText( self._type_box, label = text )
         st.Wrap( 440 )
         
-        self._type_box.AddF( st, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._type_box.AddF( self._type, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._type_box.Add( st, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._type_box.Add( self._type, CC.FLAGS_EXPAND_PERPENDICULAR )
         
-        self._query_box.AddF( self._predicates_box, CC.FLAGS_EXPAND_BOTH_WAYS )
-        self._query_box.AddF( self._searchbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._query_box.Add( self._predicates_box, CC.FLAGS_EXPAND_BOTH_WAYS )
+        self._query_box.Add( self._searchbox, CC.FLAGS_EXPAND_PERPENDICULAR )
         
-        self._period_box.AddF( self._period, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._period_box.Add( self._period, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         phrase_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        phrase_hbox.AddF( self._pattern, CC.FLAGS_EXPAND_BOTH_WAYS )
-        phrase_hbox.AddF( self._examples, CC.FLAGS_VCENTER )
+        phrase_hbox.Add( self._pattern, CC.FLAGS_EXPAND_BOTH_WAYS )
+        phrase_hbox.Add( self._examples, CC.FLAGS_VCENTER )
         
-        self._phrase_box.AddF( phrase_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._phrase_box.Add( phrase_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         buttons = wx.BoxSizer( wx.HORIZONTAL )
         
-        buttons.AddF( self._ok, CC.FLAGS_VCENTER )
-        buttons.AddF( self._cancel, CC.FLAGS_VCENTER )
+        buttons.Add( self._ok, CC.FLAGS_VCENTER )
+        buttons.Add( self._cancel, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._path_box, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._type_box, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._query_box, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( self._period_box, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._phrase_box, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( buttons, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( self._path_box, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._type_box, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._query_box, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( self._period_box, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._phrase_box, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( buttons, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
@@ -1488,18 +1535,18 @@ class DialogManageImageboards( ClientGUIDialogs.Dialog ):
         def ArrangeControls():
             
             add_remove_hbox = wx.BoxSizer( wx.HORIZONTAL )
-            add_remove_hbox.AddF( self._add, CC.FLAGS_VCENTER )
-            add_remove_hbox.AddF( self._remove, CC.FLAGS_VCENTER )
-            add_remove_hbox.AddF( self._export, CC.FLAGS_VCENTER )
+            add_remove_hbox.Add( self._add, CC.FLAGS_VCENTER )
+            add_remove_hbox.Add( self._remove, CC.FLAGS_VCENTER )
+            add_remove_hbox.Add( self._export, CC.FLAGS_VCENTER )
             
             ok_hbox = wx.BoxSizer( wx.HORIZONTAL )
-            ok_hbox.AddF( self._ok, CC.FLAGS_VCENTER )
-            ok_hbox.AddF( self._cancel, CC.FLAGS_VCENTER )
+            ok_hbox.Add( self._ok, CC.FLAGS_VCENTER )
+            ok_hbox.Add( self._cancel, CC.FLAGS_VCENTER )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
-            vbox.AddF( self._sites, CC.FLAGS_EXPAND_BOTH_WAYS )
-            vbox.AddF( add_remove_hbox, CC.FLAGS_SMALL_INDENT )
-            vbox.AddF( ok_hbox, CC.FLAGS_BUTTON_SIZER )
+            vbox.Add( self._sites, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( add_remove_hbox, CC.FLAGS_SMALL_INDENT )
+            vbox.Add( ok_hbox, CC.FLAGS_BUTTON_SIZER )
             
             self.SetSizer( vbox )
             
@@ -1516,7 +1563,7 @@ class DialogManageImageboards( ClientGUIDialogs.Dialog ):
         
         self.SetInitialSize( ( 980, y ) )
         
-        self.SetDropTarget( ClientDragDrop.FileDropTarget( self.Import, None ) )
+        self.SetDropTarget( ClientDragDrop.FileDropTarget( filenames_callable = self.Import ) )
         
         wx.CallAfter( self._ok.SetFocus )
         
@@ -1690,16 +1737,16 @@ class DialogManageImageboards( ClientGUIDialogs.Dialog ):
             def ArrangeControls():
                 
                 add_remove_hbox = wx.BoxSizer( wx.HORIZONTAL )
-                add_remove_hbox.AddF( self._add, CC.FLAGS_VCENTER )
-                add_remove_hbox.AddF( self._remove, CC.FLAGS_VCENTER )
-                add_remove_hbox.AddF( self._export, CC.FLAGS_VCENTER )
+                add_remove_hbox.Add( self._add, CC.FLAGS_VCENTER )
+                add_remove_hbox.Add( self._remove, CC.FLAGS_VCENTER )
+                add_remove_hbox.Add( self._export, CC.FLAGS_VCENTER )
                 
-                self._site_panel.AddF( self._imageboards, CC.FLAGS_EXPAND_BOTH_WAYS )
-                self._site_panel.AddF( add_remove_hbox, CC.FLAGS_SMALL_INDENT )
+                self._site_panel.Add( self._imageboards, CC.FLAGS_EXPAND_BOTH_WAYS )
+                self._site_panel.Add( add_remove_hbox, CC.FLAGS_SMALL_INDENT )
                 
                 vbox = wx.BoxSizer( wx.VERTICAL )
                 
-                vbox.AddF( self._site_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+                vbox.Add( self._site_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
                 
                 self.SetSizer( vbox )
                 
@@ -1932,51 +1979,51 @@ class DialogManageImageboards( ClientGUIDialogs.Dialog ):
                 
                 def ArrangeControls():
                     
-                    gridbox = wx.FlexGridSizer( 0, 2 )
+                    gridbox = wx.FlexGridSizer( 2 )
                     
                     gridbox.AddGrowableCol( 1, 1 )
                     
-                    gridbox.AddF( wx.StaticText( self._basic_info_panel, label = 'POST URL' ), CC.FLAGS_VCENTER )
-                    gridbox.AddF( self._post_url, CC.FLAGS_EXPAND_BOTH_WAYS )
-                    gridbox.AddF( wx.StaticText( self._basic_info_panel, label = 'flood time' ), CC.FLAGS_VCENTER )
-                    gridbox.AddF( self._flood_time, CC.FLAGS_EXPAND_BOTH_WAYS )
+                    gridbox.Add( wx.StaticText( self._basic_info_panel, label = 'POST URL' ), CC.FLAGS_VCENTER )
+                    gridbox.Add( self._post_url, CC.FLAGS_EXPAND_BOTH_WAYS )
+                    gridbox.Add( wx.StaticText( self._basic_info_panel, label = 'flood time' ), CC.FLAGS_VCENTER )
+                    gridbox.Add( self._flood_time, CC.FLAGS_EXPAND_BOTH_WAYS )
                     
-                    self._basic_info_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+                    self._basic_info_panel.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
                     
                     #
                     
                     h_b_box = wx.BoxSizer( wx.HORIZONTAL )
-                    h_b_box.AddF( self._add, CC.FLAGS_VCENTER )
-                    h_b_box.AddF( self._edit, CC.FLAGS_VCENTER )
-                    h_b_box.AddF( self._delete, CC.FLAGS_VCENTER )
+                    h_b_box.Add( self._add, CC.FLAGS_VCENTER )
+                    h_b_box.Add( self._edit, CC.FLAGS_VCENTER )
+                    h_b_box.Add( self._delete, CC.FLAGS_VCENTER )
                     
-                    self._form_fields_panel.AddF( self._form_fields, CC.FLAGS_EXPAND_BOTH_WAYS )
-                    self._form_fields_panel.AddF( h_b_box, CC.FLAGS_BUTTON_SIZER )
+                    self._form_fields_panel.Add( self._form_fields, CC.FLAGS_EXPAND_BOTH_WAYS )
+                    self._form_fields_panel.Add( h_b_box, CC.FLAGS_BUTTON_SIZER )
                     
                     #
                     
                     mime_buttons_box = wx.BoxSizer( wx.HORIZONTAL )
-                    mime_buttons_box.AddF( self._mime_choice, CC.FLAGS_VCENTER )
-                    mime_buttons_box.AddF( self._add_mime, CC.FLAGS_VCENTER )
-                    mime_buttons_box.AddF( self._remove_mime, CC.FLAGS_VCENTER )
+                    mime_buttons_box.Add( self._mime_choice, CC.FLAGS_VCENTER )
+                    mime_buttons_box.Add( self._add_mime, CC.FLAGS_VCENTER )
+                    mime_buttons_box.Add( self._remove_mime, CC.FLAGS_VCENTER )
                     
-                    self._allowed_mimes_panel.AddF( self._mimes, CC.FLAGS_EXPAND_BOTH_WAYS )
-                    self._allowed_mimes_panel.AddF( mime_buttons_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+                    self._allowed_mimes_panel.Add( self._mimes, CC.FLAGS_EXPAND_BOTH_WAYS )
+                    self._allowed_mimes_panel.Add( mime_buttons_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
                     
-                    self._restrictions_panel.AddF( self._min_resolution, CC.FLAGS_EXPAND_PERPENDICULAR )
-                    self._restrictions_panel.AddF( self._max_resolution, CC.FLAGS_EXPAND_PERPENDICULAR )
-                    self._restrictions_panel.AddF( self._max_file_size, CC.FLAGS_EXPAND_PERPENDICULAR )
-                    self._restrictions_panel.AddF( self._allowed_mimes_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+                    self._restrictions_panel.Add( self._min_resolution, CC.FLAGS_EXPAND_PERPENDICULAR )
+                    self._restrictions_panel.Add( self._max_resolution, CC.FLAGS_EXPAND_PERPENDICULAR )
+                    self._restrictions_panel.Add( self._max_file_size, CC.FLAGS_EXPAND_PERPENDICULAR )
+                    self._restrictions_panel.Add( self._allowed_mimes_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
                     
                     #
                     
-                    self._imageboard_panel.AddF( self._basic_info_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-                    self._imageboard_panel.AddF( self._form_fields_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
-                    self._imageboard_panel.AddF( self._restrictions_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+                    self._imageboard_panel.Add( self._basic_info_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+                    self._imageboard_panel.Add( self._form_fields_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+                    self._imageboard_panel.Add( self._restrictions_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
                     
                     vbox = wx.BoxSizer( wx.VERTICAL )
                     
-                    vbox.AddF( self._imageboard_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+                    vbox.Add( self._imageboard_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
                     
                     self.SetSizer( vbox )
                     
@@ -2170,7 +2217,7 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
         
         ClientGUIDialogs.Dialog.__init__( self, parent, 'manage import folders' )
         
-        self._import_folders = ClientGUICommon.SaneListCtrlForSingleObject( self, 120, [ ( 'name', 120 ), ( 'path', -1 ), ( 'check period', 120 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
+        self._import_folders = ClientGUIListCtrl.SaneListCtrlForSingleObject( self, 120, [ ( 'name', 120 ), ( 'path', -1 ), ( 'check period', 120 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
         
         self._add_button = wx.Button( self, label = 'add' )
         self._add_button.Bind( wx.EVT_BUTTON, self.EventAdd )
@@ -2203,23 +2250,31 @@ class DialogManageImportFolders( ClientGUIDialogs.Dialog ):
         
         file_buttons = wx.BoxSizer( wx.HORIZONTAL )
         
-        file_buttons.AddF( self._add_button, CC.FLAGS_VCENTER )
-        file_buttons.AddF( self._edit_button, CC.FLAGS_VCENTER )
-        file_buttons.AddF( self._delete_button, CC.FLAGS_VCENTER )
+        file_buttons.Add( self._add_button, CC.FLAGS_VCENTER )
+        file_buttons.Add( self._edit_button, CC.FLAGS_VCENTER )
+        file_buttons.Add( self._delete_button, CC.FLAGS_VCENTER )
         
         buttons = wx.BoxSizer( wx.HORIZONTAL )
         
-        buttons.AddF( self._ok, CC.FLAGS_VCENTER )
-        buttons.AddF( self._cancel, CC.FLAGS_VCENTER )
+        buttons.Add( self._ok, CC.FLAGS_VCENTER )
+        buttons.Add( self._cancel, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
         intro = 'Here you can set the client to regularly check certain folders for new files to import.'
         
-        vbox.AddF( ClientGUICommon.BetterStaticText( self, intro ), CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._import_folders, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( file_buttons, CC.FLAGS_BUTTON_SIZER )
-        vbox.AddF( buttons, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( ClientGUICommon.BetterStaticText( self, intro ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        
+        warning = 'WARNING: Import folders check (and potentially move/delete!) the contents of all subdirectories as well as the base directory!'
+        
+        warning_st = ClientGUICommon.BetterStaticText( self, warning )
+        
+        warning_st.SetForegroundColour( ( 128, 0, 0 ) )
+        
+        vbox.Add( warning_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._import_folders, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( file_buttons, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( buttons, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
@@ -2357,7 +2412,7 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         self._import_folder = import_folder
         
-        ( name, path, mimes, import_file_options, import_tag_options, txt_parse_tag_service_keys, actions, action_locations, period, open_popup, paused ) = self._import_folder.ToTuple()
+        ( name, path, mimes, file_import_options, tag_import_options, tag_service_keys_to_filename_tagging_options, actions, action_locations, period, check_regularly, paused, check_now, show_working_popup, publish_files_to_popup_button, publish_files_to_page ) = self._import_folder.ToTuple()
         
         self._panel = wx.ScrolledWindow( self )
         
@@ -2367,14 +2422,19 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         self._path = wx.DirPickerCtrl( self._folder_box, style = wx.DIRP_USE_TEXTCTRL )
         
-        self._open_popup = wx.CheckBox( self._folder_box )
+        self._check_regularly = wx.CheckBox( self._folder_box )
         
-        self._period = ClientGUICommon.TimeDeltaButton( self._folder_box, min = 3 * 60, days = True, hours = True, minutes = True )
+        self._period = ClientGUITime.TimeDeltaButton( self._folder_box, min = 3 * 60, days = True, hours = True, minutes = True )
         
         self._paused = wx.CheckBox( self._folder_box )
         
-        self._seed_cache_button = ClientGUICommon.BetterBitmapButton( self._folder_box, CC.GlobalBMPs.seed_cache, self.ShowSeedCache )
-        self._seed_cache_button.SetToolTipString( 'open detailed file import status' )
+        self._check_now = wx.CheckBox( self._folder_box )
+        
+        self._show_working_popup = wx.CheckBox( self._folder_box )
+        self._publish_files_to_popup_button = wx.CheckBox( self._folder_box )
+        self._publish_files_to_page = wx.CheckBox( self._folder_box )
+        
+        self._seed_cache_button = ClientGUISeedCache.SeedCacheButton( self._folder_box, HG.client_controller, self._import_folder.GetSeedCache, seed_cache_set_callable = self._import_folder.SetSeedCache )
         
         #
         
@@ -2408,28 +2468,25 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
         self._action_failed = create_choice()
         self._location_failed = wx.DirPickerCtrl( self._file_box, style = wx.DIRP_USE_TEXTCTRL )
         
-        self._import_file_options = ClientGUIOptionsPanels.OptionsPanelImportFiles( self._file_box )
+        self._file_import_options = ClientGUIImport.FileImportOptionsButton( self._file_box, file_import_options )
         
         #
         
         self._tag_box = ClientGUICommon.StaticBox( self._panel, 'tag options' )
         
-        self._import_tag_options = ClientGUIOptionsPanels.OptionsPanelTags( self._tag_box )
-        self._import_tag_options.SetNamespaces( [] )
+        self._tag_import_options = ClientGUIImport.TagImportOptionsButton( self._tag_box, [], tag_import_options, show_url_options = False )
         
-        self._txt_parse_st = wx.StaticText( self._tag_box, label = '' )
+        filename_tagging_options_panel = ClientGUIListCtrl.BetterListCtrlPanel( self._tag_box )
+        
+        self._filename_tagging_options = ClientGUIListCtrl.BetterListCtrl( filename_tagging_options_panel, 'filename_tagging_options', 5, 25, [ ( 'filename tagging options services', -1 ) ], self._ConvertFilenameTaggingOptionsToListctrlTuple, delete_key_callback = self._DeleteFilenameTaggingOptions, activation_callback = self._EditFilenameTaggingOptions )
+        
+        filename_tagging_options_panel.SetListCtrl( self._filename_tagging_options )
+        
+        filename_tagging_options_panel.AddButton( 'add', self._AddFilenameTaggingOptions )
+        filename_tagging_options_panel.AddButton( 'edit', self._EditFilenameTaggingOptions, enabled_only_on_selection = True )
+        filename_tagging_options_panel.AddButton( 'delete', self._DeleteFilenameTaggingOptions, enabled_only_on_selection = True )
         
         services_manager = HG.client_controller.services_manager
-        
-        self._txt_parse_tag_service_keys = services_manager.FilterValidServiceKeys( txt_parse_tag_service_keys )
-        
-        self._RefreshTxtParseText()
-        
-        self._txt_parse_button = wx.Button( self._tag_box, label = 'edit .txt parsing' )
-        self._txt_parse_button.Bind( wx.EVT_BUTTON, self.EventEditTxtParsing )
-        
-        txt_files_help_button = ClientGUICommon.BetterBitmapButton( self._tag_box, CC.GlobalBMPs.help, self._ShowTXTHelp )
-        txt_files_help_button.SetToolTipString( 'Show help regarding importing tags from .txt files.' )
         
         #
         
@@ -2444,10 +2501,15 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         self._name.SetValue( name )
         self._path.SetPath( path )
-        self._open_popup.SetValue( open_popup )
+        
+        self._check_regularly.SetValue( check_regularly )
         
         self._period.SetValue( period )
         self._paused.SetValue( paused )
+        
+        self._show_working_popup.SetValue( show_working_popup )
+        self._publish_files_to_popup_button.SetValue( publish_files_to_popup_button )
+        self._publish_files_to_page.SetValue( publish_files_to_page )
         
         self._mimes.SetValue( mimes )
         
@@ -2475,8 +2537,11 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
             self._location_failed.SetPath( action_locations[ CC.STATUS_FAILED ] )
             
         
-        self._import_file_options.SetOptions( import_file_options )
-        self._import_tag_options.SetOptions( import_tag_options )
+        good_tag_service_keys_to_filename_tagging_options = { service_key : filename_tagging_options for ( service_key, filename_tagging_options ) in tag_service_keys_to_filename_tagging_options.items() if HG.client_controller.services_manager.ServiceExists( service_key ) }
+        
+        self._filename_tagging_options.AddDatas( good_tag_service_keys_to_filename_tagging_options.items() )
+        
+        self._filename_tagging_options.Sort()
         
         #
         
@@ -2484,14 +2549,18 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         rows.append( ( 'name: ', self._name ) )
         rows.append( ( 'folder path: ', self._path ) )
+        rows.append( ( 'currently paused (if set, will not ever do any work): ', self._paused ) )
+        rows.append( ( 'check regularly?: ', self._check_regularly ) )
         rows.append( ( 'check period: ', self._period ) )
-        rows.append( ( 'currently paused: ', self._paused ) )
-        rows.append( ( 'open a popup if new files imported: ', self._open_popup ) )
+        rows.append( ( 'check on manage dialog ok: ', self._check_now ) )
+        rows.append( ( 'show a popup while working: ', self._show_working_popup ) )
+        rows.append( ( 'if new files imported, publish them to a popup button: ', self._publish_files_to_popup_button ) )
+        rows.append( ( 'if new files imported, publish them to a page: ', self._publish_files_to_page ) )
         rows.append( ( 'review currently cached import paths: ', self._seed_cache_button ) )
         
         gridbox = ClientGUICommon.WrapInGrid( self._folder_box, rows )
         
-        self._folder_box.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._folder_box.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         #
         
@@ -2501,60 +2570,54 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         mimes_gridbox = ClientGUICommon.WrapInGrid( self._file_box, rows, expand_text = True )
         
-        gridbox = wx.FlexGridSizer( 0, 3 )
+        gridbox = wx.FlexGridSizer( 3 )
         
         gridbox.AddGrowableCol( 1, 1 )
         
-        gridbox.AddF( wx.StaticText( self._file_box, label = 'when a file imports successfully: '), CC.FLAGS_VCENTER )
-        gridbox.AddF( self._action_successful, CC.FLAGS_EXPAND_BOTH_WAYS )
-        gridbox.AddF( self._location_successful, CC.FLAGS_EXPAND_BOTH_WAYS )
+        gridbox.Add( wx.StaticText( self._file_box, label = 'when a file imports successfully: '), CC.FLAGS_VCENTER )
+        gridbox.Add( self._action_successful, CC.FLAGS_EXPAND_BOTH_WAYS )
+        gridbox.Add( self._location_successful, CC.FLAGS_EXPAND_BOTH_WAYS )
         
-        gridbox.AddF( wx.StaticText( self._file_box, label = 'when a file is already in the db: '), CC.FLAGS_VCENTER )
-        gridbox.AddF( self._action_redundant, CC.FLAGS_EXPAND_BOTH_WAYS )
-        gridbox.AddF( self._location_redundant, CC.FLAGS_EXPAND_BOTH_WAYS )
+        gridbox.Add( wx.StaticText( self._file_box, label = 'when a file is already in the db: '), CC.FLAGS_VCENTER )
+        gridbox.Add( self._action_redundant, CC.FLAGS_EXPAND_BOTH_WAYS )
+        gridbox.Add( self._location_redundant, CC.FLAGS_EXPAND_BOTH_WAYS )
         
-        gridbox.AddF( wx.StaticText( self._file_box, label = 'when a file has previously been deleted from the db: '), CC.FLAGS_VCENTER )
-        gridbox.AddF( self._action_deleted, CC.FLAGS_EXPAND_BOTH_WAYS )
-        gridbox.AddF( self._location_deleted, CC.FLAGS_EXPAND_BOTH_WAYS )
+        gridbox.Add( wx.StaticText( self._file_box, label = 'when a file has previously been deleted from the db: '), CC.FLAGS_VCENTER )
+        gridbox.Add( self._action_deleted, CC.FLAGS_EXPAND_BOTH_WAYS )
+        gridbox.Add( self._location_deleted, CC.FLAGS_EXPAND_BOTH_WAYS )
         
-        gridbox.AddF( wx.StaticText( self._file_box, label = 'when a file fails to import: '), CC.FLAGS_VCENTER )
-        gridbox.AddF( self._action_failed, CC.FLAGS_EXPAND_BOTH_WAYS )
-        gridbox.AddF( self._location_failed, CC.FLAGS_EXPAND_BOTH_WAYS )
+        gridbox.Add( wx.StaticText( self._file_box, label = 'when a file fails to import: '), CC.FLAGS_VCENTER )
+        gridbox.Add( self._action_failed, CC.FLAGS_EXPAND_BOTH_WAYS )
+        gridbox.Add( self._location_failed, CC.FLAGS_EXPAND_BOTH_WAYS )
         
-        self._file_box.AddF( mimes_gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        self._file_box.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        self._file_box.AddF( self._import_file_options, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._file_box.Add( mimes_gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._file_box.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._file_box.Add( self._file_import_options, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         #
         
-        txt_hbox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        txt_hbox.AddF( self._txt_parse_button, CC.FLAGS_EXPAND_BOTH_WAYS )
-        txt_hbox.AddF( txt_files_help_button, CC.FLAGS_VCENTER )
-        
-        self._tag_box.AddF( self._import_tag_options, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        self._tag_box.AddF( self._txt_parse_st, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        self._tag_box.AddF( txt_hbox, CC.FLAGS_SIZER_VCENTER )
+        self._tag_box.Add( self._tag_import_options, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._tag_box.Add( filename_tagging_options_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         #
         
         buttons = wx.BoxSizer( wx.HORIZONTAL )
         
-        buttons.AddF( self._ok, CC.FLAGS_VCENTER )
-        buttons.AddF( self._cancel, CC.FLAGS_VCENTER )
+        buttons.Add( self._ok, CC.FLAGS_VCENTER )
+        buttons.Add( self._cancel, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._folder_box, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._file_box, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._tag_box, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._folder_box, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._file_box, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._tag_box, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         self._panel.SetSizer( vbox )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._panel, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( buttons, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( self._panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( buttons, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
@@ -2571,7 +2634,48 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
         
         self._CheckLocations()
         
+        self._check_regularly.Bind( wx.EVT_CHECKBOX, self.EventCheckRegularly )
+        
+        self._UpdateCheckRegularly()
+        
         wx.CallAfter( self._ok.SetFocus )
+        
+    
+    def _AddFilenameTaggingOptions( self ):
+        
+        service_key = ClientGUIDialogs.SelectServiceKey( HC.TAG_SERVICES )
+        
+        if service_key is None:
+            
+            return
+            
+        
+        existing_service_keys = { service_key for ( service_key, filename_tagging_options ) in self._filename_tagging_options.GetData() }
+        
+        if service_key in existing_service_keys:
+            
+            wx.MessageBox( 'You already have an entry for that service key! Please try editing it instead!' )
+            
+            return
+            
+        
+        with ClientGUITopLevelWindows.DialogEdit( self, 'edit filename tagging options' ) as dlg:
+            
+            filename_tagging_options = ClientImporting.FilenameTaggingOptions()
+            
+            panel = ClientGUIImport.EditFilenameTaggingOptionPanel( dlg, service_key, filename_tagging_options )
+            
+            dlg.SetPanel( panel )
+            
+            if dlg.ShowModal() == wx.ID_OK:
+                
+                filename_tagging_options = panel.GetValue()
+                
+                self._filename_tagging_options.AddDatas( [ ( service_key, filename_tagging_options ) ] )
+                
+                self._filename_tagging_options.Sort()
+                
+            
         
     
     def _CheckLocations( self ):
@@ -2613,67 +2717,79 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
             
         
     
-    def _RefreshTxtParseText( self ):
+    def _ConvertFilenameTaggingOptionsToListctrlTuple( self, data ):
         
-        services_manager = HG.client_controller.services_manager
+        ( service_key, filename_tagging_options ) = data
         
-        services = [ services_manager.GetService( service_key ) for service_key in self._txt_parse_tag_service_keys ]
+        name = HG.client_controller.services_manager.GetName( service_key )
         
-        service_names = [ service.GetName() for service in services ]
+        display_tuple = ( name, )
+        sort_tuple = ( name, )
         
-        if len( service_names ) > 0:
+        return ( display_tuple, sort_tuple )
+        
+    
+    def _DeleteFilenameTaggingOptions( self ):
+        
+        with ClientGUIDialogs.DialogYesNo( self, 'Delete all selected?' ) as dlg:
             
-            service_names.sort()
+            if dlg.ShowModal() == wx.ID_YES:
+                
+                self._filename_tagging_options.DeleteSelected()
+                
             
-            text = 'Loading tags from neighbouring .txt files for ' + ', '.join( service_names ) + '.'
+        
+    
+    def _EditFilenameTaggingOptions( self ):
+        
+        selected_data = self._filename_tagging_options.GetData( only_selected = True )
+        
+        for data in selected_data:
+            
+            ( service_key, filename_tagging_options ) = data
+            
+            with ClientGUITopLevelWindows.DialogEdit( self, 'edit filename tagging options' ) as dlg:
+                
+                panel = ClientGUIImport.EditFilenameTaggingOptionPanel( dlg, service_key, filename_tagging_options )
+                
+                dlg.SetPanel( panel )
+                
+                if dlg.ShowModal() == wx.ID_OK:
+                    
+                    self._filename_tagging_options.DeleteDatas( ( data, ) )
+                    
+                    filename_tagging_options = panel.GetValue()
+                    
+                    self._filename_tagging_options.AddDatas( [ ( service_key, filename_tagging_options ) ] )
+                    
+                else:
+                    
+                    break
+                    
+                
+            
+        
+    
+    def _UpdateCheckRegularly( self ):
+        
+        if self._check_regularly.GetValue():
+            
+            self._period.Enable()
             
         else:
             
-            text = 'Not loading tags from neighbouring .txt files for any tag services.'
+            self._period.Disable()
             
         
-        self._txt_parse_st.SetLabelText( text )
-        
     
-    def _ShowTXTHelp( self ):
+    def EventCheckRegularly( self, event ):
         
-        message = 'If you would like to add custom tags with your files, add a .txt file beside the file like so:'
-        message += os.linesep * 2
-        message += 'my_file.jpg'
-        message += os.linesep
-        message += 'my_file.jpg.txt'
-        message += os.linesep * 2
-        message += 'And include your tags inside the .txt file in a newline-separated list (if you know how to script, generating these files automatically from another source of tags can save a lot of time!).'
-        message += os.linesep * 2
-        message += 'If you are not absolutely comfortable with this, practise it through the manual import process.'
-        
-        wx.MessageBox( message )
+        self._UpdateCheckRegularly()
         
     
     def EventCheckLocations( self, event ):
         
         self._CheckLocations()
-        
-    
-    def EventEditTxtParsing( self, event ):
-        
-        services_manager = HG.client_controller.services_manager
-        
-        tag_services = services_manager.GetServices( HC.TAG_SERVICES )
-        
-        list_of_tuples = [ ( service.GetName(), service.GetServiceKey(), service.GetServiceKey() in self._txt_parse_tag_service_keys ) for service in tag_services ]
-        
-        list_of_tuples.sort()
-        
-        with ClientGUIDialogs.DialogCheckFromList( self, 'select tag services', list_of_tuples ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_OK:
-                
-                self._txt_parse_tag_service_keys = dlg.GetChecked()
-                
-                self._RefreshTxtParseText()
-                
-            
         
     
     def EventOK( self, event ):
@@ -2687,6 +2803,11 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
             return
             
         
+        if not os.path.exists( path ):
+            
+            wx.MessageBox( 'The path you have entered--"' + path + '"--does not exist! The dialog will not force you to correct it, but this import folder will do no work as long as the location is missing!' )
+            
+        
         if HC.BASE_DIR.startswith( path ) or HG.client_controller.GetDBDir().startswith( path ):
             
             wx.MessageBox( 'You cannot set an import path that includes your install or database directory!' )
@@ -2694,32 +2815,72 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
             return
             
         
-        if self._action_successful.GetChoice() == CC.IMPORT_FOLDER_MOVE and self._location_successful.GetPath() in ( '', None ):
+        if self._action_successful.GetChoice() == CC.IMPORT_FOLDER_MOVE:
             
-            wx.MessageBox( 'You must enter a path for your successful file move location!' )
+            path = self._location_successful.GetPath()
             
-            return
+            if path in ( '', None ):
+                
+                wx.MessageBox( 'You must enter a path for your successful file move location!' )
+                
+                return
+                
             
-        
-        if self._action_redundant.GetChoice() == CC.IMPORT_FOLDER_MOVE and self._location_redundant.GetPath() in ( '', None ):
-            
-            wx.MessageBox( 'You must enter a path for your redundant file move location!' )
-            
-            return
-            
-        
-        if self._action_deleted.GetChoice() == CC.IMPORT_FOLDER_MOVE and self._location_deleted.GetPath() in ( '', None ):
-            
-            wx.MessageBox( 'You must enter a path for your deleted file move location!' )
-            
-            return
+            if not os.path.exists( path ):
+                
+                wx.MessageBox( 'The path you have entered for your successful file move location--"' + path + '"--does not exist! The dialog will not force you to correct it, but you should not let this import folder run until you have corrected or created it!' )
+                
             
         
-        if self._action_failed.GetChoice() == CC.IMPORT_FOLDER_MOVE and self._location_failed.GetPath() in ( '', None ):
+        if self._action_redundant.GetChoice() == CC.IMPORT_FOLDER_MOVE:
             
-            wx.MessageBox( 'You must enter a path for your failed file move location!' )
+            path = self._location_redundant.GetPath()
             
-            return
+            if path in ( '', None ):
+                
+                wx.MessageBox( 'You must enter a path for your redundant file move location!' )
+                
+                return
+                
+            
+            if not os.path.exists( path ):
+                
+                wx.MessageBox( 'The path you have entered for your redundant file move location--"' + path + '"--does not exist! The dialog will not force you to correct it, but you should not let this import folder run until you have corrected or created it!' )
+                
+            
+        
+        if self._action_deleted.GetChoice() == CC.IMPORT_FOLDER_MOVE:
+            
+            path = self._location_deleted.GetPath()
+            
+            if path in ( '', None ):
+                
+                wx.MessageBox( 'You must enter a path for your deleted file move location!' )
+                
+                return
+                
+            
+            if not os.path.exists( path ):
+                
+                wx.MessageBox( 'The path you have entered for your deleted file move location--"' + path + '"--does not exist! The dialog will not force you to correct it, but you should not let this import folder run until you have corrected or created it!' )
+                
+            
+        
+        if self._action_failed.GetChoice() == CC.IMPORT_FOLDER_MOVE:
+            
+            path = self._location_failed.GetPath()
+            
+            if path in ( '', None ):
+                
+                wx.MessageBox( 'You must enter a path for your failed file move location!' )
+                
+                return
+                
+            
+            if not os.path.exists( path ):
+                
+                wx.MessageBox( 'The path you have entered for your failed file move location--"' + path + '"--does not exist! The dialog will not force you to correct it, but you should not let this import folder run until you have corrected or created it!' )
+                
             
         
         self.EndModal( wx.ID_OK )
@@ -2730,8 +2891,8 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
         name = self._name.GetValue()
         path = HydrusData.ToUnicode( self._path.GetPath() )
         mimes = self._mimes.GetValue()
-        import_file_options = self._import_file_options.GetOptions()
-        import_tag_options = self._import_tag_options.GetOptions()
+        file_import_options = self._file_import_options.GetValue()
+        tag_import_options = self._tag_import_options.GetValue()
         
         actions = {}
         action_locations = {}
@@ -2761,32 +2922,21 @@ class DialogManageImportFoldersEdit( ClientGUIDialogs.Dialog ):
             
         
         period = self._period.GetValue()
-        open_popup = self._open_popup.GetValue()
+        check_regularly = self._check_regularly.GetValue()
         
         paused = self._paused.GetValue()
         
-        self._import_folder.SetTuple( name, path, mimes, import_file_options, import_tag_options, self._txt_parse_tag_service_keys, actions, action_locations, period, open_popup, paused )
+        check_now = self._check_now.GetValue()
+        
+        show_working_popup = self._show_working_popup.GetValue()
+        publish_files_to_popup_button = self._publish_files_to_popup_button.GetValue()
+        publish_files_to_page = self._publish_files_to_page.GetValue()
+        
+        tag_service_keys_to_filename_tagging_options = dict( self._filename_tagging_options.GetData() )
+        
+        self._import_folder.SetTuple( name, path, mimes, file_import_options, tag_import_options, tag_service_keys_to_filename_tagging_options, actions, action_locations, period, check_regularly, paused, check_now, show_working_popup, publish_files_to_popup_button, publish_files_to_page )
         
         return self._import_folder
-        
-    
-    def ShowSeedCache( self ):
-        
-        seed_cache = self._import_folder.GetSeedCache()
-        
-        dupe_seed_cache = seed_cache.Duplicate()
-        
-        with ClientGUITopLevelWindows.DialogEdit( self, 'file import status' ) as dlg:
-            
-            panel = ClientGUISeedCache.EditSeedCachePanel( dlg, HG.client_controller, dupe_seed_cache )
-            
-            dlg.SetPanel( panel )
-            
-            if dlg.ShowModal() == wx.ID_OK:
-                
-                self._import_folder.SetSeedCache( dupe_seed_cache )
-                
-            
         
     
 class DialogManagePixivAccount( ClientGUIDialogs.Dialog ):
@@ -2834,8 +2984,8 @@ class DialogManagePixivAccount( ClientGUIDialogs.Dialog ):
         gridbox = ClientGUICommon.WrapInGrid( self, rows )
         
         b_box = wx.BoxSizer( wx.HORIZONTAL )
-        b_box.AddF( self._ok, CC.FLAGS_VCENTER )
-        b_box.AddF( self._cancel, CC.FLAGS_VCENTER )
+        b_box.Add( self._ok, CC.FLAGS_VCENTER )
+        b_box.Add( self._cancel, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
@@ -2845,11 +2995,11 @@ class DialogManagePixivAccount( ClientGUIDialogs.Dialog ):
         text += os.linesep
         text += 'You can use a throwaway account if you want--this only needs to log in.'
         
-        vbox.AddF( ClientGUICommon.BetterStaticText( self, text ), CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        vbox.AddF( self._status, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._test, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( b_box, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( ClientGUICommon.BetterStaticText( self, text ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        vbox.Add( self._status, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._test, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( b_box, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
@@ -2886,13 +3036,20 @@ class DialogManagePixivAccount( ClientGUIDialogs.Dialog ):
         
         try:
             
-            manager = HG.client_controller.GetManager( 'web_sessions' )
+            manager = HG.client_controller.network_engine.login_manager
             
-            cookies = manager.GetPixivCookies( pixiv_id, password )
+            ( result, message ) = manager.TestPixiv( pixiv_id, password )
             
-            self._status.SetLabelText( 'OK!' )
-            
-            wx.CallLater( 5000, self._status.SetLabel, '' )
+            if result:
+                
+                self._status.SetLabelText( 'OK!' )
+                
+                HG.client_controller.CallLaterWXSafe( self._status, 5, self._status.SetLabel, '' )
+                
+            else:
+                
+                self._status.SetLabelText( message )
+                
             
         except HydrusExceptions.ForbiddenException as e:
             
@@ -2953,17 +3110,17 @@ class DialogManageRatings( ClientGUIDialogs.Dialog ):
         
         buttonbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        buttonbox.AddF( self._apply, CC.FLAGS_VCENTER )
-        buttonbox.AddF( self._cancel, CC.FLAGS_VCENTER )
+        buttonbox.Add( self._apply, CC.FLAGS_VCENTER )
+        buttonbox.Add( self._cancel, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
         for panel in self._panels:
             
-            vbox.AddF( panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
         
-        vbox.AddF( buttonbox, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( buttonbox, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
@@ -2973,10 +3130,45 @@ class DialogManageRatings( ClientGUIDialogs.Dialog ):
         
         #
         
-        self.Bind( wx.EVT_CHAR_HOOK, self.EventCharHook )
+        self._my_shortcut_handler = ClientGUIShortcuts.ShortcutsHandler( self, [ 'media' ] )
         
     
-    def _ProcessApplicationCommand( self, command ):
+    def EventOK( self, event ):
+        
+        try:
+            
+            service_keys_to_content_updates = {}
+            
+            for panel in self._panels:
+                
+                sub_service_keys_to_content_updates = panel.GetContentUpdates()
+                
+                service_keys_to_content_updates.update( sub_service_keys_to_content_updates )
+                
+            
+            if len( service_keys_to_content_updates ) > 0:
+                
+                HG.client_controller.Write( 'content_updates', service_keys_to_content_updates )
+                
+            
+            ( remember, position ) = HC.options[ 'rating_dialog_position' ]
+            
+            current_position = self.GetPosition()
+            
+            if remember and position != current_position:
+                
+                HC.options[ 'rating_dialog_position' ] = ( remember, current_position )
+                
+                HG.client_controller.Write( 'save_options', HC.options )
+                
+            
+        finally:
+            
+            self.EndModal( wx.ID_OK )
+            
+        
+    
+    def ProcessApplicationCommand( self, command ):
         
         command_processed = True
         
@@ -3002,77 +3194,6 @@ class DialogManageRatings( ClientGUIDialogs.Dialog ):
             
         
         return command_processed
-        
-    
-    def _ProcessShortcut( self, shortcut ):
-        
-        shortcut_processed = False
-        
-        command = HG.client_controller.GetCommandFromShortcut( [ 'media' ], shortcut )
-        
-        if command is not None:
-            
-            command_processed = self._ProcessApplicationCommand( command )
-            
-            if command_processed:
-                
-                shortcut_processed = True
-                
-            
-        
-        return shortcut_processed
-        
-    
-    def EventCharHook( self, event ):
-        
-        shortcut = ClientData.ConvertKeyEventToShortcut( event )
-        
-        if shortcut is not None:
-            
-            shortcut_processed = self._ProcessShortcut( shortcut )
-            
-            if shortcut_processed:
-                
-                return
-                
-            
-        
-        event.Skip()
-        
-    
-    def EventOK( self, event ):
-        
-        try:
-            
-            service_keys_to_content_updates = {}
-            
-            for panel in self._panels:
-                
-                sub_service_keys_to_content_updates = panel.GetContentUpdates()
-                
-                service_keys_to_content_updates.update( sub_service_keys_to_content_updates )
-                
-            
-            if len( service_keys_to_content_updates ) > 0:
-                
-                HG.client_controller.Write( 'content_updates', service_keys_to_content_updates )
-                
-            
-            ( remember, position ) = HC.options[ 'rating_dialog_position' ]
-            
-            current_position = self.GetPositionTuple()
-            
-            if remember and position != current_position:
-                
-                HC.options[ 'rating_dialog_position' ] = ( remember, current_position )
-                
-                HG.client_controller.Write( 'save_options', HC.options )
-                
-            
-        finally:
-            
-            self.EndModal( wx.ID_OK )
-            
         
     
     class _LikePanel( wx.Panel ):
@@ -3221,154 +3342,6 @@ class DialogManageRatings( ClientGUIDialogs.Dialog ):
             
         
     
-class DialogManageRegexFavourites( ClientGUIDialogs.Dialog ):
-    
-    def __init__( self, parent ):
-        
-        ClientGUIDialogs.Dialog.__init__( self, parent, 'manage regex favourites' )
-        
-        self._regexes = ClientGUICommon.SaneListCtrl( self, 200, [ ( 'regex phrase', 120 ), ( 'description', -1 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
-        
-        self._add_button = wx.Button( self, label = 'add' )
-        self._add_button.Bind( wx.EVT_BUTTON, self.EventAdd )
-        
-        self._edit_button = wx.Button( self, label = 'edit' )
-        self._edit_button.Bind( wx.EVT_BUTTON, self.EventEdit )
-        
-        self._delete_button = wx.Button( self, label = 'delete' )
-        self._delete_button.Bind( wx.EVT_BUTTON, self.EventDelete )
-        
-        self._ok = wx.Button( self, id = wx.ID_OK, label = 'ok' )
-        self._ok.Bind( wx.EVT_BUTTON, self.EventOK )
-        self._ok.SetForegroundColour( ( 0, 128, 0 ) )
-        
-        self._cancel = wx.Button( self, id = wx.ID_CANCEL, label = 'cancel' )
-        self._cancel.SetForegroundColour( ( 128, 0, 0 ) )
-        
-        #
-        
-        for ( regex_phrase, description ) in HC.options[ 'regex_favourites' ]:
-            
-            self._regexes.Append( ( regex_phrase, description ), ( regex_phrase, description ) )
-            
-        
-        #
-        
-        regex_buttons = wx.BoxSizer( wx.HORIZONTAL )
-        
-        regex_buttons.AddF( self._add_button, CC.FLAGS_VCENTER )
-        regex_buttons.AddF( self._edit_button, CC.FLAGS_VCENTER )
-        regex_buttons.AddF( self._delete_button, CC.FLAGS_VCENTER )
-        
-        buttons = wx.BoxSizer( wx.HORIZONTAL )
-        
-        buttons.AddF( self._ok, CC.FLAGS_VCENTER )
-        buttons.AddF( self._cancel, CC.FLAGS_VCENTER )
-        
-        vbox = wx.BoxSizer( wx.VERTICAL )
-        
-        vbox.AddF( self._regexes, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( regex_buttons, CC.FLAGS_BUTTON_SIZER )
-        vbox.AddF( buttons, CC.FLAGS_BUTTON_SIZER )
-        
-        self.SetSizer( vbox )
-        
-        #
-        
-        ( x, y ) = self.GetEffectiveMinSize()
-        
-        if x < 360: x = 360
-        if y < 360: y = 360
-        
-        self.SetInitialSize( ( x, y ) )
-        
-        wx.CallAfter( self._ok.SetFocus )
-        
-    
-    def Delete( self ):
-        
-        with ClientGUIDialogs.DialogYesNo( self, 'Remove all selected?' ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_YES:
-                
-                self._regexes.RemoveAllSelected()
-                
-            
-        
-    
-    def Edit( self ):
-        
-        indices = self._regexes.GetAllSelected()
-        
-        for index in indices:
-            
-            ( regex_phrase, description ) = self._regexes.GetClientData( index )
-            
-            with ClientGUIDialogs.DialogTextEntry( self, 'Update regex.', default = regex_phrase ) as dlg:
-                
-                if dlg.ShowModal() == wx.ID_OK:
-                    
-                    regex_phrase = dlg.GetValue()
-                    
-                    with ClientGUIDialogs.DialogTextEntry( self, 'Update description.', default = description ) as dlg_2:
-                        
-                        if dlg_2.ShowModal() == wx.ID_OK:
-                            
-                            description = dlg_2.GetValue()
-                            
-                            self._regexes.UpdateRow( index, ( regex_phrase, description ), ( regex_phrase, description ) )
-                            
-                        
-                    
-                
-            
-        
-    
-    def EventAdd( self, event ):
-        
-        with ClientGUIDialogs.DialogTextEntry( self, 'Enter regex.' ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_OK:
-                
-                regex_phrase = dlg.GetValue()
-                
-                with ClientGUIDialogs.DialogTextEntry( self, 'Enter description.' ) as dlg_2:
-                    
-                    if dlg_2.ShowModal() == wx.ID_OK:
-                        
-                        description = dlg_2.GetValue()
-                        
-                        self._regexes.Append( ( regex_phrase, description ), ( regex_phrase, description ) )
-                        
-                    
-                
-            
-        
-    
-    def EventDelete( self, event ):
-        
-        self.Delete()
-        
-    
-    def EventEdit( self, event ):
-        
-        self.Edit()
-        
-    
-    def EventOK( self, event ):
-        
-        try:
-            
-            HC.options[ 'regex_favourites' ] = self._regexes.GetClientData()
-            
-            HG.client_controller.Write( 'save_options', HC.options )
-            
-        finally:
-            
-            self.EndModal( wx.ID_OK )
-            
-        
-    
 class DialogManageTagCensorship( ClientGUIDialogs.Dialog ):
     
     def __init__( self, parent, initial_value = None ):
@@ -3405,8 +3378,8 @@ class DialogManageTagCensorship( ClientGUIDialogs.Dialog ):
         
         buttons = wx.BoxSizer( wx.HORIZONTAL )
         
-        buttons.AddF( self._ok, CC.FLAGS_SMALL_INDENT )
-        buttons.AddF( self._cancel, CC.FLAGS_SMALL_INDENT )
+        buttons.Add( self._ok, CC.FLAGS_SMALL_INDENT )
+        buttons.Add( self._cancel, CC.FLAGS_SMALL_INDENT )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
@@ -3416,9 +3389,9 @@ class DialogManageTagCensorship( ClientGUIDialogs.Dialog ):
         
         st.Wrap( 350 )
         
-        vbox.AddF( st, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._tag_services, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( buttons, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( st, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._tag_services, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( buttons, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
@@ -3491,9 +3464,9 @@ class DialogManageTagCensorship( ClientGUIDialogs.Dialog ):
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( self._blacklist, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._tags, CC.FLAGS_EXPAND_BOTH_WAYS )
-            vbox.AddF( self._tag_input, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._blacklist, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._tags, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( self._tag_input, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             self.SetSizer( vbox )
             
@@ -3580,13 +3553,13 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
         
         buttons = wx.BoxSizer( wx.HORIZONTAL )
         
-        buttons.AddF( self._ok, CC.FLAGS_SMALL_INDENT )
-        buttons.AddF( self._cancel, CC.FLAGS_SMALL_INDENT )
+        buttons.Add( self._ok, CC.FLAGS_SMALL_INDENT )
+        buttons.Add( self._cancel, CC.FLAGS_SMALL_INDENT )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._tag_repositories, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( buttons, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( self._tag_repositories, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( buttons, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
@@ -3618,6 +3591,19 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
     
     def EventOK( self, event ):
         
+        if self._tag_repositories.GetCurrentPage().HasUncommittedPair():
+            
+            message = 'Are you sure you want to OK? You have an uncommitted pair.'
+            
+            with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
+                
+                if dlg.ShowModal() != wx.ID_YES:
+                    
+                    return
+                    
+                
+            
+        
         service_keys_to_content_updates = {}
         
         try:
@@ -3631,7 +3617,10 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
             
             HG.client_controller.Write( 'content_updates', service_keys_to_content_updates )
             
-        finally: self.EndModal( wx.ID_OK )
+        finally:
+            
+            self.EndModal( wx.ID_OK )
+            
         
     
     def EventServiceChanged( self, event ):
@@ -3659,10 +3648,11 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
             
             self._pairs_to_reasons = {}
             
-            self._tag_parents = ClientGUICommon.SaneListCtrl( self, 250, [ ( '', 30 ), ( 'child', 160 ), ( 'parent', -1 ) ] )
-            self._tag_parents.Bind( wx.EVT_LIST_ITEM_ACTIVATED, self.EventActivated )
+            self._tag_parents = ClientGUIListCtrl.BetterListCtrl( self, 'tag_parents', 30, 25, [ ( '', 4 ), ( 'child', 25 ), ( 'parent', -1 ) ], self._ConvertPairToListCtrlTuples, delete_key_callback = self._ListCtrlActivated, activation_callback = self._ListCtrlActivated )
             self._tag_parents.Bind( wx.EVT_LIST_ITEM_SELECTED, self.EventItemSelected )
             self._tag_parents.Bind( wx.EVT_LIST_ITEM_DESELECTED, self.EventItemSelected )
+            
+            self._tag_parents.Sort( 2 )
             
             self._children = ClientGUIListBoxes.ListBoxTagsStringsAddRemove( self, self._service_key, show_sibling_text = False )
             self._parents = ClientGUIListBoxes.ListBoxTagsStringsAddRemove( self, self._service_key, show_sibling_text = False )
@@ -3683,31 +3673,35 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
             
             #
             
-            self._status_st = ClientGUICommon.BetterStaticText( self, u'initialising\u2026' )
+            self._status_st = ClientGUICommon.BetterStaticText( self, u'initialising\u2026' + os.linesep + '.' )
+            self._count_st = ClientGUICommon.BetterStaticText( self, '' )
             
             tags_box = wx.BoxSizer( wx.HORIZONTAL )
             
-            tags_box.AddF( self._children, CC.FLAGS_EXPAND_BOTH_WAYS )
-            tags_box.AddF( self._parents, CC.FLAGS_EXPAND_BOTH_WAYS )
+            tags_box.Add( self._children, CC.FLAGS_EXPAND_BOTH_WAYS )
+            tags_box.Add( self._parents, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             input_box = wx.BoxSizer( wx.HORIZONTAL )
             
-            input_box.AddF( self._child_input, CC.FLAGS_EXPAND_BOTH_WAYS )
-            input_box.AddF( self._parent_input, CC.FLAGS_EXPAND_BOTH_WAYS )
+            input_box.Add( self._child_input, CC.FLAGS_EXPAND_BOTH_WAYS )
+            input_box.Add( self._parent_input, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( self._status_st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._tag_parents, CC.FLAGS_EXPAND_BOTH_WAYS )
-            vbox.AddF( self._add, CC.FLAGS_LONE_BUTTON )
-            vbox.AddF( tags_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            vbox.AddF( input_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            vbox.Add( self._status_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._count_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._tag_parents, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( self._add, CC.FLAGS_LONE_BUTTON )
+            vbox.Add( tags_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            vbox.Add( input_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
             
             self.SetSizer( vbox )
             
             #
             
-            HG.client_controller.CallToThread( self.THREADInitialise, tags )
+            self.Bind( ClientGUIListBoxes.EVT_LIST_BOX, self.EventListBoxChanged )
+            
+            HG.client_controller.CallToThread( self.THREADInitialise, tags, self._service_key )
             
         
         def _AddPairs( self, children, parent ):
@@ -3904,12 +3898,30 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
             
             if len( affected_pairs ) > 0:
                 
-                for pair in affected_pairs:
+                def in_current( pair ):
                     
-                    self._RefreshPair( pair )
+                    for status in ( HC.CONTENT_STATUS_CURRENT, HC.CONTENT_STATUS_PENDING, HC.CONTENT_STATUS_PETITIONED ):
+                        
+                        if pair in self._current_statuses_to_pairs[ status ]:
+                            
+                            return True
+                            
+                        
+                        return False
+                        
                     
                 
-                self._tag_parents.SortListItems()
+                affected_pairs = [ ( self._tag_parents.HasData( pair ), in_current( pair ), pair ) for pair in affected_pairs ]
+                
+                to_add = [ pair for ( exists, current, pair ) in affected_pairs if not exists ]
+                to_update = [ pair for ( exists, current, pair ) in affected_pairs if exists and current ]
+                to_delete = [ pair for ( exists, current, pair ) in affected_pairs if exists and not current ]
+                
+                self._tag_parents.AddDatas( to_add )
+                self._tag_parents.UpdateDatas( to_update )
+                self._tag_parents.DeleteDatas( to_delete )
+                
+                self._tag_parents.Sort()
                 
             
         
@@ -3940,84 +3952,13 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
             return True
             
         
-        def _RefreshPair( self, pair ):
-            
-            ( child, parent ) = pair
-            
-            for status in ( HC.CONTENT_STATUS_CURRENT, HC.CONTENT_STATUS_DELETED, HC.CONTENT_STATUS_PENDING, HC.CONTENT_STATUS_PETITIONED ):
-                
-                if self._tag_parents.HasClientData( ( status, child, parent ) ):
-                    
-                    index = self._tag_parents.GetIndexFromClientData( ( status, child, parent ) )
-                    
-                    self._tag_parents.DeleteItem( index )
-                    
-                    break
-                    
-                
-            
-            new_status = None
-            
-            if pair in self._current_statuses_to_pairs[ HC.CONTENT_STATUS_PENDING ]:
-                
-                new_status = HC.CONTENT_STATUS_PENDING
-                
-            elif pair in self._current_statuses_to_pairs[ HC.CONTENT_STATUS_PETITIONED ]:
-                
-                new_status = HC.CONTENT_STATUS_PETITIONED
-                
-            elif pair in self._original_statuses_to_pairs[ HC.CONTENT_STATUS_CURRENT ]:
-                
-                new_status = HC.CONTENT_STATUS_CURRENT
-                
-            
-            if new_status is not None:
-                
-                sign = HydrusData.ConvertStatusToPrefix( new_status )
-                
-                self._tag_parents.Append( ( sign, child, parent ), ( new_status, child, parent ) )
-                
-            
-        
-        def _SetButtonStatus( self ):
-            
-            if len( self._children.GetTags() ) == 0 or len( self._parents.GetTags() ) == 0: self._add.Disable()
-            else: self._add.Enable()
-            
-        
-        def EnterChildren( self, tags ):
-            
-            if len( tags ) > 0:
-                
-                self._parents.RemoveTags( tags )
-                
-                self._children.EnterTags( tags )
-                
-                self._SetButtonStatus()
-                
-            
-        
-        def EnterParents( self, tags ):
-            
-            if len( tags ) > 0:
-                
-                self._children.RemoveTags( tags )
-                
-                self._parents.EnterTags( tags )
-                
-                self._SetButtonStatus()
-                
-            
-        
-        def EventActivated( self, event ):
+        def _ListCtrlActivated( self ):
             
             parents_to_children = collections.defaultdict( set )
             
-            all_selected = self._tag_parents.GetAllSelected()
+            pairs = self._tag_parents.GetData( only_selected = True )
             
-            for selection in all_selected:
-                
-                ( status, child, parent ) = self._tag_parents.GetClientData( selection )
+            for ( child, parent ) in pairs:
                 
                 parents_to_children[ parent ].add( child )
                 
@@ -4031,6 +3972,124 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
                 
             
         
+        def _ConvertPairToListCtrlTuples( self, pair ):
+            
+            ( child, parent ) = pair
+            
+            if pair in self._current_statuses_to_pairs[ HC.CONTENT_STATUS_PENDING ]:
+                
+                status = HC.CONTENT_STATUS_PENDING
+                
+            elif pair in self._current_statuses_to_pairs[ HC.CONTENT_STATUS_PETITIONED ]:
+                
+                status = HC.CONTENT_STATUS_PETITIONED
+                
+            elif pair in self._original_statuses_to_pairs[ HC.CONTENT_STATUS_CURRENT ]:
+                
+                status = HC.CONTENT_STATUS_CURRENT
+                
+            
+            sign = HydrusData.ConvertStatusToPrefix( status )
+            
+            pretty_status = sign
+            
+            display_tuple = ( pretty_status, child, parent )
+            sort_tuple = ( status, child, parent )
+            
+            return ( display_tuple, sort_tuple )
+            
+        
+        def _SetButtonStatus( self ):
+            
+            if len( self._children.GetTags() ) == 0 or len( self._parents.GetTags() ) == 0:
+                
+                self._add.Disable()
+                
+            else:
+                
+                self._add.Enable()
+                
+            
+        
+        def _UpdateListCtrlData( self ):
+            
+            children = self._children.GetTags()
+            parents = self._parents.GetTags()
+            
+            pertinent_tags = children.union( parents )
+            
+            self._tag_parents.DeleteDatas( self._tag_parents.GetData() )
+            
+            all_pairs = set()
+            
+            for ( status, pairs ) in self._current_statuses_to_pairs.items():
+                
+                if status == HC.CONTENT_STATUS_DELETED:
+                    
+                    continue
+                    
+                
+                
+                if len( pertinent_tags ) == 0:
+                    
+                    if status == HC.CONTENT_STATUS_CURRENT:
+                        
+                        continue
+                        
+                    
+                    # show all pending/petitioned
+                    
+                    all_pairs.update( pairs )
+                    
+                else:
+                    
+                    # show all appropriate
+                    
+                    for pair in pairs:
+                        
+                        ( a, b ) = pair
+                        
+                        if a in pertinent_tags or b in pertinent_tags:
+                            
+                            all_pairs.add( pair )
+                            
+                        
+                    
+                
+            
+            self._tag_parents.AddDatas( all_pairs )
+            
+            self._tag_parents.Sort()
+            
+        
+        def EnterChildren( self, tags ):
+            
+            if len( tags ) > 0:
+                
+                self._parents.RemoveTags( tags )
+                
+                self._children.EnterTags( tags )
+                
+                self._UpdateListCtrlData()
+                
+                self._SetButtonStatus()
+                
+            
+        
+        def EnterParents( self, tags ):
+            
+            if len( tags ) > 0:
+                
+                self._children.RemoveTags( tags )
+                
+                self._parents.EnterTags( tags )
+                
+                self._UpdateListCtrlData()
+                
+                self._SetButtonStatus()
+                
+            
+        
         def EventAddButton( self, event ):
             
             children = self._children.GetTags()
@@ -4041,12 +4100,19 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
             self._children.SetTags( [] )
             self._parents.SetTags( [] )
             
+            self._UpdateListCtrlData()
+            
             self._SetButtonStatus()
             
         
         def EventItemSelected( self, event ):
             
             self._SetButtonStatus()
+            
+        
+        def EventListBoxChanged( self, event ):
+            
+            self._UpdateListCtrlData()
             
         
         def GetContentUpdates( self ):
@@ -4084,61 +4150,68 @@ class DialogManageTagParents( ClientGUIDialogs.Dialog ):
             return ( self._service_key, content_updates )
             
         
+        def HasUncommittedPair( self ):
+            
+            return len( self._children.GetTags() ) > 0 and len( self._parents.GetTags() ) > 0
+            
+        
         def SetTagBoxFocus( self ):
             
             if len( self._children.GetTags() ) == 0: self._child_input.SetFocus()
             else: self._parent_input.SetFocus()
             
         
-        def THREADInitialise( self, tags ):
+        def THREADInitialise( self, tags, service_key ):
             
-            def wx_code():
+            def wx_code( original_statuses_to_pairs, current_statuses_to_pairs ):
                 
                 if not self:
                     
                     return
                     
                 
-                self._status_st.SetLabelText( 'Files with a tag on the left will also be given the tag on the right.' )
+                self._original_statuses_to_pairs = original_statuses_to_pairs
+                self._current_statuses_to_pairs = current_statuses_to_pairs
+                
+                self._status_st.SetLabelText( 'Files with a tag on the left will also be given the tag on the right.' + os.linesep + 'As an experiment, this panel will only display the \'current\' pairs for those tags entered below.' )
+                self._count_st.SetLabelText( 'Starting with ' + HydrusData.ConvertIntToPrettyString( len( original_statuses_to_pairs[ HC.CONTENT_STATUS_CURRENT ] ) ) + ' pairs.' )
                 
                 self._child_input.Enable()
                 self._parent_input.Enable()
-                
-                petitioned_pairs = set( self._original_statuses_to_pairs[ HC.CONTENT_STATUS_PETITIONED ] )
+                '''
+                all_pairs = set()
                 
                 for ( status, pairs ) in self._original_statuses_to_pairs.items():
                     
-                    if status != HC.CONTENT_STATUS_DELETED:
+                    if status == HC.CONTENT_STATUS_DELETED:
                         
-                        sign = HydrusData.ConvertStatusToPrefix( status )
-                        
-                        for ( child, parent ) in pairs:
-                            
-                            if status == HC.CONTENT_STATUS_CURRENT and ( child, parent ) in petitioned_pairs:
-                                
-                                continue
-                                
-                            
-                            self._tag_parents.Append( ( sign, child, parent ), ( status, child, parent ) )
-                            
+                        continue
                         
                     
+                    all_pairs.update( pairs )
+                    
                 
-                self._tag_parents.SortListItems( 2 )
+                self._tag_parents.AddDatas( all_pairs )
                 
-                if tags is not None:
+                self._tag_parents.Sort( 2 )
+                '''
+                if tags is None:
+                    
+                    self._UpdateListCtrlData()
+                    
+                else:
                     
                     self.EnterChildren( tags )
                     
                 
             
-            self._original_statuses_to_pairs = HG.client_controller.Read( 'tag_parents', self._service_key )
+            original_statuses_to_pairs = HG.client_controller.Read( 'tag_parents', service_key )
             
-            self._current_statuses_to_pairs = collections.defaultdict( set )
+            current_statuses_to_pairs = collections.defaultdict( set )
             
-            self._current_statuses_to_pairs.update( { key : set( value ) for ( key, value ) in self._original_statuses_to_pairs.items() } )
+            current_statuses_to_pairs.update( { key : set( value ) for ( key, value ) in original_statuses_to_pairs.items() } )
             
-            wx.CallAfter( wx_code )
+            wx.CallAfter( wx_code, original_statuses_to_pairs, current_statuses_to_pairs )
             
         
     
@@ -4187,13 +4260,13 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
         
         buttons = wx.BoxSizer( wx.HORIZONTAL )
         
-        buttons.AddF( self._ok, CC.FLAGS_SMALL_INDENT )
-        buttons.AddF( self._cancel, CC.FLAGS_SMALL_INDENT )
+        buttons.Add( self._ok, CC.FLAGS_SMALL_INDENT )
+        buttons.Add( self._cancel, CC.FLAGS_SMALL_INDENT )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._tag_repositories, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( buttons, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( self._tag_repositories, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( buttons, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
@@ -4224,6 +4297,19 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
         
     
     def EventOK( self, event ):
+        
+        if self._tag_repositories.GetCurrentPage().HasUncommittedPair():
+            
+            message = 'Are you sure you want to OK? You have an uncommitted pair.'
+            
+            with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
+                
+                if dlg.ShowModal() != wx.ID_YES:
+                    
+                    return
+                    
+                
+            
         
         service_keys_to_content_updates = {}
         
@@ -4268,8 +4354,7 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
             
             self._current_new = None
             
-            self._tag_siblings = ClientGUICommon.SaneListCtrl( self, 250, [ ( '', 30 ), ( 'old', 160 ), ( 'new', -1 ) ] )
-            self._tag_siblings.Bind( wx.EVT_LIST_ITEM_ACTIVATED, self.EventActivated )
+            self._tag_siblings = ClientGUIListCtrl.BetterListCtrl( self, 'tag_siblings', 30, 25, [ ( '', 4 ), ( 'old', 25 ), ( 'new', -1 ) ], self._ConvertPairToListCtrlTuples, delete_key_callback = self._ListCtrlActivated, activation_callback = self._ListCtrlActivated )
             self._tag_siblings.Bind( wx.EVT_LIST_ITEM_SELECTED, self.EventItemSelected )
             self._tag_siblings.Bind( wx.EVT_LIST_ITEM_DESELECTED, self.EventItemSelected )
             
@@ -4291,36 +4376,38 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
             #
             
             self._status_st = ClientGUICommon.BetterStaticText( self, u'initialising\u2026' )
+            self._count_st = ClientGUICommon.BetterStaticText( self, '' )
             
             new_sibling_box = wx.BoxSizer( wx.VERTICAL )
             
-            new_sibling_box.AddF( ( 10, 10 ), CC.FLAGS_EXPAND_BOTH_WAYS )
-            new_sibling_box.AddF( self._new_sibling, CC.FLAGS_EXPAND_PERPENDICULAR )
-            new_sibling_box.AddF( ( 10, 10 ), CC.FLAGS_EXPAND_BOTH_WAYS )
+            new_sibling_box.Add( ( 10, 10 ), CC.FLAGS_EXPAND_BOTH_WAYS )
+            new_sibling_box.Add( self._new_sibling, CC.FLAGS_EXPAND_PERPENDICULAR )
+            new_sibling_box.Add( ( 10, 10 ), CC.FLAGS_EXPAND_BOTH_WAYS )
             
             text_box = wx.BoxSizer( wx.HORIZONTAL )
             
-            text_box.AddF( self._old_siblings, CC.FLAGS_EXPAND_BOTH_WAYS )
-            text_box.AddF( new_sibling_box, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+            text_box.Add( self._old_siblings, CC.FLAGS_EXPAND_BOTH_WAYS )
+            text_box.Add( new_sibling_box, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
             
             input_box = wx.BoxSizer( wx.HORIZONTAL )
             
-            input_box.AddF( self._old_input, CC.FLAGS_EXPAND_BOTH_WAYS )
-            input_box.AddF( self._new_input, CC.FLAGS_EXPAND_BOTH_WAYS )
+            input_box.Add( self._old_input, CC.FLAGS_EXPAND_BOTH_WAYS )
+            input_box.Add( self._new_input, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( self._status_st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._tag_siblings, CC.FLAGS_EXPAND_BOTH_WAYS )
-            vbox.AddF( self._add, CC.FLAGS_LONE_BUTTON )
-            vbox.AddF( text_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            vbox.AddF( input_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            vbox.Add( self._status_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._count_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._tag_siblings, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( self._add, CC.FLAGS_LONE_BUTTON )
+            vbox.Add( text_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            vbox.Add( input_box, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
             
             self.SetSizer( vbox )
             
             #
             
-            HG.client_controller.CallToThread( self.THREADInitialise, tags )
+            HG.client_controller.CallToThread( self.THREADInitialise, tags, self._service_key )
             
         
         def _AddPairs( self, olds, new ):
@@ -4513,12 +4600,30 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
             
             if len( affected_pairs ) > 0:
                 
-                for pair in affected_pairs:
+                def in_current( pair ):
                     
-                    self._RefreshPair( pair )
+                    for status in ( HC.CONTENT_STATUS_CURRENT, HC.CONTENT_STATUS_PENDING, HC.CONTENT_STATUS_PETITIONED ):
+                        
+                        if pair in self._current_statuses_to_pairs[ status ]:
+                            
+                            return True
+                            
+                        
+                        return False
+                        
                     
                 
-                self._tag_siblings.SortListItems()
+                affected_pairs = [ ( self._tag_siblings.HasData( pair ), in_current( pair ), pair ) for pair in affected_pairs ]
+                
+                to_add = [ pair for ( exists, current, pair ) in affected_pairs if not exists ]
+                to_update = [ pair for ( exists, current, pair ) in affected_pairs if exists and current ]
+                to_delete = [ pair for ( exists, current, pair ) in affected_pairs if exists and not current ]
+                
+                self._tag_siblings.AddDatas( to_add )
+                self._tag_siblings.UpdateDatas( to_update )
+                self._tag_siblings.DeleteDatas( to_delete )
+                
+                self._tag_siblings.Sort()
                 
             
         
@@ -4563,43 +4668,51 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
             return True
             
         
-        def _RefreshPair( self, pair ):
+        def _ListCtrlActivated( self ):
+            
+            news_to_olds = collections.defaultdict( set )
+            
+            pairs = self._tag_siblings.GetData( only_selected = True )
+            
+            for ( old, new ) in pairs:
+                
+                news_to_olds[ new ].add( old )
+                
+            
+            if len( news_to_olds ) > 0:
+                
+                for ( new, olds ) in news_to_olds.items():
+                    
+                    self._AddPairs( olds, new )
+                    
+                
+            
+        
+        def _ConvertPairToListCtrlTuples( self, pair ):
             
             ( old, new ) = pair
             
-            for status in ( HC.CONTENT_STATUS_CURRENT, HC.CONTENT_STATUS_DELETED, HC.CONTENT_STATUS_PENDING, HC.CONTENT_STATUS_PETITIONED ):
-                
-                if self._tag_siblings.HasClientData( ( status, old, new ) ):
-                    
-                    index = self._tag_siblings.GetIndexFromClientData( ( status, old, new ) )
-                    
-                    self._tag_siblings.DeleteItem( index )
-                    
-                    break
-                    
-                
-            
-            new_status = None
-            
             if pair in self._current_statuses_to_pairs[ HC.CONTENT_STATUS_PENDING ]:
                 
-                new_status = HC.CONTENT_STATUS_PENDING
+                status = HC.CONTENT_STATUS_PENDING
                 
             elif pair in self._current_statuses_to_pairs[ HC.CONTENT_STATUS_PETITIONED ]:
                 
-                new_status = HC.CONTENT_STATUS_PETITIONED
+                status = HC.CONTENT_STATUS_PETITIONED
                 
             elif pair in self._original_statuses_to_pairs[ HC.CONTENT_STATUS_CURRENT ]:
                 
-                new_status = HC.CONTENT_STATUS_CURRENT
+                status = HC.CONTENT_STATUS_CURRENT
                 
             
-            if new_status is not None:
-                
-                sign = HydrusData.ConvertStatusToPrefix( new_status )
-                
-                self._tag_siblings.Append( ( sign, old, new ), ( new_status, old, new ) )
-                
+            sign = HydrusData.ConvertStatusToPrefix( status )
+            
+            pretty_status = sign
+            
+            display_tuple = ( pretty_status, old, new )
+            sort_tuple = ( status, old, new )
+            
+            return ( display_tuple, sort_tuple )
             
         
         def _SetButtonStatus( self ):
@@ -4667,28 +4780,6 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
             self._SetButtonStatus()
             
         
-        def EventActivated( self, event ):
-            
-            news_to_olds = collections.defaultdict( set )
-            
-            all_selected = self._tag_siblings.GetAllSelected()
-            
-            for selection in all_selected:
-                
-                ( status, old, new ) = self._tag_siblings.GetClientData( selection )
-                
-                news_to_olds[ new ].add( old )
-                
-            
-            if len( news_to_olds ) > 0:
-                
-                for ( new, olds ) in news_to_olds.items():
-                    
-                    self._AddPairs( olds, new )
-                    
-                
-            
-        
         def EventAddButton( self, event ):
             
             if self._current_new is not None and len( self._old_siblings.GetTags() ) > 0:
@@ -4746,6 +4837,11 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
             return ( self._service_key, content_updates )
             
         
+        def HasUncommittedPair( self ):
+            
+            return len( self._old_siblings.GetTags() ) > 0 and self._current_new is not None
+            
+        
         def SetNew( self, new_tags ):
             
             if len( new_tags ) == 0:
@@ -4770,45 +4866,49 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
         
         def SetTagBoxFocus( self ):
             
-            if len( self._old_siblings.GetTags() ) == 0: self._old_input.SetFocus()
-            else: self._new_input.SetFocus()
+            if len( self._old_siblings.GetTags() ) == 0:
+                
+                self._old_input.SetFocus()
+                
+            else:
+                
+                self._new_input.SetFocus()
+                
             
         
-        def THREADInitialise( self, tags ):
+        def THREADInitialise( self, tags, service_key ):
             
-            def wx_code():
+            def wx_code( original_statuses_to_pairs, current_statuses_to_pairs ):
                 
                 if not self:
                     
                     return
                     
                 
+                self._original_statuses_to_pairs = original_statuses_to_pairs
+                self._current_statuses_to_pairs = current_statuses_to_pairs
+                
                 self._status_st.SetLabelText( 'Tags on the left will be replaced by those on the right.' )
+                self._count_st.SetLabelText( 'Starting with ' + HydrusData.ConvertIntToPrettyString( len( original_statuses_to_pairs[ HC.CONTENT_STATUS_CURRENT ] ) ) + ' pairs.' )
                 
                 self._old_input.Enable()
                 self._new_input.Enable()
                 
-                petitioned_pairs = set( self._original_statuses_to_pairs[ HC.CONTENT_STATUS_PETITIONED ] )
+                all_pairs = set()
                 
                 for ( status, pairs ) in self._original_statuses_to_pairs.items():
                     
-                    if status != HC.CONTENT_STATUS_DELETED:
+                    if status == HC.CONTENT_STATUS_DELETED:
                         
-                        sign = HydrusData.ConvertStatusToPrefix( status )
-                        
-                        for ( old, new ) in pairs:
-                            
-                            if status == HC.CONTENT_STATUS_CURRENT and ( old, new ) in petitioned_pairs:
-                                
-                                continue
-                                
-                            
-                            self._tag_siblings.Append( ( sign, old, new ), ( status, old, new ) )
-                            
+                        continue
                         
                     
+                    all_pairs.update( pairs )
+                    
                 
-                self._tag_siblings.SortListItems( 2 )
+                self._tag_siblings.AddDatas( all_pairs )
+                
+                self._tag_siblings.Sort( 2 )
                 
                 if tags is not None:
                     
@@ -4816,13 +4916,13 @@ class DialogManageTagSiblings( ClientGUIDialogs.Dialog ):
                     
                 
             
-            self._original_statuses_to_pairs = HG.client_controller.Read( 'tag_siblings', self._service_key )
+            original_statuses_to_pairs = HG.client_controller.Read( 'tag_siblings', service_key )
             
-            self._current_statuses_to_pairs = collections.defaultdict( set )
+            current_statuses_to_pairs = collections.defaultdict( set )
             
-            self._current_statuses_to_pairs.update( { key : set( value ) for ( key, value ) in self._original_statuses_to_pairs.items() } )
+            current_statuses_to_pairs.update( { key : set( value ) for ( key, value ) in original_statuses_to_pairs.items() } )
             
-            wx.CallAfter( wx_code )
+            wx.CallAfter( wx_code, original_statuses_to_pairs, current_statuses_to_pairs )
             
         
     
@@ -4836,7 +4936,9 @@ class DialogManageUPnP( ClientGUIDialogs.Dialog ):
         
         self._hidden_cancel = wx.Button( self, id = wx.ID_CANCEL, size = ( 0, 0 ) )
         
-        self._mappings_list_ctrl = ClientGUICommon.SaneListCtrl( self, 480, [ ( 'description', -1 ), ( 'internal ip', 100 ), ( 'internal port', 80 ), ( 'external ip', 100 ), ( 'external port', 80 ), ( 'protocol', 80 ), ( 'lease', 80 ) ], delete_key_callback = self.RemoveMappings, activation_callback = self.EditMappings )
+        self._status_st = ClientGUICommon.BetterStaticText( self )
+        
+        self._mappings_list_ctrl = ClientGUIListCtrl.SaneListCtrl( self, 480, [ ( 'description', -1 ), ( 'internal ip', 100 ), ( 'internal port', 80 ), ( 'external ip', 100 ), ( 'external port', 80 ), ( 'protocol', 80 ), ( 'lease', 80 ) ], delete_key_callback = self.RemoveMappings, activation_callback = self.EditMappings )
         
         self._add_custom = wx.Button( self, label = 'add custom mapping' )
         self._add_custom.Bind( wx.EVT_BUTTON, self.EventAddCustomMapping )
@@ -4853,21 +4955,18 @@ class DialogManageUPnP( ClientGUIDialogs.Dialog ):
         
         #
         
-        self._RefreshMappings()
-        
-        #
-        
         edit_buttons = wx.BoxSizer( wx.HORIZONTAL )
         
-        edit_buttons.AddF( self._add_custom, CC.FLAGS_VCENTER )
-        edit_buttons.AddF( self._edit, CC.FLAGS_VCENTER )
-        edit_buttons.AddF( self._remove, CC.FLAGS_VCENTER )
+        edit_buttons.Add( self._add_custom, CC.FLAGS_VCENTER )
+        edit_buttons.Add( self._edit, CC.FLAGS_VCENTER )
+        edit_buttons.Add( self._remove, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._mappings_list_ctrl, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( edit_buttons, CC.FLAGS_BUTTON_SIZER )
-        vbox.AddF( self._ok, CC.FLAGS_LONE_BUTTON )
+        vbox.Add( self._status_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._mappings_list_ctrl, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( edit_buttons, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( self._ok, CC.FLAGS_LONE_BUTTON )
         
         self.SetSizer( vbox )
         
@@ -4877,18 +4976,53 @@ class DialogManageUPnP( ClientGUIDialogs.Dialog ):
         
         self.SetInitialSize( ( x, y ) )
         
-        wx.CallAfter( self._ok.SetFocus )
+        #
+        
+        self._RefreshMappings()
         
     
     def _RefreshMappings( self ):
-    
+        
+        def THREADdo_it():
+            
+            def wx_code( mappings ):
+                
+                if not self:
+                    
+                    return
+                    
+                
+                self._mappings = mappings
+                
+                for mapping in self._mappings:
+                    
+                    self._mappings_list_ctrl.Append( mapping, mapping )
+                    
+                
+                self._status_st.SetLabelText( '' )
+                
+            
+            try:
+                
+                mappings = HydrusNATPunch.GetUPnPMappings()
+                
+            except Exception as e:
+                
+                HydrusData.ShowException( e )
+                
+                wx.CallAfter( wx.MessageBox, 'Could not load mappings:' + os.linesep * 2 + str( e ) )
+                
+                return
+                
+            
+            wx.CallAfter( wx_code, mappings )
+            
+        
+        self._status_st.SetLabelText( 'Refreshing mappings--please wait...' )
+        
         self._mappings_list_ctrl.DeleteAllItems()
         
-        self._mappings = HydrusNATPunch.GetUPnPMappings()
-        
-        for mapping in self._mappings: self._mappings_list_ctrl.Append( mapping, mapping )
-        
-        self._mappings_list_ctrl.SortListItems( 1 )
+        HG.client_controller.CallToThread( THREADdo_it )
         
     
     def EditMappings( self ):
@@ -4916,7 +5050,10 @@ class DialogManageUPnP( ClientGUIDialogs.Dialog ):
                 
             
         
-        if do_refresh: self._RefreshMappings()
+        if do_refresh:
+            
+            self._RefreshMappings()
+            
         
     
     def EventAddCustomMapping( self, event ):
@@ -4953,7 +5090,10 @@ class DialogManageUPnP( ClientGUIDialogs.Dialog ):
                 
             
         
-        if do_refresh: self._RefreshMappings()
+        if do_refresh:
+            
+            self._RefreshMappings()
+            
         
     
     def EventEditMapping( self, event ):
@@ -4984,5 +5124,8 @@ class DialogManageUPnP( ClientGUIDialogs.Dialog ):
             do_refresh = True
             
         
-        if do_refresh: self._RefreshMappings()
+        if do_refresh:
+            
+            self._RefreshMappings()
+            
         

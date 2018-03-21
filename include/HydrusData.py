@@ -6,6 +6,7 @@ import HydrusConstants as HC
 import HydrusExceptions
 import HydrusGlobals as HG
 import HydrusSerialisable
+import HydrusText
 import locale
 import os
 import pstats
@@ -77,7 +78,15 @@ def ConvertFloatToPercentage( f ):
     
 def ConvertIntToBytes( size ):
     
-    if size is None: return 'unknown size'
+    if size is None:
+        
+        return 'unknown size'
+        
+    
+    if size < 1024:
+        
+        return ConvertIntToPrettyString( size ) + 'B'
+        
     
     suffixes = ( '', 'K', 'M', 'G', 'T', 'P' )
     
@@ -85,16 +94,21 @@ def ConvertIntToBytes( size ):
     
     size = float( size )
     
-    while size > 1024.0:
+    while size >= 1024.0:
         
         size = size / 1024.0
         
         suffix_index += 1
         
     
-    if size < 10.0: return '%.1f' % size + suffixes[ suffix_index ] + 'B'
-    
-    return '%.0f' % size + suffixes[ suffix_index ] + 'B'
+    if size < 10.0:
+        
+        return '%.1f' % size + suffixes[ suffix_index ] + 'B'
+        
+    else:
+        
+        return '%.0f' % size + suffixes[ suffix_index ] + 'B'
+        
     
 def ConvertIntToFirst( n ):
     
@@ -223,6 +237,17 @@ def ConvertPrettyStringsToUglyNamespaces( pretty_strings ):
     
     return result
     
+def ConvertResolutionToPrettyString( ( width, height ) ):
+    
+    return ConvertIntToPrettyString( width ) + 'x' + ConvertIntToPrettyString( height )
+    
+def ConvertStatusToPrefix( status ):
+    
+    if status == HC.CONTENT_STATUS_CURRENT: return ''
+    elif status == HC.CONTENT_STATUS_PENDING: return '(+) '
+    elif status == HC.CONTENT_STATUS_PETITIONED: return '(-) '
+    elif status == HC.CONTENT_STATUS_DELETED: return '(X) '
+    
 def ConvertTimeDeltaToPrettyString( seconds ):
     
     if seconds is None:
@@ -230,28 +255,81 @@ def ConvertTimeDeltaToPrettyString( seconds ):
         return 'per month'
         
     
-    if seconds > 60:
+    if seconds >= 60:
         
         seconds = int( seconds )
         
         if seconds >= 86400:
             
-            days = seconds / 86400
-            hours = ( seconds % 86400 ) / 3600
+            DAY = 86400
+            MONTH = DAY * 30
+            YEAR = MONTH * 12
             
-            if days == 1:
+            years = seconds / YEAR
+            
+            seconds %= YEAR
+            
+            months = seconds / MONTH
+            
+            seconds %= MONTH
+            
+            days = seconds / DAY
+            
+            seconds %= DAY
+            
+            hours = seconds / 3600
+            
+            result_components = []
+            
+            if years > 0:
                 
-                result = '1 day'
+                if years == 1:
+                    
+                    result_components.append( '1 year' )
+                    
+                else:
+                    
+                    result_components.append( '%d' % years + ' years' )
+                    
                 
-            else:
+            
+            if months > 0:
                 
-                result = '%d' % days + ' days'
+                if months == 1:
+                    
+                    result_components.append( '1 month' )
+                    
+                else:
+                    
+                    result_components.append( '%d' % months + ' months' )
+                    
+                
+            
+            if days > 0:
+                
+                if days == 1:
+                    
+                    result_components.append( '1 day' )
+                    
+                else:
+                    
+                    result_components.append( '%d' % days + ' days' )
+                    
                 
             
             if hours > 0:
                 
-                result += ' %d' % hours + ' hours'
+                if hours == 1:
+                    
+                    result_components.append( '1 hour' )
+                    
+                else:
+                    
+                    result_components.append( '%d' % hours + ' hours' )
+                    
                 
+            
+            result = ' '.join( result_components )
             
         elif seconds >= 3600:
             
@@ -277,7 +355,14 @@ def ConvertTimeDeltaToPrettyString( seconds ):
             minutes = seconds / 60
             seconds = seconds % 60
             
-            result = '%d' % minutes + ' minutes'
+            if minutes == 1:
+                
+                result = '1 minute'
+                
+            else:
+                
+                result = '%d' % minutes + ' minutes'
+                
             
             if seconds > 0:
                 
@@ -311,13 +396,6 @@ def ConvertTimeDeltaToPrettyString( seconds ):
         
     
     return result
-    
-def ConvertStatusToPrefix( status ):
-    
-    if status == HC.CONTENT_STATUS_CURRENT: return ''
-    elif status == HC.CONTENT_STATUS_PENDING: return '(+) '
-    elif status == HC.CONTENT_STATUS_PETITIONED: return '(-) '
-    elif status == HC.CONTENT_STATUS_DELETED: return '(X) '
     
 def ConvertTimestampToPrettyAge( timestamp ):
     
@@ -361,7 +439,10 @@ def ConvertTimestampToPrettyAge( timestamp ):
     
 def ConvertTimestampToPrettyAgo( timestamp ):
     
-    if timestamp is None or timestamp == 0: return 'unknown time'
+    if timestamp is None or timestamp == 0:
+        
+        return 'unknown time'
+        
     
     age = GetNow() - timestamp
     
@@ -393,11 +474,11 @@ def ConvertTimestampToPrettyAgo( timestamp ):
     if years == 1: y = '1 year'
     else: y = str( years ) + ' years'
     
-    if years > 0: return ' '.join( ( y, mo ) ) + ' ago'
-    elif months > 0: return ' '.join( ( mo, d ) ) + ' ago'
-    elif days > 0: return ' '.join( ( d, h ) ) + ' ago'
-    elif hours > 0: return ' '.join( ( h, m ) ) + ' ago'
-    else: return ' '.join( ( m, s ) ) + ' ago'
+    if years > 0: return ' '.join( ( y, mo ) )
+    elif months > 0: return ' '.join( ( mo, d ) )
+    elif days > 0: return ' '.join( ( d, h ) )
+    elif hours > 0: return ' '.join( ( h, m ) )
+    else: return ' '.join( ( m, s ) )
     
 def ConvertTimestampToPrettyExpires( timestamp ):
     
@@ -459,15 +540,17 @@ def ConvertTimestampToPrettyExpires( timestamp ):
         else: return 'expires in ' + ' '.join( ( m, s ) )
         
     
-def ConvertTimestampToPrettyPending( timestamp ):
+def ConvertTimestampToPrettyPending( timestamp, prefix = 'in' ):
     
     if timestamp is None: return ''
     if timestamp == 0: return 'imminent'
     
-    pending = GetNow() - timestamp
+    pending = GetTimeDeltaUntilTime( timestamp )
     
-    if pending >= 0: return 'imminent'
-    else: pending *= -1
+    if pending <= 0:
+        
+        return 'imminent'
+        
     
     seconds = pending % 60
     if seconds == 1: s = '1 second'
@@ -497,11 +580,17 @@ def ConvertTimestampToPrettyPending( timestamp ):
     if years == 1: y = '1 year'
     else: y = str( years ) + ' years'
     
-    if years > 0: return 'in ' + ' '.join( ( y, mo ) )
-    elif months > 0: return 'in ' + ' '.join( ( mo, d ) )
-    elif days > 0: return 'in ' + ' '.join( ( d, h ) )
-    elif hours > 0: return 'in ' + ' '.join( ( h, m ) )
-    else: return 'in ' + ' '.join( ( m, s ) )
+    if prefix != '':
+        
+        prefix += ' '
+        
+    
+    if years > 0: return prefix + ' '.join( ( y, mo ) )
+    elif months > 0: return prefix + ' '.join( ( mo, d ) )
+    elif days > 0: return prefix + ' '.join( ( d, h ) )
+    elif hours > 0: return prefix + ' '.join( ( h, m ) )
+    elif minutes > 0: return prefix + ' '.join( ( m, s ) )
+    else: return prefix + s
     
 def ConvertTimestampToPrettySync( timestamp ):
     
@@ -543,21 +632,48 @@ def ConvertTimestampToPrettySync( timestamp ):
     elif hours > 0: return ' '.join( ( h, m ) ) + ' ago'
     else: return ' '.join( ( m, s ) ) + ' ago'
     
-def ConvertTimestampToPrettyTime( timestamp ): return time.strftime( '%Y/%m/%d %H:%M:%S', time.localtime( timestamp ) )
-
+def ConvertTimestampToPrettyTime( timestamp, in_gmt = False, include_24h_time = True ):
+    
+    if include_24h_time:
+        
+        phrase = '%Y/%m/%d %H:%M:%S'
+        
+    else:
+        
+        phrase = '%Y/%m/%d'
+        
+    
+    if in_gmt:
+        
+        struct_time = time.gmtime( timestamp )
+        
+        phrase = phrase + ' GMT'
+        
+    else:
+        
+        struct_time = time.localtime( timestamp )
+        
+    
+    return time.strftime( phrase, struct_time )
+    
 def ConvertTimestampToHumanPrettyTime( timestamp ):
     
     now = GetNow()
     
     difference = now - timestamp
     
-    if difference < 60: return 'just now'
-    elif difference < 86400 * 7: return ConvertTimestampToPrettyAgo( timestamp )
-    else: return ConvertTimestampToPrettyTime( timestamp )
-    
-def ConvertTimeToPrettyTime( secs ):
-    
-    return time.strftime( '%H:%M:%S', time.gmtime( secs ) )
+    if difference < 60:
+        
+        return 'just now'
+        
+    elif difference < 86400 * 7:
+        
+        return ConvertTimestampToPrettyAgo( timestamp ) + ' ago'
+        
+    else:
+        
+        return ConvertTimestampToPrettyTime( timestamp )
+        
     
 def ConvertUglyNamespaceToPrettyString( namespace ):
     
@@ -601,14 +717,6 @@ def DebugPrint( debug_info ):
     
     sys.stdout.flush()
     sys.stderr.flush()
-    
-def DeserialisePrettyTags( text ):
-    
-    text = text.replace( '\r', '' )
-    
-    tags = text.split( '\n' )
-    
-    return tags
     
 def EncodeBytes( encoding, data ):
     
@@ -683,6 +791,10 @@ def GetNow():
     
     return int( time.time() )
     
+def GetNowFloat():
+    
+    return time.time()
+    
 def GetNowPrecise():
     
     if HC.PLATFORM_WINDOWS:
@@ -706,7 +818,7 @@ def GetSiblingProcessPorts( db_path, instance ):
             
             try:
                 
-                ( pid, create_time ) = SplitByLinesep( result )
+                ( pid, create_time ) = HydrusText.DeserialiseNewlinedTexts( result )
                 
                 pid = int( pid )
                 create_time = float( create_time )
@@ -743,6 +855,24 @@ def GetSiblingProcessPorts( db_path, instance ):
         
     
     return None
+    
+def GetTimeDeltaUntilTime( timestamp ):
+    
+    time_remaining = timestamp - GetNow()
+    
+    return max( time_remaining, 0 )
+    
+def GetTimeDeltaUntilTimeFloat( timestamp ):
+    
+    time_remaining = timestamp - GetNowFloat()
+    
+    return max( time_remaining, 0.0 )
+    
+def GetTimeDeltaUntilTimePrecise( t ):
+    
+    time_remaining = t - GetNowPrecise()
+    
+    return max( time_remaining, 0.0 )
     
 def IntelligentMassIntersect( sets_to_reduce ):
     
@@ -785,7 +915,7 @@ def IsAlreadyRunning( db_path, instance ):
             
             try:
                 
-                ( pid, create_time ) = SplitByLinesep( result )
+                ( pid, create_time ) = HydrusText.DeserialiseNewlinedTexts( result )
                 
                 pid = int( pid )
                 create_time = float( create_time )
@@ -877,7 +1007,14 @@ def MergeKeyToListDicts( key_to_list_dicts ):
     
 def Print( text ):
     
-    print( ToUnicode( text ) )
+    try:
+        
+        print( ToUnicode( text ) )
+        
+    except:
+        
+        print( repr( text ) )
+        
     
 ShowText = Print
 
@@ -892,11 +1029,25 @@ def PrintException( e, do_wait = True ):
     
     value = ToUnicode( e )
     
-    trace_list = traceback.format_stack()
+    ( etype, value, tb ) = sys.exc_info()
     
-    trace = ''.join( trace_list )
+    if etype is None:
+        
+        etype = type( e )
+        value = ToUnicode( e )
+        
+        trace = 'No error trace'
+        
+    else:
+        
+        trace = ''.join( traceback.format_exception( etype, value, tb ) )
+        
     
-    message = ToUnicode( etype.__name__ ) + ': ' + ToUnicode( value ) + os.linesep + ToUnicode( trace )
+    stack_list = traceback.format_stack()
+    
+    stack = ''.join( stack_list )
+    
+    message = ToUnicode( etype.__name__ ) + ': ' + ToUnicode( value ) + os.linesep + ToUnicode( trace ) + os.linesep + ToUnicode( stack )
     
     Print( '' )
     Print( 'Exception:' )
@@ -1011,20 +1162,10 @@ def RestartProcess():
     
     os.execv( exe, args )
     
-def SplayListForDB( xs ): return '(' + ','.join( ( str( x ) for x in xs ) ) + ')'
-
-def SplitByLinesep( raw_text ):
+def SplayListForDB( xs ):
     
-    if '\r\n' in raw_text:
-        
-        return raw_text.split( '\r\n' )
-        
-    else:
-        
-        return raw_text.split( '\n' )
-        
+    return '(' + ','.join( ( str( x ) for x in xs ) ) + ')'
     
-
 def SplitIteratorIntoChunks( iterator, n ):
     
     chunk = []
@@ -1095,6 +1236,10 @@ def TimeHasPassed( timestamp ):
     
     return GetNow() > timestamp
     
+def TimeHasPassedFloat( timestamp ):
+    
+    return GetNowFloat() > timestamp
+    
 def TimeHasPassedPrecise( precise_timestamp ):
     
     return GetNowPrecise() > precise_timestamp
@@ -1156,7 +1301,7 @@ def ToUnicode( text_producing_object ):
             
             text = text.decode( 'utf-8' )
             
-        except:
+        except UnicodeDecodeError:
             
             try:
                 
@@ -1164,9 +1309,15 @@ def ToUnicode( text_producing_object ):
                 
             except:
                 
-                text = repr( text ).decode( 'utf-8' )
+                try:
+                    
+                    text = text.decode( 'utf-16' )
+                    
+                except:
+                    
+                    text = unicode( repr( text ) )
+                    
                 
-            
             
         
     
@@ -1193,174 +1344,10 @@ class HydrusYAMLBase( yaml.YAMLObject ):
     yaml_loader = yaml.SafeLoader
     yaml_dumper = yaml.SafeDumper
     
-class Account( HydrusYAMLBase ):
-    
-    yaml_tag = u'!Account'
-    
-    def __init__( self, account_key, account_type, created, expires, used_bytes, used_requests, banned_info = None ):
-        
-        HydrusYAMLBase.__init__( self )
-        
-        self._info = {}
-        
-        self._info[ 'account_key' ] = account_key
-        self._info[ 'account_type' ] = account_type
-        self._info[ 'created' ] = created
-        self._info[ 'expires' ] = expires
-        self._info[ 'used_bytes' ] = used_bytes
-        self._info[ 'used_requests' ] = used_requests
-        if banned_info is not None: self._info[ 'banned_info' ] = banned_info
-        
-        self._info[ 'fresh_timestamp' ] = GetNow()
-        
-    
-    def __repr__( self ): return self.ConvertToString()
-    
-    def __str__( self ): return self.ConvertToString()
-    
-    def _IsBanned( self ):
-        
-        if 'banned_info' not in self._info: return False
-        else:
-            
-            ( reason, created, expires ) = self._info[ 'banned_info' ]
-            
-            if expires is None: return True
-            else: return not TimeHasPassed( expires )
-            
-        
-    
-    def _IsBytesExceeded( self ):
-        
-        account_type = self._info[ 'account_type' ]
-        
-        max_num_bytes = account_type.GetMaxBytes()
-        
-        used_bytes = self._info[ 'used_bytes' ]
-        
-        return max_num_bytes is not None and used_bytes > max_num_bytes
-        
-    
-    def _IsExpired( self ):
-        
-        if self._info[ 'expires' ] is None: return False
-        else: return TimeHasPassed( self._info[ 'expires' ] )
-        
-    
-    def _IsRequestsExceeded( self ):
-        
-        account_type = self._info[ 'account_type' ]
-        
-        max_num_requests = account_type.GetMaxRequests()
-        
-        used_requests = self._info[ 'used_requests' ]
-        
-        return max_num_requests is not None and used_requests > max_num_requests
-        
-    
-    def CheckPermission( self, permission ):
-        
-        if self._IsBanned(): raise HydrusExceptions.PermissionException( 'This account is banned!' )
-        
-        if self._IsExpired(): raise HydrusExceptions.PermissionException( 'This account is expired.' )
-        
-        if self._IsBytesExceeded(): raise HydrusExceptions.PermissionException( 'You have hit your data transfer limit, and cannot make any more requests for the month.' )
-        
-        if self._IsRequestsExceeded(): raise HydrusExceptions.PermissionException( 'You have hit your requests limit, and cannot make any more requests for the month.' )
-        
-        if not self._info[ 'account_type' ].HasPermission( permission ): raise HydrusExceptions.PermissionException( 'You do not have permission to do that.' )
-        
-    
-    def ConvertToString( self ): return ConvertTimestampToPrettyAge( self._info[ 'created' ] ) + os.linesep + self._info[ 'account_type' ].ConvertToString() + os.linesep + 'which '+ ConvertTimestampToPrettyExpires( self._info[ 'expires' ] )
-    
-    def GetAccountKey( self ): return self._info[ 'account_key' ]
-    
-    def GetAccountType( self ): return self._info[ 'account_type' ]
-    
-    def GetCreated( self ): return self._info[ 'created' ]
-    
-    def GetExpires( self ): return self._info[ 'expires' ]
-    
-    def GetExpiresString( self ):
-        
-        if self._IsBanned():
-            
-            ( reason, created, expires ) = self._info[ 'banned_info' ]
-            
-            return 'banned ' + ConvertTimestampToPrettyAge( created ) + ', ' + ConvertTimestampToPrettyExpires( expires ) + ' because: ' + reason
-            
-        else: return ConvertTimestampToPrettyAge( self._info[ 'created' ] ) + ' and ' + ConvertTimestampToPrettyExpires( self._info[ 'expires' ] )
-        
-    
-    def GetUsedBytesString( self ):
-        
-        max_num_bytes = self._info[ 'account_type' ].GetMaxBytes()
-        
-        used_bytes = self._info[ 'used_bytes' ]
-        
-        if max_num_bytes is None: return ConvertIntToBytes( used_bytes ) + ' used this month'
-        else: return ConvertIntToBytes( used_bytes ) + '/' + ConvertIntToBytes( max_num_bytes ) + ' used this month'
-        
-    
-    def GetUsedRequestsString( self ):
-        
-        max_num_requests = self._info[ 'account_type' ].GetMaxRequests()
-        
-        used_requests = self._info[ 'used_requests' ]
-        
-        if max_num_requests is None: return ConvertIntToPrettyString( used_requests ) + ' requests used this month'
-        else: return ConvertValueRangeToPrettyString( used_requests, max_num_requests ) + ' requests used this month'
-        
-    
-    def GetUsedBytes( self ): return self._info[ 'used_bytes' ]
-    
-    def GetUsedRequests( self ): return self._info[ 'used_bytes' ]
-    
-    def HasAccountKey( self ):
-        
-        if 'account_key' in self._info and self._info[ 'account_key' ] is not None: return True
-        
-        return False
-        
-    
-    def HasPermission( self, permission ):
-        
-        if self._IsBanned(): return False
-        
-        if self._IsExpired(): return False
-        
-        if self._IsBytesExceeded(): return False
-        
-        if self._IsRequestsExceeded(): return False
-        
-        return self._info[ 'account_type' ].HasPermission( permission )
-        
-    
-    def IsBanned( self ): return self._IsBanned()
-    
-    def IsStale( self ): return self._info[ 'fresh_timestamp' ] + HC.UPDATE_DURATION * 5 < GetNow()
-    
-    def IsUnknownAccount( self ): return self._info[ 'account_type' ].IsUnknownAccountType()
-    
-    def MakeFresh( self ): self._info[ 'fresh_timestamp' ] = GetNow()
-    
-    def MakeStale( self ): self._info[ 'fresh_timestamp' ] = 0
-    
-    def ReportDataUsed( self, num_bytes ):
-        
-        self._info[ 'used_bytes' ] += num_bytes
-        
-    
-    def ReportRequestUsed( self ):
-        
-        self._info[ 'used_requests' ] += 1
-        
-    
-sqlite3.register_adapter( Account, yaml.safe_dump )
-
 class AccountIdentifier( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_ACCOUNT_IDENTIFIER
+    SERIALISABLE_NAME = 'Account Identifier'
     SERIALISABLE_VERSION = 1
     
     TYPE_ACCOUNT_KEY = 1
@@ -1529,6 +1516,11 @@ class Call( object ):
         self._func( *self._args, **self._kwargs )
         
     
+    def __repr__( self ):
+        
+        return 'Call: ' + repr( ( self._func, self._args, self._kwargs ) )
+        
+    
 class ContentUpdate( object ):
     
     def __init__( self, data_type, action, row ):
@@ -1577,9 +1569,7 @@ class ContentUpdate( object ):
                 
                 ( file_info_manager, timestamp ) = self._row
                 
-                hash = file_info_manager.GetHash()
-                
-                hashes = { hash }
+                hashes = { file_info_manager.hash }
                 
             elif self._action in ( HC.CONTENT_UPDATE_ARCHIVE, HC.CONTENT_UPDATE_DELETE, HC.CONTENT_UPDATE_UNDELETE, HC.CONTENT_UPDATE_INBOX, HC.CONTENT_UPDATE_PEND, HC.CONTENT_UPDATE_RESCIND_PEND, HC.CONTENT_UPDATE_RESCIND_PETITION ):
                 
@@ -1626,6 +1616,15 @@ class ContentUpdate( object ):
                 ( rating, hashes ) = self._row
                 
             
+        elif self._data_type == HC.CONTENT_TYPE_NOTES:
+            
+            if self._action == HC.CONTENT_UPDATE_SET:
+                
+                ( notes, hash ) = self._row
+                
+                hashes = { hash }
+                
+            
         
         if not isinstance( hashes, set ):
             
@@ -1649,56 +1648,6 @@ class ContentUpdate( object ):
         
         return ( self._data_type, self._action, self._row )
         
-    
-class EditLogAction( object ):
-    
-    yaml_tag = u'!EditLogAction'
-    
-    def __init__( self, action ): self._action = action
-    
-    def GetAction( self ): return self._action
-    
-class EditLogActionAdd( EditLogAction ):
-    
-    yaml_tag = u'!EditLogActionAdd'
-    
-    def __init__( self, data ):
-        
-        EditLogAction.__init__( self, HC.ADD )
-        
-        self._data = data
-        
-    
-    def GetData( self ): return self._data
-    
-class EditLogActionDelete( EditLogAction ):
-    
-    yaml_tag = u'!EditLogActionDelete'
-    
-    def __init__( self, identifier ):
-        
-        EditLogAction.__init__( self, HC.DELETE )
-        
-        self._identifier = identifier
-        
-    
-    def GetIdentifier( self ): return self._identifier
-    
-class EditLogActionEdit( EditLogAction ):
-    
-    yaml_tag = u'!EditLogActionEdit'
-    
-    def __init__( self, identifier, data ):
-        
-        EditLogAction.__init__( self, HC.EDIT )
-        
-        self._identifier = identifier
-        self._data = data
-        
-    
-    def GetData( self ): return self._data
-    
-    def GetIdentifier( self ): return self._identifier
     
 class JobDatabase( object ):
     

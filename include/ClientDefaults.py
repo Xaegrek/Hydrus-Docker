@@ -1,19 +1,19 @@
 import ClientConstants as CC
 import ClientData
-import ClientNetworking
 import HydrusConstants as HC
 import HydrusGlobals as HG
 import HydrusNetworking
+import HydrusSerialisable
 import os
 import wx
 
-def GetDefaultBandwidthManager():
+def SetDefaultBandwidthManagerRules( bandwidth_manager ):
+    
+    import ClientNetworking
     
     KB = 1024
     MB = 1024 ** 2
     GB = 1024 ** 3
-    
-    bandwidth_manager = ClientNetworking.NetworkBandwidthManager()
     
     #
     
@@ -40,8 +40,6 @@ def GetDefaultBandwidthManager():
     
     rules = HydrusNetworking.BandwidthRules()
     
-    rules.AddRule( HC.BANDWIDTH_TYPE_REQUESTS, 86400, 50 ) # don't sync a giant db in one day
-    
     rules.AddRule( HC.BANDWIDTH_TYPE_DATA, 86400, 64 * MB ) # don't sync a giant db in one day
     
     bandwidth_manager.SetRules( ClientNetworking.NetworkContext( CC.NETWORK_CONTEXT_HYDRUS ), rules )
@@ -56,7 +54,8 @@ def GetDefaultBandwidthManager():
     
     rules = HydrusNetworking.BandwidthRules()
     
-    rules.AddRule( HC.BANDWIDTH_TYPE_REQUESTS, 300, 100 ) # after that first sample of small files, take it easy
+    # most gallery downloaders need two rqs per file (page and file), remember
+    rules.AddRule( HC.BANDWIDTH_TYPE_REQUESTS, 300, 200 ) # after that first sample of small files, take it easy
     
     rules.AddRule( HC.BANDWIDTH_TYPE_DATA, 300, 128 * MB ) # after that first sample of big files, take it easy
     
@@ -66,7 +65,8 @@ def GetDefaultBandwidthManager():
     
     rules = HydrusNetworking.BandwidthRules()
     
-    rules.AddRule( HC.BANDWIDTH_TYPE_REQUESTS, 86400, 200 ) # catch up on a big sub in little chunks every day
+    # most gallery downloaders need two rqs per file (page and file), remember
+    rules.AddRule( HC.BANDWIDTH_TYPE_REQUESTS, 86400, 400 ) # catch up on a big sub in little chunks every day
     
     rules.AddRule( HC.BANDWIDTH_TYPE_DATA, 86400, 256 * MB ) # catch up on a big sub in little chunks every day
     
@@ -84,27 +84,70 @@ def GetDefaultBandwidthManager():
     
     #
     
-    return bandwidth_manager
+    rules = HydrusNetworking.BandwidthRules()
+    
+    rules.AddRule( HC.BANDWIDTH_TYPE_REQUESTS, 60 * 7, 80 )
+    
+    rules.AddRule( HC.BANDWIDTH_TYPE_REQUESTS, 4, 1 )
+    
+    bandwidth_manager.SetRules( ClientNetworking.NetworkContext( CC.NETWORK_CONTEXT_DOMAIN, 'sankakucomplex.com' ), rules )
+    
+def SetDefaultDomainManagerData( domain_manager ):
+    
+    network_contexts_to_custom_header_dicts = {}
+    
+    #
+    
+    import ClientNetworking
+    import ClientNetworkingDomain
+    
+    custom_header_dict = {}
+    
+    custom_header_dict[ 'User-Agent' ] = ( 'Mozilla/5.0 (compatible; Hydrus Client)', ClientNetworkingDomain.VALID_APPROVED, 'This is the default User-Agent identifier for the client for all network connections.' )
+    
+    network_contexts_to_custom_header_dicts[ ClientNetworking.GLOBAL_NETWORK_CONTEXT ] = custom_header_dict
+    
+    #
+    
+    custom_header_dict = {}
+    
+    custom_header_dict[ 'User-Agent' ] = ( 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:56.0) Gecko/20100101 Firefox/56.0', ClientNetworkingDomain.VALID_UNKNOWN, 'Sankaku have unusual User-Agent rules on certain requests. Setting this User-Agent allows the sankaku downloader to work.' )
+    
+    network_context = ClientNetworking.NetworkContext( CC.NETWORK_CONTEXT_DOMAIN, 'sankakucomplex.com' )
+    
+    network_contexts_to_custom_header_dicts[ network_context ] = custom_header_dict
+    
+    #
+    
+    domain_manager.SetNetworkContextsToCustomHeaderDicts( network_contexts_to_custom_header_dicts )
+    
+    #
+    
+    domain_manager.SetURLMatches( GetDefaultURLMatches() )
+    
+    #
+    
+    domain_manager.SetParsers( GetDefaultParsers() )
+    
+    #
+    
+    domain_manager.TryToLinkURLMatchesAndParsers()
     
 def GetClientDefaultOptions():
     
     options = {}
     
     options[ 'play_dumper_noises' ] = True
-    options[ 'default_sort' ] = 0 # smallest
-    options[ 'sort_fallback' ] = 4 # newest
     options[ 'default_collect' ] = None
     options[ 'export_path' ] = None
     options[ 'hpos' ] = 400
     options[ 'vpos' ] = 700
-    options[ 'exclude_deleted_files' ] = False
     options[ 'thumbnail_cache_size' ] = 25 * 1048576
     options[ 'preview_cache_size' ] = 15 * 1048576
     options[ 'fullscreen_cache_size' ] = 150 * 1048576
     options[ 'thumbnail_dimensions' ] = [ 150, 125 ]
     options[ 'password' ] = None
     options[ 'num_autocomplete_chars' ] = 2
-    options[ 'gui_capitalisation' ] = False
     options[ 'default_gui_session' ] = 'last session'
     options[ 'fetch_ac_results_automatically' ] = True
     options[ 'ac_timings' ] = ( 3, 500, 250 )
@@ -117,13 +160,12 @@ def GetClientDefaultOptions():
     options[ 'idle_shutdown_max_minutes' ] = 5
     options[ 'maintenance_delete_orphans_period' ] = 86400 * 3
     options[ 'trash_max_age' ] = 72
-    options[ 'trash_max_size' ] = 512
+    options[ 'trash_max_size' ] = 2048
     options[ 'remove_trashed_files' ] = False
     options[ 'remove_filtered_files' ] = False
     options[ 'external_host' ] = None
     options[ 'gallery_file_limit' ] = 200
     options[ 'always_embed_autocompletes' ] = HC.PLATFORM_LINUX or HC.PLATFORM_OSX
-    options[ 'website_download_polite_wait' ] = 1
     options[ 'confirm_trash' ] = True
     options[ 'confirm_archive' ] = True
     options[ 'delete_to_recycle_bin' ] = True
@@ -132,14 +174,14 @@ def GetClientDefaultOptions():
     
     regex_favourites = []
     
-    regex_favourites.append( ( r'[1-9]+\d*(?=.{4}$)', u'\u2026' + r'0074.jpg -> 74 - [1-9]+\d*(?=.{4}$)' ) )
-    regex_favourites.append( ( r'[^' + os.path.sep.encode( 'string_escape' ) + ']+*(?=\s-)', r'E:\my collection\author name - v4c1p0074.jpg -> author name - [^' + os.path.sep.encode( 'string_escape' ) + ']+(?=\s-)' ) )
+    regex_favourites.append( ( r'[1-9]+\d*(?=.{4}$)', u'\u2026' + r'0074.jpg -> 74' ) )
+    regex_favourites.append( ( r'[^' + os.path.sep.encode( 'string_escape' ) + r']+(?=\s-)', r'E:\my collection\author name - v4c1p0074.jpg -> author name' ) )
     
     options[ 'regex_favourites' ] = regex_favourites
     
     system_predicates = {}
     
-    system_predicates[ 'age' ] = ( '<', 0, 0, 7, 0 )
+    system_predicates[ 'age' ] = ( '<', 'delta', ( 0, 0, 7, 0 ) )
     system_predicates[ 'duration' ] = ( '>', 0 )
     system_predicates[ 'height' ] = ( '=', 1080 )
     system_predicates[ 'limit' ] = 600
@@ -168,24 +210,6 @@ def GetClientDefaultOptions():
     
     options[ 'namespace_colours' ] = default_namespace_colours
     
-    default_gui_colours = {}
-    
-    default_gui_colours[ 'thumb_background' ] = ( 255, 255, 255 )
-    default_gui_colours[ 'thumb_background_selected' ] = ( 217, 242, 255 ) # light blue
-    default_gui_colours[ 'thumb_background_remote' ] = ( 32, 32, 36 ) # 50% Payne's Gray
-    default_gui_colours[ 'thumb_background_remote_selected' ] = ( 64, 64, 72 ) # Payne's Gray
-    default_gui_colours[ 'thumb_border' ] = ( 223, 227, 230 ) # light grey
-    default_gui_colours[ 'thumb_border_selected' ] = ( 1, 17, 26 ) # dark grey
-    default_gui_colours[ 'thumb_border_remote' ] = ( 248, 208, 204 ) # 25% Vermillion, 75% White
-    default_gui_colours[ 'thumb_border_remote_selected' ] = ( 227, 66, 52 ) # Vermillion, lol
-    default_gui_colours[ 'thumbgrid_background' ] = ( 255, 255, 255 )
-    default_gui_colours[ 'autocomplete_background' ] = ( 235, 248, 255 ) # very light blue
-    default_gui_colours[ 'media_background' ] = ( 255, 255, 255 )
-    default_gui_colours[ 'media_text' ] = ( 0, 0, 0 )
-    default_gui_colours[ 'tags_box' ] = ( 255, 255, 255 )
-    
-    options[ 'gui_colours' ] = default_gui_colours
-    
     default_sort_by_choices = []
     
     default_sort_by_choices.append( ( 'namespaces', [ 'series', 'creator', 'title', 'volume', 'chapter', 'page' ] ) )
@@ -206,8 +230,6 @@ def GetClientDefaultOptions():
     options[ 'pause_repo_sync' ] = False
     options[ 'pause_subs_sync' ] = False
     
-    options[ 'processing_phase' ] = 0
-    
     options[ 'rating_dialog_position' ] = ( False, None )
     
     return options
@@ -216,42 +238,34 @@ def GetDefaultHentaiFoundryInfo():
 
     info = {}
     
-    info[ 'rating_nudity' ] = 3
-    info[ 'rating_violence' ] = 3
-    info[ 'rating_profanity' ] = 3
-    info[ 'rating_racism' ] = 3
-    info[ 'rating_sex' ] = 3
-    info[ 'rating_spoilers' ] = 3
+    info[ 'rating_nudity' ] = '3'
+    info[ 'rating_violence' ] = '3'
+    info[ 'rating_profanity' ] = '3'
+    info[ 'rating_racism' ] = '3'
+    info[ 'rating_sex' ] = '3'
+    info[ 'rating_spoilers' ] = '3'
     
-    info[ 'rating_yaoi' ] = 1
-    info[ 'rating_yuri' ] = 1
-    info[ 'rating_teen' ] = 1
-    info[ 'rating_guro' ] = 1
-    info[ 'rating_furry' ] = 1
-    info[ 'rating_beast' ] = 1
-    info[ 'rating_male' ] = 1
-    info[ 'rating_female' ] = 1
-    info[ 'rating_futa' ] = 1
-    info[ 'rating_other' ] = 1
+    info[ 'rating_yaoi' ] = '1'
+    info[ 'rating_yuri' ] = '1'
+    info[ 'rating_teen' ] = '1'
+    info[ 'rating_guro' ] = '1'
+    info[ 'rating_furry' ] = '1'
+    info[ 'rating_beast' ] = '1'
+    info[ 'rating_male' ] = '1'
+    info[ 'rating_female' ] = '1'
+    info[ 'rating_futa' ] = '1'
+    info[ 'rating_other' ] = '1'
+    info[ 'rating_scat' ] = '1'
+    info[ 'rating_incest' ] = '1'
+    info[ 'rating_rape' ] = '1'
     
     info[ 'filter_media' ] = 'A'
     info[ 'filter_order' ] = 'date_new'
-    info[ 'filter_type' ] = 0
+    info[ 'filter_type' ] = '0'
+    
+    info[ 'yt0' ] = 'Apply' # the submit button wew lad
     
     return info
-    
-def GetDefaultImportFileOptions():
-    
-    options = HG.client_controller.GetOptions()
-    
-    automatic_archive = False
-    exclude_deleted = options[ 'exclude_deleted_files' ]
-    min_size = None
-    min_resolution = None
-    
-    import_file_options = ClientData.ImportFileOptions( automatic_archive = automatic_archive, exclude_deleted = exclude_deleted, min_size = min_size, min_resolution = min_resolution )
-    
-    return import_file_options
     
 def GetDefaultNamespacesAndSearchValue( gallery_identifier ):
     
@@ -273,9 +287,16 @@ def GetDefaultNamespacesAndSearchValue( gallery_identifier ):
             
         else:
             
-            booru = HG.client_controller.Read( 'remote_booru', name )
-            
-            namespaces = booru.GetNamespaces()
+            try:
+                
+                booru = HG.client_controller.Read( 'remote_booru', name )
+                
+                namespaces = booru.GetNamespaces()
+                
+            except:
+                
+                namespaces = []
+                
             
         
         search_value = 'search tags'
@@ -335,6 +356,11 @@ def GetDefaultNamespacesAndSearchValue( gallery_identifier ):
         namespaces = [ '' ]
         search_value = 'username'
         
+    elif site_type == HC.SITE_TYPE_THREAD_WATCHER:
+        
+        namespaces = [ 'filename' ]
+        search_value = 'thread url'
+        
     
     return ( namespaces, search_value )
     
@@ -343,7 +369,7 @@ def GetDefaultBoorus():
     boorus = {}
     
     name = 'gelbooru'
-    search_url = 'http://gelbooru.com/index.php?page=post&s=list&tags=%tags%&pid=%index%'
+    search_url = 'https://gelbooru.com/index.php?page=post&s=list&tags=%tags%&pid=%index%'
     search_separator = '+'
     advance_by_page_num = False
     thumb_classname = 'thumb'
@@ -354,7 +380,7 @@ def GetDefaultBoorus():
     boorus[ 'gelbooru' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
     
     name = 'safebooru'
-    search_url = 'http://safebooru.org/index.php?page=post&s=list&tags=%tags%&pid=%index%'
+    search_url = 'https://safebooru.org/index.php?page=post&s=list&tags=%tags%&pid=%index%'
     search_separator = '+'
     advance_by_page_num = False
     thumb_classname = 'thumb'
@@ -376,7 +402,7 @@ def GetDefaultBoorus():
     boorus[ 'e621' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
     
     name = 'rule34@paheal'
-    search_url = 'http://rule34.paheal.net/post/list/%tags%/%index%'
+    search_url = 'https://rule34.paheal.net/post/list/%tags%/%index%'
     search_separator = '%20'
     advance_by_page_num = True
     thumb_classname = 'thumb'
@@ -387,7 +413,7 @@ def GetDefaultBoorus():
     boorus[ 'rule34@paheal' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
     
     name = 'danbooru'
-    search_url = 'http://danbooru.donmai.us/posts?page=%index%&tags=%tags%'
+    search_url = 'https://danbooru.donmai.us/posts?page=%index%&tags=%tags%'
     search_separator = '%20'
     advance_by_page_num = True
     thumb_classname = 'post-preview'
@@ -395,10 +421,10 @@ def GetDefaultBoorus():
     image_data = None
     tag_classnames_to_namespaces = { 'category-0' : '', 'category-4' : 'character', 'category-3' : 'series', 'category-1' : 'creator' }
     
-    #boorus[ 'danbooru' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
+    boorus[ 'danbooru' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
     
     name = 'mishimmie'
-    search_url = 'http://shimmie.katawa-shoujo.com/post/list/%tags%/%index%'
+    search_url = 'https://shimmie.katawa-shoujo.com/post/list/%tags%/%index%'
     search_separator = '%20'
     advance_by_page_num = True
     thumb_classname = 'thumb'
@@ -409,7 +435,7 @@ def GetDefaultBoorus():
     boorus[ 'mishimmie' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
     
     name = 'rule34@booru.org'
-    search_url = 'http://rule34.xxx/index.php?page=post&s=list&tags=%tags%&pid=%index%'
+    search_url = 'https://rule34.xxx/index.php?page=post&s=list&tags=%tags%&pid=%index%'
     search_separator = '%20'
     advance_by_page_num = False
     thumb_classname = 'thumb'
@@ -442,7 +468,7 @@ def GetDefaultBoorus():
     boorus[ 'xbooru' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
     
     name = 'konachan'
-    search_url = 'http://konachan.com/post?page=%index%&tags=%tags%'
+    search_url = 'https://konachan.com/post?page=%index%&tags=%tags%'
     search_separator = '+'
     advance_by_page_num = True
     thumb_classname = 'thumb'
@@ -453,7 +479,7 @@ def GetDefaultBoorus():
     boorus[ 'konachan' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
     
     name = 'yande.re'
-    search_url = 'http://yande.re/post?page=%index%&tags=%tags%'
+    search_url = 'https://yande.re/post?page=%index%&tags=%tags%'
     search_separator = '+'
     advance_by_page_num = True
     thumb_classname = 'thumb'
@@ -464,7 +490,7 @@ def GetDefaultBoorus():
     boorus[ 'yande.re' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
     
     name = 'tbib'
-    search_url = 'http://tbib.org/index.php?page=post&s=list&tags=%tags%&pid=%index%'
+    search_url = 'https://tbib.org/index.php?page=post&s=list&tags=%tags%&pid=%index%'
     search_separator = '+'
     advance_by_page_num = False
     thumb_classname = 'thumb'
@@ -481,12 +507,23 @@ def GetDefaultBoorus():
     thumb_classname = 'thumb'
     image_id = 'highres'
     image_data = None
-    tag_classnames_to_namespaces = { 'tag-type-general' : '', 'tag-type-character' : 'character', 'tag-type-copyright' : 'series', 'tag-type-artist' : 'creator', 'tag-type-medium' : 'medium' }
+    tag_classnames_to_namespaces = { 'tag-type-general' : '', 'tag-type-character' : 'character', 'tag-type-copyright' : 'series', 'tag-type-artist' : 'creator', 'tag-type-medium' : 'medium', 'tag-type-meta' : 'meta', 'tag-type-studio' : 'studio' }
     
-    #boorus[ 'sankaku chan' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
+    boorus[ 'sankaku chan' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
+    
+    name = 'sankaku idol'
+    search_url = 'https://idol.sankakucomplex.com/?tags=%tags%&page=%index%'
+    search_separator = '+'
+    advance_by_page_num = True
+    thumb_classname = 'thumb'
+    image_id = 'highres'
+    image_data = None
+    tag_classnames_to_namespaces = { 'tag-type-general' : '', 'tag-type-character' : 'character', 'tag-type-copyright' : 'series', 'tag-type-artist' : 'creator', 'tag-type-medium' : 'medium', 'tag-type-meta' : 'meta', 'tag-type-photo_set' : 'photo set', 'tag-type-idol' : 'person' }
+    
+    boorus[ 'sankaku idol' ] = ClientData.Booru( name, search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces )
     
     name = 'rule34hentai'
-    search_url = 'http://rule34hentai.net/post/list/%tags%/%index%'
+    search_url = 'https://rule34hentai.net/post/list/%tags%/%index%'
     search_separator = '%20'
     advance_by_page_num = True
     thumb_classname = 'shm-thumb'
@@ -592,6 +629,55 @@ def GetDefaultImageboards():
     
     return imageboards
     
+def GetDefaultParsers():
+    
+    parser_dir = os.path.join( HC.STATIC_DIR, 'default', 'parsers' )
+    
+    if not os.path.exists( parser_dir ):
+        
+        return []
+        
+    
+    parsers = []
+    
+    import ClientSerialisable
+    import ClientParsing
+    
+    for filename in os.listdir( parser_dir ):
+        
+        path = os.path.join( parser_dir, filename )
+        
+        try:
+            
+            payload = ClientSerialisable.LoadFromPng( path )
+            
+            obj = HydrusSerialisable.CreateFromNetworkString( payload )
+            
+            if isinstance( obj, HydrusSerialisable.SerialisableList ):
+                
+                objs = obj
+                
+            else:
+                
+                objs = [ obj ]
+                
+            
+            for obj in objs:
+                
+                if isinstance( obj, ClientParsing.PageParser ):
+                    
+                    parsers.append( obj )
+                    
+                
+            
+        except:
+            
+            pass
+            
+        
+    
+    return parsers
+    
 def GetDefaultScriptRows():
     
     script_info = []
@@ -646,6 +732,8 @@ def GetDefaultShortcuts():
     media.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, ord( 'R' ), [ CC.SHORTCUT_MODIFIER_CTRL ] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'remove_file_from_view' ) )
     
     media.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, wx.WXK_F12, [] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'launch_the_archive_delete_filter' ) )
+    
+    media.SetCommand( ClientData.Shortcut( CC.SHORTCUT_TYPE_KEYBOARD, ord( 'C' ), [ CC.SHORTCUT_MODIFIER_CTRL ] ), ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_SIMPLE, 'copy_file' ) )
     
     shortcuts.append( media )
     
@@ -718,3 +806,53 @@ def GetDefaultShortcuts():
     shortcuts.append( media_viewer )
     
     return shortcuts
+    
+def GetDefaultURLMatches():
+    
+    url_match_dir = os.path.join( HC.STATIC_DIR, 'default', 'url_classes' )
+    
+    if not os.path.exists( url_match_dir ):
+        
+        return []
+        
+    
+    url_matches = []
+    
+    import ClientNetworkingDomain
+    import ClientSerialisable
+    
+    for filename in os.listdir( url_match_dir ):
+        
+        path = os.path.join( url_match_dir, filename )
+        
+        try:
+            
+            payload = ClientSerialisable.LoadFromPng( path )
+            
+            obj = HydrusSerialisable.CreateFromNetworkString( payload )
+            
+            if isinstance( obj, HydrusSerialisable.SerialisableList ):
+                
+                objs = obj
+                
+            else:
+                
+                objs = [ obj ]
+                
+            
+            for obj in objs:
+                
+                if isinstance( obj, ClientNetworkingDomain.URLMatch ):
+                    
+                    url_matches.append( obj )
+                    
+                
+            
+        except:
+            
+            pass
+            
+        
+    
+    return url_matches
+    

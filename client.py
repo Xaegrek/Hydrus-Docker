@@ -19,10 +19,18 @@ try:
     
     from include import ClientController
     import threading
-    from twisted.internet import reactor
     from include import HydrusGlobals as HG
     from include import HydrusLogger
     import traceback
+    
+    try:
+        
+        from twisted.internet import reactor
+        
+    except:
+        
+        HG.twisted_is_broke = True
+        
     
     #
     
@@ -39,6 +47,11 @@ try:
     if result.db_dir is None:
         
         db_dir = HC.DEFAULT_DB_DIR
+        
+        if not HydrusPaths.DirectoryIsWritable( db_dir ):
+            
+            db_dir = os.path.join( os.path.expanduser( '~' ), 'Hydrus' )
+            
         
     else:
         

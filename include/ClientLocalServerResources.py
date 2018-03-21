@@ -39,15 +39,17 @@ class HydrusResourceBooruFile( HydrusResourceBooru ):
         share_key = request.hydrus_args[ 'share_key' ]
         hash = request.hydrus_args[ 'hash' ]
         
-        local_booru_manager = HG.client_controller.GetManager( 'local_booru' )
+        HG.client_controller.local_booru_manager.CheckFileAuthorised( share_key, hash )
         
-        local_booru_manager.CheckFileAuthorised( share_key, hash )
+        media_result = HG.client_controller.local_booru_manager.GetMediaResult( share_key, hash )
+        
+        mime = media_result.GetMime()
         
         client_files_manager = HG.client_controller.client_files_manager
         
-        path = client_files_manager.GetFilePath( hash )
+        path = client_files_manager.GetFilePath( hash, mime )
         
-        response_context = HydrusServerResources.ResponseContext( 200, path = path )
+        response_context = HydrusServerResources.ResponseContext( 200, mime = mime, path = path )
         
         return response_context
         
@@ -61,7 +63,7 @@ class HydrusResourceBooruGallery( HydrusResourceBooru ):
         
         share_key = request.hydrus_args[ 'share_key' ]
         
-        local_booru_manager = HG.client_controller.GetManager( 'local_booru' )
+        local_booru_manager = HG.client_controller.local_booru_manager
         
         local_booru_manager.CheckShareAuthorised( share_key )
         
@@ -143,7 +145,7 @@ class HydrusResourceBooruPage( HydrusResourceBooru ):
         share_key = request.hydrus_args[ 'share_key' ]
         hash = request.hydrus_args[ 'hash' ]
         
-        local_booru_manager = HG.client_controller.GetManager( 'local_booru' )
+        local_booru_manager = HG.client_controller.local_booru_manager
         
         local_booru_manager.CheckFileAuthorised( share_key, hash )
         
@@ -232,7 +234,7 @@ class HydrusResourceBooruThumbnail( HydrusResourceBooru ):
         share_key = request.hydrus_args[ 'share_key' ]
         hash = request.hydrus_args[ 'hash' ]
         
-        local_booru_manager = HG.client_controller.GetManager( 'local_booru' )
+        local_booru_manager = HG.client_controller.local_booru_manager
         
         local_booru_manager.CheckFileAuthorised( share_key, hash )
         
@@ -250,9 +252,18 @@ class HydrusResourceBooruThumbnail( HydrusResourceBooru ):
             
             response_context_mime = HC.APPLICATION_UNKNOWN
             
-        elif mime in HC.AUDIO: path = os.path.join( HC.STATIC_DIR, 'audio.png' )
-        elif mime == HC.APPLICATION_PDF: path = os.path.join( HC.STATIC_DIR, 'pdf.png' )
-        else: path = os.path.join( HC.STATIC_DIR, 'hydrus.png' )
+        elif mime in HC.AUDIO:
+            
+            path = os.path.join( HC.STATIC_DIR, 'audio.png' )
+            
+        elif mime == HC.APPLICATION_PDF:
+            
+            path = os.path.join( HC.STATIC_DIR, 'pdf.png' )
+            
+        else:
+            
+            path = os.path.join( HC.STATIC_DIR, 'hydrus.png' )
+            
         
         response_context = HydrusServerResources.ResponseContext( 200, mime = response_context_mime, path = path )
         

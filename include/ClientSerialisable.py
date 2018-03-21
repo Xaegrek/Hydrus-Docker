@@ -31,7 +31,7 @@ text_size = 0.4
 
 def CreateTopImage( width, title, payload_description, text ):
     
-    text_extent_bmp = wx.EmptyBitmap( 20, 20, 24 )
+    text_extent_bmp = wx.Bitmap( 20, 20, 24 )
     
     dc = wx.MemoryDC( text_extent_bmp )
     
@@ -76,7 +76,7 @@ def CreateTopImage( width, title, payload_description, text ):
     
     #
     
-    top_bmp = wx.EmptyBitmap( width, top_height, 24 )
+    top_bmp = wx.Bitmap( width, top_height, 24 )
     
     dc = wx.MemoryDC( top_bmp )
     
@@ -122,6 +122,8 @@ def CreateTopImage( width, title, payload_description, text ):
     del dc
     
     data = top_bmp.ConvertToImage().GetData()
+    
+    data = buffer( data ) # wx phoenix thing--bmp now delivers a bytearray, but numpy wants a buffer, wew
     
     top_image_rgb = numpy.fromstring( data, dtype = 'uint8' ).reshape( ( top_height, width, 3 ) )
     
@@ -183,27 +185,39 @@ def DumpToPng( width, payload, title, payload_description, text, path ):
         HydrusPaths.CleanUpTempPath( os_file_handle, temp_path )
         
     
-def GetPayloadTypeString( payload_obj ):
+def GetPayloadString( payload_obj ):
     
-    if isinstance( payload_obj, HydrusSerialisable.SerialisableList ):
+    if isinstance( payload_obj, ( str, unicode ) ):
         
-        return 'A list of ' + HydrusData.ConvertIntToPrettyString( len( payload_obj ) ) + ' ' + GetPayloadTypeString( payload_obj[0] ) + 's'
+        return HydrusData.ToByteString( payload_obj )
         
     else:
         
-        if isinstance( payload_obj, ClientParsing.ParseRootFileLookup ):
-            
-            return 'File Lookup Script'
-            
-        elif isinstance( payload_obj, ClientImporting.Subscription ):
-            
-            return 'Subscription'
-            
+        return payload_obj.DumpToNetworkString()
+        
+    
+def GetPayloadTypeString( payload_obj ):
+    
+    if isinstance( payload_obj, ( str, unicode ) ):
+        
+        return 'String'
+        
+    elif isinstance( payload_obj, HydrusSerialisable.SerialisableList ):
+        
+        return 'A list of ' + HydrusData.ConvertIntToPrettyString( len( payload_obj ) ) + ' ' + GetPayloadTypeString( payload_obj[0] )
+        
+    elif isinstance( payload_obj, HydrusSerialisable.SerialisableBase ):
+        
+        return payload_obj.SERIALISABLE_NAME
+        
+    else:
+        
+        return repr( type( payload_obj ) )
         
     
 def GetPayloadDescriptionAndString( payload_obj ):
     
-    payload_string = payload_obj.DumpToNetworkString()
+    payload_string = GetPayloadString( payload_obj )
     
     payload_description = GetPayloadTypeString( payload_obj ) + ' - ' + HydrusData.ConvertIntToBytes( len( payload_string ) )
     

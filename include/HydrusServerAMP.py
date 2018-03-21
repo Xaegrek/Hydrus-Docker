@@ -1,8 +1,4 @@
 import collections
-import Cookie
-import hashlib
-import httplib
-import HydrusAudioHandling
 import HydrusConstants as HC
 import HydrusDocumentHandling
 import HydrusExceptions
@@ -13,7 +9,6 @@ import HydrusServerResources
 import os
 import random
 import ServerFiles
-import SocketServer
 import traceback
 import urllib
 from twisted.internet import reactor, defer

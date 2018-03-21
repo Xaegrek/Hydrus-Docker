@@ -18,27 +18,12 @@ import urlparse
 import HydrusData
 import ClientConstants as CC
 import HydrusGlobals as HG
-import wx
 
 # This is fairly ugly, but it works for what I need it to do
 
 URL_EXTRA_INFO = {}
 URL_EXTRA_INFO_LOCK = threading.Lock()
 
-def GetExtraURLInfo( url ):
-    
-    with URL_EXTRA_INFO_LOCK:
-        
-        if url in URL_EXTRA_INFO:
-            
-            return URL_EXTRA_INFO[ url ]
-            
-        else:
-            
-            return None
-            
-        
-    
 def GetGalleryStreamIdentifiers( gallery_identifier ):
     
     site_type = gallery_identifier.GetSiteType()
@@ -58,13 +43,6 @@ def GetGalleryStreamIdentifiers( gallery_identifier ):
     
     return gallery_stream_identifiers
     
-def SetExtraURLInfo( url, info ):
-    
-    with URL_EXTRA_INFO_LOCK:
-        
-        URL_EXTRA_INFO[ url ] = info
-        
-    
 def GetGallery( gallery_identifier ):
     
     site_type = gallery_identifier.GetSiteType()
@@ -78,10 +56,6 @@ def GetGallery( gallery_identifier ):
     elif site_type == HC.SITE_TYPE_DEVIANT_ART:
         
         return GalleryDeviantArt()
-        
-    elif site_type == HC.SITE_TYPE_GIPHY:
-        
-        return GalleryGiphy()
         
     elif site_type in ( HC.SITE_TYPE_HENTAI_FOUNDRY, HC.SITE_TYPE_HENTAI_FOUNDRY_ARTIST ):
         
@@ -155,9 +129,15 @@ def GetImageboardFileURL( thread_url, filename, ext ):
                     
                     html_url = 'https://8ch.net/' + board + '/res/' + thread_id + '.html'
                     
-                    response = ClientNetworking.RequestsGet( html_url )
+                    network_job = ClientNetworking.NetworkJob( 'GET', html_url )
                     
-                    thread_html = response.content
+                    network_job.OverrideBandwidth()
+                    
+                    HG.client_controller.network_engine.AddJob( network_job )
+                    
+                    network_job.WaitUntilDone()
+                    
+                    thread_html = network_job.GetContent()
                     
                     soup = GetSoup( thread_html )
                     
@@ -273,7 +253,7 @@ def Parse4chanPostScreen( html ):
         except: return ( 'error', 'unknown error' )
         
     
-def ParseImageboardFileURLFromPost( thread_url, post ):
+def ParseImageboardFileURLFromPost( thread_url, post, source_timestamp ):
     
     url_filename = str( post[ 'tim' ] )
     url_ext = post[ 'ext' ]
@@ -290,10 +270,10 @@ def ParseImageboardFileURLFromPost( thread_url, post ):
         file_md5_base64 = None
         
     
-    return ( file_url, file_md5_base64, file_original_filename )
+    return ( file_url, file_md5_base64, file_original_filename, source_timestamp )
     
 def ParseImageboardFileURLsFromJSON( thread_url, raw_json ):
-
+    
     json_dict = json.loads( raw_json )
     
     posts_list = json_dict[ 'posts' ]
@@ -307,7 +287,16 @@ def ParseImageboardFileURLsFromJSON( thread_url, raw_json ):
             continue
             
         
-        file_infos.append( ParseImageboardFileURLFromPost( thread_url, post ) )
+        if 'time' in post:
+            
+            source_timestamp = post[ 'time' ]
+            
+        else:
+            
+            source_timestamp = HydrusData.GetNow()
+            
+        
+        file_infos.append( ParseImageboardFileURLFromPost( thread_url, post, source_timestamp ) )
         
         if 'extra_files' in post:
             
@@ -318,12 +307,50 @@ def ParseImageboardFileURLsFromJSON( thread_url, raw_json ):
                     continue
                     
                 
-                file_infos.append( ParseImageboardFileURLFromPost( thread_url, extra_file ) )
+                file_infos.append( ParseImageboardFileURLFromPost( thread_url, extra_file, source_timestamp ) )
                 
             
         
     
     return file_infos
+    
+def ParseImageboardThreadSubject( raw_json ):
+    
+    json_dict = json.loads( raw_json )
+    
+    posts_list = json_dict[ 'posts' ]
+    
+    if len( posts_list ) > 0:
+        
+        top_post = posts_list[0]
+        
+        if 'sub' in top_post:
+            
+            return top_post[ 'sub' ]
+            
+        
+    
+    return ''
+    
+def IsImageboardThread( url ):
+    
+    if '4chan.org' in url:
+        
+        if '/thread/' in url:
+            
+            return True
+            
+        
+    
+    if '8ch.net' in url:
+        
+        if '/res/' in url:
+            
+            return True
+            
+        
+    
+    return False
     
 def ParseImageboardThreadURL( thread_url ):
     
@@ -348,8 +375,9 @@ def ParseImageboardThreadURL( thread_url ):
     except:
         
         raise Exception ( 'Could not understand that url!' )
+        
     
-    is_4chan = '4chan.org' in host
+    is_4chan = '4chan.org' in host or 'a.4cdn.org' in host
     is_8chan = '8ch.net' in host
     
     if not ( is_4chan or is_8chan ):
@@ -387,7 +415,7 @@ def ParseImageboardThreadURL( thread_url ):
         
     except Exception as e:
         
-        raise Exception( 'Could not understand the board or thread id!' )
+        raise Exception( 'Could not understand that thread url! Either the board or the thread id components were malformed or missing.' )
         
     
     return ( thread_url, host, board, thread_id )
@@ -407,6 +435,7 @@ def ParsePageForURLs( html, starting_url ):
 class GalleryIdentifier( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_GALLERY_IDENTIFIER
+    SERIALISABLE_NAME = 'Gallery Identifier'
     SERIALISABLE_VERSION = 1
     
     def __init__( self, site_type = None, additional_info = None ):
@@ -505,33 +534,22 @@ class Gallery( object ):
         
         HG.client_controller.network_engine.AddJob( network_job )
         
-        while not network_job.IsDone():
+        try:
             
-            time.sleep( 0.1 )
+            network_job.WaitUntilDone()
             
-        
-        if HG.view_shutdown:
+        except Exception as e:
             
-            raise HydrusExceptions.ShutdownException()
+            HydrusData.Print( 'The url ' + url + ' gave the following problem:' )
+            HydrusData.PrintException( e )
             
-        elif network_job.HasError():
-            
-            e = network_job.GetErrorException()
-            
-            raise e
-            
-        elif network_job.IsCancelled():
-            
-            raise HydrusExceptions.CancelledException( 'Download cancelled!' )
-            
-        else:
-            
-            if temp_path is None:
-                
-                return network_job.GetContent()
-                
+            raise
             
         
+        if temp_path is None:
+            
+            return network_job.GetContent()
+            
         
     
     def _GetGalleryPageURL( self, query, page_index ):
@@ -563,9 +581,22 @@ class Gallery( object ):
         
         data = self._FetchData( gallery_url )
         
-        ( page_of_urls, definitely_no_more_pages ) = self._ParseGalleryPage( data, gallery_url )
+        ( page_of_urls_and_tags, definitely_no_more_pages ) = self._ParseGalleryPage( data, gallery_url )
         
-        return ( page_of_urls, definitely_no_more_pages )
+        import ClientImporting
+        
+        page_of_seeds = []
+        
+        for ( url, tags ) in page_of_urls_and_tags:
+            
+            seed = ClientImporting.Seed( ClientImporting.SEED_TYPE_URL, url )
+            
+            seed.AddTags( tags )
+            
+            page_of_seeds.append( seed )
+            
+        
+        return ( page_of_seeds, definitely_no_more_pages )
         
     
     def GetTags( self, url ):
@@ -666,7 +697,10 @@ class GalleryBooru( Gallery ):
         soup = GetSoup( html )
         
         # this catches 'post-preview' along with 'post-preview not-approved' sort of bullshit
-        def starts_with_classname( classname ): return classname is not None and classname.startswith( self._thumb_classname )
+        def starts_with_classname( classname ):
+            
+            return classname is not None and classname.startswith( self._thumb_classname )
+            
         
         thumbnails = soup.find_all( class_ = starts_with_classname )
         
@@ -680,27 +714,21 @@ class GalleryBooru( Gallery ):
             thumbnails = thumbnails[ len( popular_thumbnails ) : ]
             
         
-        if self._gallery_advance_num is None:
-            
-            if len( thumbnails ) == 0:
-                
-                definitely_no_more_pages = True
-                
-            else:
-                
-                self._gallery_advance_num = len( thumbnails )
-                
-            
-        
         for thumbnail in thumbnails:
             
             links = thumbnail.find_all( 'a' )
             
-            if thumbnail.name == 'a': links.append( thumbnail )
+            if thumbnail.name == 'a':
+                
+                links.append( thumbnail )
+                
             
             for link in links:
                 
-                if link.string is not None and link.string == 'Image Only': continue # rule 34 @ paheal fix
+                if link.string is not None and link.string == 'Image Only':
+                    
+                    continue # rule 34 @ paheal fix
+                    
                 
                 url = link[ 'href' ]
                 
@@ -711,6 +739,18 @@ class GalleryBooru( Gallery ):
                     urls_set.add( url )
                     urls.append( url )
                     
+                
+            
+        
+        if self._gallery_advance_num is None:
+            
+            if len( urls ) == 0:
+                
+                definitely_no_more_pages = True
+                
+            else:
+                
+                self._gallery_advance_num = len( urls )
                 
             
         
@@ -726,13 +766,7 @@ class GalleryBooru( Gallery ):
             
             for bad_url in bad_urls:
                 
-                # turns out the garbage after the redirect is the redirect in base64, so let's not waste time doing this
-                
-                #url = ClientNetworking.RequestsGetRedirectURL( bad_url, session )
-                #
-                #urls.append( url )
-                #
-                #time.sleep( 0.5 )
+                # the garbage after the redirect.php is the redirect in base64
                 
                 # https://gelbooru.com/redirect.php?s=Ly9nZWxib29ydS5jb20vaW5kZXgucGhwP3BhZ2U9cG9zdCZzPXZpZXcmaWQ9MzY5NDEyMg==
                 
@@ -753,11 +787,9 @@ class GalleryBooru( Gallery ):
                         HydrusData.ShowText( 'gelbooru parsing problem!' )
                         HydrusData.ShowException( e )
                         
-                        url = ClientNetworking.RequestsGetRedirectURL( bad_url, session )
+                        time.sleep( 2 )
                         
-                        urls.append( url )
-                        
-                        time.sleep( 0.5 )
+                        break
                         
                     
                 else:
@@ -766,8 +798,13 @@ class GalleryBooru( Gallery ):
                     
                 
             
+            # giving 404 on some content servers for http, no redirect for some reason
+            urls = [ ClientData.ConvertHTTPToHTTPS( url ) for url in urls ]
+            
         
-        return ( urls, definitely_no_more_pages )
+        urls_and_tags = [ ( url, set() ) for url in urls ]
+        
+        return ( urls_and_tags, definitely_no_more_pages )
         
     
     def _ParseImagePage( self, html, url_base ):
@@ -775,8 +812,6 @@ class GalleryBooru( Gallery ):
         ( search_url, search_separator, advance_by_page_num, thumb_classname, image_id, image_data, tag_classnames_to_namespaces ) = self._booru.GetData()
         
         soup = GetSoup( html )
-        
-        image_base = None
         
         image_url = None
         
@@ -790,7 +825,10 @@ class GalleryBooru( Gallery ):
                     
                     image_string = soup.find( text = re.compile( 'Save this file' ) )
                     
-                    if image_string is None: image_string = soup.find( text = re.compile( 'Save this video' ) )
+                    if image_string is None:
+                        
+                        image_string = soup.find( text = re.compile( 'Save this video' ) )
+                        
                     
                     if image_string is None:
                         
@@ -816,6 +854,22 @@ class GalleryBooru( Gallery ):
                                 
                             
                         
+                        # catchall for rule34hentai.net's mp4s, which are loaded in a mickey-mouse flv player
+                        
+                        if image_url is None:
+                            
+                            magic_phrase = 'document.write("<source src=\''
+                            
+                            if magic_phrase in html:
+                                
+                                # /image/252605' type='video/mp4...
+                                
+                                image_url_and_gumpf = html.split( magic_phrase, 1 )[1]
+                                
+                                image_url = image_url_and_gumpf.split( '\'', 1 )[0]
+                                
+                            
+                        
                     else:
                         
                         image = image_string.parent
@@ -829,13 +883,16 @@ class GalleryBooru( Gallery ):
                         
                         image_url = image[ 'src' ]
                         
-                        if 'sample/sample-' in image_url:
+                        if 'Running Danbooru' in html:
                             
-                            # danbooru resized image
+                            # possible danbooru resized image
                             
-                            image = soup.find( id = 'image-resize-link' )
+                            possible_better_image = soup.find( id = 'image-resize-link' )
                             
-                            image_url = image[ 'href' ]
+                            if possible_better_image is not None:
+                                
+                                image_url = possible_better_image[ 'href' ]
+                                
                             
                         
                     elif image.name == 'a':
@@ -856,7 +913,7 @@ class GalleryBooru( Gallery ):
                     
                     if link.string is not None:
                         
-                        if link.string.startswith( image_data ):
+                        if link.string.startswith( image_data ) or link.string.endswith( image_data ):
                             
                             ok_link = link[ 'href' ]
                             
@@ -891,6 +948,12 @@ class GalleryBooru( Gallery ):
             
         
         image_url = urlparse.urljoin( url_base, image_url )
+        
+        if 'gelbooru.com' in url_base:
+            
+            # giving 404 on some content servers for http, no redirect for some reason
+            image_url = ClientData.ConvertHTTPToHTTPS( image_url )
+            
         
         tags = []
 
@@ -970,7 +1033,7 @@ class GalleryDeviantArt( Gallery ):
         
         definitely_no_more_pages = False
         
-        urls = []
+        urls_and_tags = []
         
         soup = GetSoup( html )
         
@@ -983,8 +1046,6 @@ class GalleryDeviantArt( Gallery ):
         for thumb in thumbs:
             
             url = thumb[ 'href' ] # something in the form of blah.da.com/art/blah-123456
-            
-            urls.append( url )
             
             tags = []
             
@@ -1002,10 +1063,10 @@ class GalleryDeviantArt( Gallery ):
                     
                 
             
-            SetExtraURLInfo( url, tags )
+            urls_and_tags.append( ( url, tags ) )
             
         
-        return ( urls, definitely_no_more_pages )
+        return ( urls_and_tags, definitely_no_more_pages )
         
     
     def _ParseImagePage( self, html, referral_url ):
@@ -1089,91 +1150,14 @@ class GalleryDeviantArt( Gallery ):
     
     def GetTags( self, url ):
         
-        result = GetExtraURLInfo( url )
-        
-        if result is None:
-            
-            return []
-            
-        else:
-            
-            return result
-            
-        
-    
-class GalleryGiphy( Gallery ):
-    
-    def _GetGalleryPageURL( self, query, page_index ):
-        
-        tag = query
-        
-        return 'http://giphy.com/api/gifs?tag=' + urllib.quote( HydrusData.ToByteString( tag ).replace( ' ', '+' ), '' ) + '&page=' + str( page_index + 1 )
-        
-    
-    def _ParseGalleryPage( self, data, url_base ):
-        
-        definitely_no_more_pages = False
-        
-        json_dict = json.loads( data )
-        
-        urls = []
-        
-        if 'data' in json_dict:
-            
-            json_data = json_dict[ 'data' ]
-            
-            for d in json_data:
-                
-                url = d[ 'image_original_url' ]
-                id = d[ 'id' ]
-                
-                SetExtraURLInfo( url, id )
-                
-                urls.append( url )
-                
-            
-        
-        return ( urls, definitely_no_more_pages )
-        
-    
-    def GetTags( self, url ):
-        
-        id = GetExtraURLInfo( url )
-        
-        if id is None:
-            
-            return []
-            
-        else:
-            
-            url = 'http://giphy.com/api/gifs/' + str( id )
-            
-            try:
-                
-                raw_json = self._FetchData( url )
-                
-                json_dict = json.loads( raw_json )
-                
-                tags_data = json_dict[ 'data' ][ 'tags' ]
-                
-                return [ tag_data[ 'name' ] for tag_data in tags_data ]
-                
-            except Exception as e:
-                
-                HydrusData.ShowException( e )
-                
-                return []
-                
-            
+        return set()
         
     
 class GalleryHentaiFoundry( Gallery ):
     
     def _EnsureLoggedIn( self ):
         
-        manager = HG.client_controller.GetManager( 'web_sessions' )
-        
-        manager.EnsureLoggedIn( 'hentai foundry' )
+        HG.client_controller.network_engine.login_manager.EnsureLoggedIn( 'hentai foundry' )
         
     
     def _GetFileURLAndTags( self, url ):
@@ -1205,7 +1189,10 @@ class GalleryHentaiFoundry( Gallery ):
                 ( nothing, pictures, user, artist_name, file_id, title ) = href.split( '/' )
                 
                 # /pictures/user/artist_name/page/3
-                if file_id != 'page': return True
+                if file_id != 'page':
+                    
+                    return True
+                    
                 
             
             return False
@@ -1233,7 +1220,9 @@ class GalleryHentaiFoundry( Gallery ):
             definitely_no_more_pages = True
             
         
-        return ( urls, definitely_no_more_pages )
+        urls_and_tags = [ ( url, set() ) for url in urls ]
+        
+        return ( urls_and_tags, definitely_no_more_pages )
         
     
     def _ParseImagePage( self, html, url_base ):
@@ -1242,14 +1231,36 @@ class GalleryHentaiFoundry( Gallery ):
         # find http://pictures.hentai-foundry.com//
         # then extend it to http://pictures.hentai-foundry.com//k/KABOS/172144/image.jpg
         # the .jpg bit is what we really need, but whatever
+        
+        # an example of this:
+        # http://www.hentai-foundry.com/pictures/user/Sparrow/440257/Meroulix-LeBeau
+        
+        # addendum:
+        # some users put pictures.hentai-foundry.com links in their profile images, which then gets repeated up above in some <meta> tag
+        # so, lets limit this search to a smaller bit of html
+        
+        # example of this:
+        # http://www.hentai-foundry.com/pictures/user/teku/572881/Special-Gang-Bang
+        
         try:
             
-            index = html.index( 'pictures.hentai-foundry.com' )
+            image_soup = GetSoup( html )
             
-            image_url = html[ index : index + 256 ]
+            image_html = unicode( image_soup.find( 'section', id = 'picBox' ) )
             
-            if '"' in image_url: ( image_url, gumpf ) = image_url.split( '"', 1 )
-            if '&#039;' in image_url: ( image_url, gumpf ) = image_url.split( '&#039;', 1 )
+            index = image_html.index( 'pictures.hentai-foundry.com' )
+            
+            image_url = image_html[ index : index + 256 ]
+            
+            if '"' in image_url:
+                
+                ( image_url, gumpf ) = image_url.split( '"', 1 )
+                
+            
+            if '&#039;' in image_url:
+                
+                ( image_url, gumpf ) = image_url.split( '&#039;', 1 )
+                
             
             image_url = 'http://' + image_url
             
@@ -1383,7 +1394,9 @@ class GalleryNewgrounds( Gallery ):
         
         definitely_no_more_pages = True
         
-        return ( urls, definitely_no_more_pages )
+        urls_and_tags = [ ( url, set() ) for url in urls ]
+        
+        return ( urls_and_tags, definitely_no_more_pages )
         
     
     def _ParseImagePage( self, html, url_base ):
@@ -1493,9 +1506,7 @@ class GalleryPixiv( Gallery ):
     
     def _EnsureLoggedIn( self ):
         
-        manager = HG.client_controller.GetManager( 'web_sessions' )
-        
-        manager.EnsureLoggedIn( 'pixiv' )
+        HG.client_controller.network_engine.login_manager.EnsureLoggedIn( 'pixiv' )
         
     
     def _ParseGalleryPage( self, html, url_base ):
@@ -1531,7 +1542,9 @@ class GalleryPixiv( Gallery ):
                 
             
         
-        return ( urls, definitely_no_more_pages )
+        urls_and_tags = [ ( url, set() ) for url in urls ]
+        
+        return ( urls_and_tags, definitely_no_more_pages )
         
     
     def _ParseImagePage( self, html, page_url ):
@@ -1682,6 +1695,8 @@ class GalleryTumblr( Gallery ):
             
             # I am not sure if it is always 68, but let's not assume
             
+            # Indeed, this is apparently now 78, wew!
+            
             ( scheme, rest ) = long_url.split( '://', 1 )
             
             if rest.startswith( 'media.tumblr.com' ):
@@ -1696,13 +1711,18 @@ class GalleryTumblr( Gallery ):
             return shorter_url
             
         
+        def MediaToDataSubdomain( url ):
+            
+            return url.replace( 'media', 'data', 1 )
+            
+        
         definitely_no_more_pages = False
         
         processed_raw_json = data.split( 'var tumblr_api_read = ' )[1][:-2] # -1 takes a js ';' off the end
         
         json_object = json.loads( processed_raw_json )
         
-        urls = []
+        urls_and_tags = []
         
         if 'posts' in json_object:
             
@@ -1715,8 +1735,14 @@ class GalleryTumblr( Gallery ):
                 
                 raw_url_available = date_struct.tm_year > 2012
                 
-                if 'tags' in post: tags = post[ 'tags' ]
-                else: tags = []
+                if 'tags' in post:
+                    
+                    tags = post[ 'tags' ]
+                    
+                else:
+                    
+                    tags = []
+                    
                 
                 post_type = post[ 'type' ]
                 
@@ -1752,13 +1778,35 @@ class GalleryTumblr( Gallery ):
                                     
                                     url = Remove68Subdomain( url )
                                     
+                                    url = MediaToDataSubdomain( url )
+                                    
                                 
                             
                             url = ClientData.ConvertHTTPToHTTPS( url )
                             
-                            SetExtraURLInfo( url, tags )
+                            urls_and_tags.append( ( url, tags ) )
                             
-                            urls.append( url )
+                        except:
+                            
+                            pass
+                            
+                        
+                    
+                elif post_type == 'video':
+                    
+                    if 'video-player' in post:
+                        
+                        video_player_html = post[ 'video-player' ]
+                        
+                        try:
+                            
+                            vp_soup = GetSoup( video_player_html )
+                            
+                            vp_source = vp_soup.find( 'source' )
+                            
+                            url = vp_source[ 'src' ]
+                            
+                            urls_and_tags.append( ( url, tags ) )
                             
                         except:
                             
@@ -1769,20 +1817,11 @@ class GalleryTumblr( Gallery ):
                 
             
         
-        return ( urls, definitely_no_more_pages )
+        return ( urls_and_tags, definitely_no_more_pages )
         
     
     def GetTags( self, url ):
         
-        result = GetExtraURLInfo( url )
-        
-        if result is None:
-            
-            return []
-            
-        else:
-            
-            return result
-            
+        return set()
         
     

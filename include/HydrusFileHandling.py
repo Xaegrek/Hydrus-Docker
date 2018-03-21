@@ -1,10 +1,5 @@
 import gc
 import hashlib
-import hsaudiotag
-import hsaudiotag.auto
-import hsaudiotag.flac
-import hsaudiotag.mpeg
-import hsaudiotag.ogg
 import HydrusAudioHandling
 import HydrusConstants as HC
 import HydrusDocumentHandling
@@ -30,9 +25,15 @@ header_and_mime = [
     ( 0, 'BM', HC.IMAGE_BMP ),
     ( 0, 'CWS', HC.APPLICATION_FLASH ),
     ( 0, 'FWS', HC.APPLICATION_FLASH ),
+    ( 0, 'ZWS', HC.APPLICATION_FLASH ),
     ( 0, 'FLV', HC.VIDEO_FLV ),
     ( 0, '%PDF', HC.APPLICATION_PDF ),
     ( 0, 'PK\x03\x04', HC.APPLICATION_ZIP ),
+    ( 0, 'PK\x05\x06', HC.APPLICATION_ZIP ),
+    ( 0, 'PK\x07\x08', HC.APPLICATION_ZIP ),
+    ( 0, '7z\xBC\xAF\x27\x1C', HC.APPLICATION_7Z ),
+    ( 0, '\x52\x61\x72\x21\x1A\x07\x00', HC.APPLICATION_RAR ),
+    ( 0, '\x52\x61\x72\x21\x1A\x07\x01\x00', HC.APPLICATION_RAR ),
     ( 0, 'hydrus encrypted zip', HC.APPLICATION_HYDRUS_ENCRYPTED_ZIP ),
     ( 4, 'ftypmp4', HC.VIDEO_MP4 ),
     ( 4, 'ftypisom', HC.VIDEO_MP4 ),
@@ -47,7 +48,7 @@ header_and_mime = [
     ( 0, '\x30\x26\xB2\x75\x8E\x66\xCF\x11\xA6\xD9\x00\xAA\x00\x62\xCE\x6C', HC.UNDETERMINED_WM )
     ]
 
-def SaveThumbnailToStream( pil_image, dimensions, f ):
+def SaveThumbnailToStreamPIL( pil_image, dimensions, f ):
     
     # when the palette is limited, the thumbnail antialias won't add new colours, so you get nearest-neighbour-like behaviour
     
@@ -66,16 +67,11 @@ def SaveThumbnailToStream( pil_image, dimensions, f ):
         pil_image.save( f, 'JPEG', quality = 92 )
         
     
-def GenerateThumbnail( path, dimensions = HC.UNSCALED_THUMBNAIL_DIMENSIONS, mime = None ):
-    
-    if mime is None:
-        
-        mime = GetMime( path )
-        
+def GenerateThumbnail( path, mime, dimensions = HC.UNSCALED_THUMBNAIL_DIMENSIONS ):
     
     if mime in ( HC.IMAGE_JPEG, HC.IMAGE_PNG, HC.IMAGE_GIF ):
         
-        thumbnail = GenerateThumbnailFromStaticImage( path, dimensions )
+        thumbnail = GenerateThumbnailFromStaticImage( path, dimensions, mime )
         
     else:
         
@@ -91,7 +87,7 @@ def GenerateThumbnail( path, dimensions = HC.UNSCALED_THUMBNAIL_DIMENSIONS, mime
                 
                 pil_image = HydrusImageHandling.GeneratePILImage( temp_path )
                 
-                SaveThumbnailToStream( pil_image, dimensions, f )
+                SaveThumbnailToStreamPIL( pil_image, dimensions, f )
                 
             except:
                 
@@ -99,7 +95,7 @@ def GenerateThumbnail( path, dimensions = HC.UNSCALED_THUMBNAIL_DIMENSIONS, mime
                 
                 pil_image = HydrusImageHandling.GeneratePILImage( flash_default_path )
                 
-                SaveThumbnailToStream( pil_image, dimensions, f )
+                SaveThumbnailToStreamPIL( pil_image, dimensions, f )
                 
             finally:
                 
@@ -125,7 +121,7 @@ def GenerateThumbnail( path, dimensions = HC.UNSCALED_THUMBNAIL_DIMENSIONS, mime
             
             pil_image = HydrusImageHandling.GeneratePILImageFromNumpyImage( numpy_image )
             
-            SaveThumbnailToStream( pil_image, dimensions, f )
+            SaveThumbnailToStreamPIL( pil_image, dimensions, f )
             
         
         f.seek( 0 )
@@ -137,13 +133,13 @@ def GenerateThumbnail( path, dimensions = HC.UNSCALED_THUMBNAIL_DIMENSIONS, mime
     
     return thumbnail
     
-def GenerateThumbnailFromStaticImage( path, dimensions = HC.UNSCALED_THUMBNAIL_DIMENSIONS ):
+def GenerateThumbnailFromStaticImagePIL( path, dimensions = HC.UNSCALED_THUMBNAIL_DIMENSIONS, mime = None ):
     
     f = cStringIO.StringIO()
     
     pil_image = HydrusImageHandling.GeneratePILImage( path )
     
-    SaveThumbnailToStream( pil_image, dimensions, f )
+    SaveThumbnailToStreamPIL( pil_image, dimensions, f )
     
     f.seek( 0 )
     
@@ -153,6 +149,8 @@ def GenerateThumbnailFromStaticImage( path, dimensions = HC.UNSCALED_THUMBNAIL_D
     
     return thumbnail
     
+GenerateThumbnailFromStaticImage = GenerateThumbnailFromStaticImagePIL
+
 def GetExtraHashesFromPath( path ):
     
     h_md5 = hashlib.md5()
@@ -175,7 +173,7 @@ def GetExtraHashesFromPath( path ):
     
     return ( md5, sha1, sha512 )
     
-def GetFileInfo( path ):
+def GetFileInfo( path, mime = None ):
     
     size = os.path.getsize( path )
     
@@ -184,7 +182,10 @@ def GetFileInfo( path ):
         raise HydrusExceptions.SizeException( 'File is of zero length!' )
         
     
-    mime = GetMime( path )
+    if mime is None:
+        
+        mime = GetMime( path )
+        
     
     if mime not in HC.ALLOWED_MIMES:
         
@@ -213,21 +214,13 @@ def GetFileInfo( path ):
         
         num_words = HydrusDocumentHandling.GetPDFNumWords( path )
         
-    elif mime == HC.AUDIO_MP3:
+    elif mime in HC.AUDIO:
         
-        duration = HydrusAudioHandling.GetMP3Duration( path )
+        ffmpeg_lines = HydrusVideoHandling.GetFFMPEGInfoLines( path )
         
-    elif mime == HC.AUDIO_OGG:
+        duration_in_s = HydrusVideoHandling.ParseFFMPEGDuration( ffmpeg_lines )
         
-        duration = HydrusAudioHandling.GetOGGVorbisDuration( path )
-        
-    elif mime == HC.AUDIO_FLAC:
-        
-        duration = HydrusAudioHandling.GetFLACDuration( path )
-        
-    elif mime == HC.AUDIO_WMA:
-        
-        duration = HydrusAudioHandling.GetWMADuration( path )
+        duration = int( duration_in_s * 1000 )
         
     
     return ( size, mime, width, height, duration, num_frames, num_words )
@@ -247,6 +240,13 @@ def GetHashFromPath( path ):
     return h.digest()
     
 def GetMime( path ):
+    
+    size = os.path.getsize( path )
+    
+    if size == 0:
+        
+        raise HydrusExceptions.SizeException( 'File is of zero length!' )
+        
     
     with open( path, 'rb' ) as f:
         
@@ -305,16 +305,6 @@ def GetMime( path ):
         
         HydrusData.Print( 'FFMPEG couldn\'t figure out the mime for: ' + path )
         HydrusData.PrintException( e, do_wait = False )
-        
-    
-    hsaudio_object = hsaudiotag.auto.File( path )
-    
-    if hsaudio_object.valid:
-        
-        if isinstance( hsaudio_object.original, hsaudiotag.mpeg.Mpeg ): return HC.AUDIO_MP3
-        elif isinstance( hsaudio_object.original, hsaudiotag.flac.FLAC ): return HC.AUDIO_FLAC
-        elif isinstance( hsaudio_object.original, hsaudiotag.ogg.Vorbis ): return HC.AUDIO_OGG
-        elif isinstance( hsaudio_object.original, hsaudiotag.wma.WMADecoder ): return HC.AUDIO_WMA
         
     
     return HC.APPLICATION_UNKNOWN

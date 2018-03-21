@@ -57,14 +57,6 @@ def CatchExceptionClient( etype, value, tb ):
             
         else:
             
-            if etype == wx.PyDeadObjectError:
-                
-                HydrusData.Print( 'Got a PyDeadObjectError, which can probably be ignored, but here it is anyway:' )
-                HydrusData.Print( trace )
-                
-                return
-                
-            
             try: job_key.SetVariable( 'popup_title', HydrusData.ToUnicode( etype.__name__ ) )
             except: job_key.SetVariable( 'popup_title', HydrusData.ToUnicode( etype ) )
             
@@ -98,7 +90,7 @@ def CatchExceptionClient( etype, value, tb ):
     
 def ColourIsBright( colour ):
     
-    ( r, g, b ) = colour.Get()
+    ( r, g, b, a ) = colour.Get()
     
     brightness_estimate = ( r + g + b ) // 3
     
@@ -108,7 +100,7 @@ def ColourIsBright( colour ):
     
 def ColourIsGreyish( colour ):
     
-    ( r, g, b ) = colour.Get()
+    ( r, g, b, a ) = colour.Get()
     
     greyish = r // 16 == g // 16 and g // 16 == b // 16
     
@@ -220,14 +212,39 @@ def ConvertServiceKeysToTagsToServiceKeysToContentUpdates( hashes, service_keys_
     
 def ConvertShortcutToPrettyShortcut( modifier, key ):
     
-    if modifier == wx.ACCEL_NORMAL: modifier = ''
-    elif modifier == wx.ACCEL_ALT: modifier = 'alt'
-    elif modifier == wx.ACCEL_CTRL: modifier = 'ctrl'
-    elif modifier == wx.ACCEL_SHIFT: modifier = 'shift'
+    if modifier == wx.ACCEL_NORMAL:
+        
+        modifier = ''
+        
+    elif modifier == wx.ACCEL_ALT:
+        
+        modifier = 'alt'
+        
+    elif modifier == wx.ACCEL_CTRL:
+        
+        modifier = 'ctrl'
+        
+    elif modifier == wx.ACCEL_SHIFT:
+        
+        modifier = 'shift'
+        
     
-    if key in range( 65, 91 ): key = chr( key + 32 ) # + 32 for converting ascii A -> a
-    elif key in range( 97, 123 ): key = chr( key )
-    else: key = CC.wxk_code_string_lookup[ key ]
+    if key in CC.wxk_code_string_lookup:
+        
+        key = CC.wxk_code_string_lookup[ key ]
+        
+    elif OrdIsAlphaUpper( key ):
+        
+        key = chr( key + 32 ) # + 32 for converting ascii A -> a
+        
+    elif OrdIsSensibleASCII( key ):
+        
+        key = chr( key )
+        
+    else:
+        
+        key = 'unknown key'
+        
     
     return ( modifier, key )
     
@@ -252,15 +269,15 @@ def ConvertTagSliceToString( tag_slice ):
         return tag_slice
         
     
-def ConvertTextToPixels( window, ( char_rows, char_cols ) ):
+def ConvertTextToPixels( window, ( char_cols, char_rows ) ):
     
-    dialog_units = ( char_rows * 4, char_cols * 8 )
+    dialog_units = ( char_cols * 4, char_rows * 8 )
     
-    return window.ConvertDialogSizeToPixels( dialog_units )
+    return tuple( window.ConvertDialogToPixels( dialog_units ) ) # convert from _Point_ to a tuple that size methods can deal with
     
-def ConvertTextToPixelWidth( window, char_rows ):
+def ConvertTextToPixelWidth( window, char_cols ):
     
-    ( width, height ) = ConvertTextToPixels( window, ( char_rows, 1 ) )
+    ( width, height ) = ConvertTextToPixels( window, ( char_cols, 1 ) )
     
     return width
     
@@ -288,9 +305,15 @@ def DeletePath( path ):
         HydrusPaths.DeletePath( path )
         
     
+def GetAlphaOfColour( colour, alpha ):
+    
+    ( r, g, b, a ) = colour.Get()
+    
+    return wx.Colour( r, g, b, alpha )
+    
 def GetDifferentLighterDarkerColour( colour, intensity = 3 ):
     
-    ( r, g, b ) = colour.Get()
+    ( r, g, b, a ) = colour.Get()
     
     if ColourIsGreyish( colour ):
         
@@ -323,7 +346,7 @@ def GetLighterDarkerColour( colour, intensity = 3 ):
         
     else:
         
-        ( r, g, b ) = colour.Get()
+        ( r, g, b, a ) = colour.Get()
         
         ( r, g, b ) = [ max( value, 32 ) for value in ( r, g, b ) ]
         
@@ -388,21 +411,20 @@ def GetSearchURLs( url ):
     
     return search_urls
     
-def GetSortChoices( add_namespaces_and_ratings = True ):
+def GetSortTypeChoices():
 
     sort_choices = list( CC.SORT_CHOICES )
     
-    if add_namespaces_and_ratings:
+    for ( namespaces_text, namespaces_list ) in HC.options[ 'sort_by' ]:
         
-        sort_choices.extend( HC.options[ 'sort_by' ] )
+        sort_choices.append( ( namespaces_text, tuple( namespaces_list ) ) )
         
-        service_keys = HG.client_controller.services_manager.GetServiceKeys( ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
+    
+    service_keys = HG.client_controller.services_manager.GetServiceKeys( ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) )
+    
+    for service_key in service_keys:
         
-        for service_key in service_keys:
-            
-            sort_choices.append( ( 'rating_descend', service_key ) )
-            sort_choices.append( ( 'rating_ascend', service_key ) )
-            
+        sort_choices.append( ( 'rating', service_key ) )
         
     
     return sort_choices
@@ -497,6 +519,26 @@ def MergePredicates( predicates, add_namespaceless = False ):
     
     return master_predicate_dict.values()
     
+def OrdIsSensibleASCII( o ):
+    
+    return 32 <= o and o <= 127
+    
+def OrdIsAlphaLower( o ):
+    
+    return 97 <= o and o <= 122
+    
+def OrdIsAlphaUpper( o ):
+    
+    return 65 <= o and o <= 90
+    
+def OrdIsAlpha( o ):
+    
+    return OrdIsAlphaLower( o ) or OrdIsAlphaUpper( o )
+    
+def OrdIsNumber( o ):
+    
+    return 48 <= o and o <= 57
+    
 def ReportShutdownException():
     
     text = 'A serious error occured while trying to exit the program. Its traceback may be shown next. It should have also been written to client.log. You may need to quit the program from task manager.'
@@ -517,7 +559,7 @@ def ShowExceptionClient( e, do_wait = True ):
         etype = type( e )
         value = HydrusData.ToUnicode( e )
         
-        trace = ''.join( traceback.format_stack() )
+        trace = 'No error trace--here is the stack:' + os.linesep + ''.join( traceback.format_stack() )
         
     else:
         
@@ -546,14 +588,6 @@ def ShowExceptionClient( e, do_wait = True ):
         return
         
     else:
-        
-        if etype == wx.PyDeadObjectError:
-            
-            HydrusData.Print( 'Got a PyDeadObjectError, which can probably be ignored, but here it is anyway:' )
-            HydrusData.Print( trace )
-            
-            return
-            
         
         if hasattr( etype, '__name__' ): title = HydrusData.ToUnicode( etype.__name__ )
         else: title = HydrusData.ToUnicode( etype )
@@ -625,23 +659,10 @@ def SortTagsList( tags, sort_type ):
     
     tags.sort( key = key, reverse = reverse )
     
-def WaitPolitely( page_key = None ):
-    
-    if page_key is not None:
-        
-        HG.client_controller.pub( 'waiting_politely', page_key, True )
-        
-    
-    time.sleep( HC.options[ 'website_download_polite_wait' ] )
-    
-    if page_key is not None:
-        
-        HG.client_controller.pub( 'waiting_politely', page_key, False )
-        
-    
 class ApplicationCommand( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_APPLICATION_COMMAND
+    SERIALISABLE_NAME = 'Application Command'
     SERIALISABLE_VERSION = 1
     
     def __init__( self, command_type = None, data = None ):
@@ -776,9 +797,172 @@ class Booru( HydrusData.HydrusYAMLBase ):
     
 sqlite3.register_adapter( Booru, yaml.safe_dump )
 
+class CheckerOptions( HydrusSerialisable.SerialisableBase ):
+    
+    SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_CHECKER_OPTIONS
+    SERIALISABLE_NAME = 'Checker Timing Options'
+    SERIALISABLE_VERSION = 1
+    
+    def __init__( self, intended_files_per_check = 8, never_faster_than = 300, never_slower_than = 86400, death_file_velocity = ( 1, 86400 ) ):
+        
+        HydrusSerialisable.SerialisableBase.__init__( self )
+        
+        self._intended_files_per_check = intended_files_per_check
+        self._never_faster_than = never_faster_than
+        self._never_slower_than = never_slower_than
+        self._death_file_velocity = death_file_velocity
+        
+    
+    def _GetCurrentFilesVelocity( self, seed_cache, last_check_time ):
+        
+        ( death_files_found, death_time_delta ) = self._death_file_velocity
+        
+        since = last_check_time - death_time_delta
+        
+        current_files_found = seed_cache.GetNumNewFilesSince( since )
+        
+        # when a thread is only 30mins old (i.e. first file was posted 30 mins ago), we don't want to calculate based on a longer delete time delta
+        # we want next check to be like 30mins from now, not 12 hours
+        # so we'll say "5 files in 30 mins" rather than "5 files in 24 hours"
+        
+        earliest_source_time = seed_cache.GetEarliestSourceTime()
+        
+        if earliest_source_time is None:
+            
+            current_time_delta = death_time_delta
+            
+        else:
+            
+            early_time_delta = max( last_check_time - earliest_source_time, 30 )
+            
+            current_time_delta = min( early_time_delta, death_time_delta )
+            
+        
+        return ( current_files_found, current_time_delta )
+        
+    
+    def _GetSerialisableInfo( self ):
+        
+        return ( self._intended_files_per_check, self._never_faster_than, self._never_slower_than, self._death_file_velocity )
+        
+    
+    def _InitialiseFromSerialisableInfo( self, serialisable_info ):
+        
+        ( self._intended_files_per_check, self._never_faster_than, self._never_slower_than, self._death_file_velocity ) = serialisable_info
+        
+    
+    def GetNextCheckTime( self, seed_cache, last_check_time ):
+        
+        if len( seed_cache ) == 0:
+            
+            if last_check_time == 0:
+                
+                return 0 # haven't checked yet, so should check immediately
+                
+            else:
+                
+                return HydrusData.GetNow() + self._never_slower_than
+                
+            
+        else:
+            
+            ( current_files_found, current_time_delta ) = self._GetCurrentFilesVelocity( seed_cache, last_check_time )
+            
+            if current_files_found == 0:
+                
+                # this shouldn't typically matter, since a dead checker won't care about next check time
+                # so let's just have a nice safe value in case this is ever asked legit
+                check_period = self._never_slower_than
+                
+            else:
+                
+                approx_time_per_file = current_time_delta / current_files_found
+                
+                ideal_check_period = self._intended_files_per_check * approx_time_per_file
+                
+                # if a thread produced lots of files and then stopped completely for whatever reason, we don't want to keep checking fast
+                # so, we set a lower limit of time since last file upload, neatly doubling our check period in these situations
+                
+                latest_source_time = seed_cache.GetLatestSourceTime()
+                
+                time_since_latest_file = max( last_check_time - latest_source_time, 30 )
+                
+                never_faster_than = max( self._never_faster_than, time_since_latest_file )
+                
+                check_period = min( max( never_faster_than, ideal_check_period ), self._never_slower_than )
+                
+            
+            return last_check_time + check_period
+            
+        
+    
+    def GetRawCurrentVelocity( self, seed_cache, last_check_time ):
+        
+        return self._GetCurrentFilesVelocity( seed_cache, last_check_time )
+        
+    
+    def GetPrettyCurrentVelocity( self, seed_cache, last_check_time, no_prefix = False ):
+        
+        if len( seed_cache ) == 0:
+            
+            if last_check_time == 0:
+                
+                pretty_current_velocity = 'no files yet'
+                
+            else:
+                
+                pretty_current_velocity = 'no files, unable to determine velocity'
+                
+            
+        else:
+            
+            if no_prefix:
+                
+                pretty_current_velocity = ''
+                
+            else:
+                
+                pretty_current_velocity = 'at last check, found '
+                
+            
+            ( current_files_found, current_time_delta ) = self._GetCurrentFilesVelocity( seed_cache, last_check_time )
+            
+            pretty_current_velocity += HydrusData.ConvertIntToPrettyString( current_files_found ) + ' files in previous ' + HydrusData.ConvertTimeDeltaToPrettyString( current_time_delta )
+            
+        
+        return pretty_current_velocity
+        
+    
+    def IsDead( self, seed_cache, last_check_time ):
+        
+        if len( seed_cache ) == 0 and last_check_time == 0:
+            
+            return False
+            
+        else:
+            
+            ( current_files_found, current_time_delta ) = self._GetCurrentFilesVelocity( seed_cache, last_check_time )
+            
+            ( death_files_found, deleted_time_delta ) = self._death_file_velocity
+            
+            current_file_velocity_float = current_files_found / float( current_time_delta )
+            death_file_velocity_float = death_files_found / float( deleted_time_delta )
+            
+            return current_file_velocity_float < death_file_velocity_float
+            
+        
+    
+    def ToTuple( self ):
+        
+        return ( self._intended_files_per_check, self._never_faster_than, self._never_slower_than, self._death_file_velocity )
+        
+    
+HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_CHECKER_OPTIONS ] = CheckerOptions
+
 class ClientOptions( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_CLIENT_OPTIONS
+    SERIALISABLE_NAME = 'Client Options'
     SERIALISABLE_VERSION = 3
     
     def __init__( self, db_dir = None ):
@@ -813,27 +997,27 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         self._dictionary[ 'booleans' ][ 'advanced_mode' ] = False
         
+        self._dictionary[ 'booleans' ][ 'always_show_hover_windows' ] = False
+        
         self._dictionary[ 'booleans' ][ 'apply_all_parents_to_all_services' ] = False
         self._dictionary[ 'booleans' ][ 'apply_all_siblings_to_all_services' ] = False
         self._dictionary[ 'booleans' ][ 'filter_inbox_and_archive_predicates' ] = False
-        self._dictionary[ 'booleans' ][ 'waiting_politely_text' ] = False
         
-        self._dictionary[ 'booleans' ][ 'show_thumbnail_title_banner' ] = True
-        self._dictionary[ 'booleans' ][ 'show_thumbnail_page' ] = True
+        self._dictionary[ 'booleans' ][ 'discord_dnd_fix' ] = False
         
         self._dictionary[ 'booleans' ][ 'disable_cv_for_gifs' ] = False
         
         self._dictionary[ 'booleans' ][ 'add_parents_on_manage_tags' ] = True
         self._dictionary[ 'booleans' ][ 'replace_siblings_on_manage_tags' ] = True
         
-        self._dictionary[ 'booleans' ][ 'get_tags_if_url_known_and_file_redundant' ] = False
+        self._dictionary[ 'booleans' ][ 'permit_watchers_to_name_their_pages' ] = True
         
         self._dictionary[ 'booleans' ][ 'show_related_tags' ] = False
         self._dictionary[ 'booleans' ][ 'show_file_lookup_script_tags' ] = False
         self._dictionary[ 'booleans' ][ 'hide_message_manager_on_gui_iconise' ] = HC.PLATFORM_OSX
         self._dictionary[ 'booleans' ][ 'hide_message_manager_on_gui_deactive' ] = False
         
-        self._dictionary[ 'booleans' ][ 'load_images_with_pil' ] = HC.PLATFORM_LINUX or HC.PLATFORM_OSX
+        self._dictionary[ 'booleans' ][ 'load_images_with_pil' ] = False
         
         self._dictionary[ 'booleans' ][ 'use_system_ffmpeg' ] = False
         
@@ -842,6 +1026,56 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         self._dictionary[ 'booleans' ][ 'show_namespaces' ] = True
         
         self._dictionary[ 'booleans' ][ 'verify_regular_https' ] = True
+        
+        self._dictionary[ 'booleans' ][ 'reverse_page_shift_drag_behaviour' ] = False
+        
+        self._dictionary[ 'booleans' ][ 'anchor_and_hide_canvas_drags' ] = HC.PLATFORM_WINDOWS
+        
+        self._dictionary[ 'booleans' ][ 'thumbnail_fill' ] = False
+        
+        self._dictionary[ 'booleans' ][ 'process_subs_in_random_order' ] = True
+        
+        self._dictionary[ 'booleans' ][ 'ac_select_first_with_count' ] = False
+        
+        self._dictionary[ 'booleans' ][ 'saving_sash_positions_on_exit' ] = True
+        
+        self._dictionary[ 'booleans' ][ 'pause_all_new_network_traffic' ] = False
+        
+        #
+        
+        self._dictionary[ 'colours' ] = HydrusSerialisable.SerialisableDictionary()
+        
+        self._dictionary[ 'colours' ][ 'default' ] = HydrusSerialisable.SerialisableDictionary()
+        
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_THUMB_BACKGROUND ] = ( 255, 255, 255 )
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_THUMB_BACKGROUND_SELECTED ] = ( 217, 242, 255 ) # light blue
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_THUMB_BACKGROUND_REMOTE ] = ( 32, 32, 36 ) # 50% Payne's Gray
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_THUMB_BACKGROUND_REMOTE_SELECTED ] = ( 64, 64, 72 ) # Payne's Gray
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_THUMB_BORDER ] = ( 223, 227, 230 ) # light grey
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_THUMB_BORDER_SELECTED ] = ( 1, 17, 26 ) # dark grey
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_THUMB_BORDER_REMOTE ] = ( 248, 208, 204 ) # 25% Vermillion, 75% White
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_THUMB_BORDER_REMOTE_SELECTED ] = ( 227, 66, 52 ) # Vermillion, lol
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_THUMBGRID_BACKGROUND ] = ( 255, 255, 255 )
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_AUTOCOMPLETE_BACKGROUND ] = ( 235, 248, 255 ) # very light blue
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_MEDIA_BACKGROUND ] = ( 255, 255, 255 )
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_MEDIA_TEXT ] = ( 0, 0, 0 )
+        self._dictionary[ 'colours' ][ 'default' ][ CC.COLOUR_TAGS_BOX ] = ( 255, 255, 255 )
+        
+        self._dictionary[ 'colours' ][ 'darkmode' ] = HydrusSerialisable.SerialisableDictionary()
+        
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_THUMB_BACKGROUND ] = ( 64, 64, 72 ) # Payne's Gray
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_THUMB_BACKGROUND_SELECTED ] = ( 112, 128, 144 ) # Slate Gray
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_THUMB_BACKGROUND_REMOTE ] = ( 64, 13, 2 ) # Black Bean
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_THUMB_BACKGROUND_REMOTE_SELECTED ] = ( 171, 39, 79 ) # Amaranth Purple
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_THUMB_BORDER ] = ( 145, 163, 176 ) # Cadet Grey
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_THUMB_BORDER_SELECTED ] = ( 223, 227, 230 ) # light grey
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_THUMB_BORDER_REMOTE ] = ( 248, 208, 204 ) # 25% Vermillion, 75% White
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_THUMB_BORDER_REMOTE_SELECTED ] = ( 227, 66, 52 ) # Vermillion, lol
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_THUMBGRID_BACKGROUND ] = ( 0, 0, 0 )
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_AUTOCOMPLETE_BACKGROUND ] = ( 83, 98, 103 ) # Gunmetal
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_MEDIA_BACKGROUND ] = ( 0, 0, 0 )
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_MEDIA_TEXT ] = ( 112, 128, 144 ) # Slate Gray
+        self._dictionary[ 'colours' ][ 'darkmode' ][ CC.COLOUR_TAGS_BOX ] = ( 0, 0, 0 )
         
         #
         
@@ -868,6 +1102,17 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         self._dictionary[ 'integers' ][ 'default_new_page_goes' ] = CC.NEW_PAGE_GOES_FAR_RIGHT
         
+        self._dictionary[ 'integers' ][ 'max_page_name_chars' ] = 20
+        self._dictionary[ 'integers' ][ 'page_file_count_display' ] = CC.PAGE_FILE_COUNT_DISPLAY_ALL
+        
+        self._dictionary[ 'integers' ][ 'network_timeout' ] = 10
+        
+        self._dictionary[ 'integers' ][ 'thumbnail_visibility_scroll_percent' ] = 75
+        
+        self._dictionary[ 'integers' ][ 'total_pages_warning' ] = 165
+        
+        self._dictionary[ 'integers' ][ 'last_session_save_period_minutes' ] = 5
+        
         #
         
         self._dictionary[ 'keys' ] = {}
@@ -893,6 +1138,8 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         self._dictionary[ 'noneable_integers' ][ 'duplicate_background_switch_intensity' ] = 3
         
+        self._dictionary[ 'noneable_integers' ][ 'last_review_bandwidth_search_distance' ] = 7 * 86400
+        
         #
         
         self._dictionary[ 'noneable_strings' ] = {}
@@ -900,16 +1147,73 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         self._dictionary[ 'noneable_strings' ][ 'favourite_file_lookup_script' ] = 'gelbooru md5'
         self._dictionary[ 'noneable_strings' ][ 'suggested_tags_layout' ] = 'notebook'
         self._dictionary[ 'noneable_strings' ][ 'backup_path' ] = None
+        self._dictionary[ 'noneable_strings' ][ 'thread_watcher_not_found_page_string' ] = '[404]'
+        self._dictionary[ 'noneable_strings' ][ 'thread_watcher_dead_page_string' ] = '[DEAD]'
+        self._dictionary[ 'noneable_strings' ][ 'thread_watcher_paused_page_string' ] = u'\u23F8'
         
         self._dictionary[ 'strings' ] = {}
         
         self._dictionary[ 'strings' ][ 'main_gui_title' ] = 'hydrus client'
         self._dictionary[ 'strings' ][ 'namespace_connector' ] = ':'
         self._dictionary[ 'strings' ][ 'export_phrase' ] = '{hash}'
+        self._dictionary[ 'strings' ][ 'current_colourset' ] = 'default'
         
         self._dictionary[ 'string_list' ] = {}
         
         self._dictionary[ 'string_list' ][ 'default_media_viewer_custom_shortcuts' ] = []
+        
+        #
+        
+        self._dictionary[ 'tag_summary_generators' ] = HydrusSerialisable.SerialisableDictionary()
+        
+        import ClientTags
+        
+        namespace_info = []
+        
+        namespace_info.append( ( 'creator', '', ', ' ) )
+        namespace_info.append( ( 'series', '', ', ' ) )
+        namespace_info.append( ( 'title', '', ', ' ) )
+        
+        separator = ' - '
+        
+        # the cleantags here converts to unicode, which is important!
+        
+        example_tags = HydrusTags.CleanTags( [ 'creator:creator', 'series:series', 'title:title' ] )
+        
+        tsg = ClientTags.TagSummaryGenerator( namespace_info = namespace_info, separator = separator, example_tags = example_tags )
+        
+        self._dictionary[ 'tag_summary_generators' ][ 'thumbnail_top' ] = tsg
+        
+        namespace_info = []
+        
+        namespace_info.append( ( 'volume', 'v', '-' ) )
+        namespace_info.append( ( 'chapter', 'c', '-' ) )
+        namespace_info.append( ( 'page', 'p', '-' ) )
+        
+        separator = '-'
+        
+        example_tags = HydrusTags.CleanTags( [ 'volume:3', 'chapter:10', 'page:330', 'page:331' ] )
+        
+        tsg = ClientTags.TagSummaryGenerator( namespace_info = namespace_info, separator = separator, example_tags = example_tags )
+        
+        self._dictionary[ 'tag_summary_generators' ][ 'thumbnail_bottom_right' ] = tsg
+        
+        namespace_info = []
+        
+        namespace_info.append( ( 'creator', '', ', ' ) )
+        namespace_info.append( ( 'series', '', ', ' ) )
+        namespace_info.append( ( 'title', '', ', ' ) )
+        namespace_info.append( ( 'volume', 'v', '-' ) )
+        namespace_info.append( ( 'chapter', 'c', '-' ) )
+        namespace_info.append( ( 'page', 'p', '-' ) )
+        
+        separator = ' - '
+        
+        example_tags = HydrusTags.CleanTags( [ 'creator:creator', 'series:series', 'title:title', 'volume:1', 'chapter:1', 'page:1' ] )
+        
+        tsg = ClientTags.TagSummaryGenerator( namespace_info = namespace_info, separator = separator, example_tags = example_tags )
+        
+        self._dictionary[ 'tag_summary_generators' ][ 'media_viewer_top' ] = tsg
         
         #
         
@@ -921,6 +1225,46 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         #
         
+        self._dictionary[ 'default_file_import_options' ] = HydrusSerialisable.SerialisableDictionary()
+        
+        exclude_deleted = True
+        allow_decompression_bombs = False
+        min_size = None
+        max_size = None
+        max_gif_size = 32 * 1048576
+        min_resolution = None
+        max_resolution = None
+        
+        automatic_archive = False
+        
+        present_new_files = True
+        present_already_in_inbox_files = False
+        present_already_in_archive_files = False
+        
+        import ClientImporting
+        
+        quiet_file_import_options = ClientImporting.FileImportOptions()
+        
+        quiet_file_import_options.SetPreImportOptions( exclude_deleted, allow_decompression_bombs, min_size, max_size, max_gif_size, min_resolution, max_resolution )
+        quiet_file_import_options.SetPostImportOptions( automatic_archive )
+        quiet_file_import_options.SetPresentationOptions( present_new_files, present_already_in_inbox_files, present_already_in_archive_files )
+        
+        self._dictionary[ 'default_file_import_options' ][ 'quiet' ] = quiet_file_import_options
+        
+        present_new_files = True
+        present_already_in_inbox_files = True
+        present_already_in_archive_files = True
+        
+        loud_file_import_options = ClientImporting.FileImportOptions()
+        
+        loud_file_import_options.SetPreImportOptions( exclude_deleted, allow_decompression_bombs, min_size, max_size, max_gif_size, min_resolution, max_resolution )
+        loud_file_import_options.SetPostImportOptions( automatic_archive )
+        loud_file_import_options.SetPresentationOptions( present_new_files, present_already_in_inbox_files, present_already_in_archive_files )
+        
+        self._dictionary[ 'default_file_import_options' ][ 'loud' ] = loud_file_import_options
+        
+        #
+        
         self._dictionary[ 'default_import_tag_options' ] = HydrusSerialisable.SerialisableDictionary()
         
         #
@@ -929,7 +1273,8 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         # remember size, remember position, last_size, last_pos, default gravity, default position, maximised, fullscreen
         self._dictionary[ 'frame_locations' ][ 'file_import_status' ] = ( True, True, None, None, ( -1, -1 ), 'topleft', False, False )
-        self._dictionary[ 'frame_locations' ][ 'main_gui' ] = ( True, True, ( 640, 480 ), ( 20, 20 ), ( -1, -1 ), 'topleft', True, False )
+        self._dictionary[ 'frame_locations' ][ 'local_import_filename_tagging' ] = ( True, False, None, None, ( -1, -1 ), 'topleft', False, False )
+        self._dictionary[ 'frame_locations' ][ 'main_gui' ] = ( True, True, ( 800, 600 ), ( 20, 20 ), ( -1, -1 ), 'topleft', True, False )
         self._dictionary[ 'frame_locations' ][ 'manage_options_dialog' ] = ( False, False, None, None, ( -1, -1 ), 'topleft', False, False )
         self._dictionary[ 'frame_locations' ][ 'manage_subscriptions_dialog' ] = ( True, True, None, None, ( 1, -1 ), 'topleft', False, False )
         self._dictionary[ 'frame_locations' ][ 'manage_tags_dialog' ] = ( False, False, None, None, ( -1, 1 ), 'topleft', False, False )
@@ -937,6 +1282,16 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         self._dictionary[ 'frame_locations' ][ 'media_viewer' ] = ( True, True, ( 640, 480 ), ( 70, 70 ), ( -1, -1 ), 'topleft', True, True )
         self._dictionary[ 'frame_locations' ][ 'regular_dialog' ] = ( False, False, None, None, ( -1, -1 ), 'topleft', False, False )
         self._dictionary[ 'frame_locations' ][ 'review_services' ] = ( False, True, None, None, ( -1, -1 ), 'topleft', False, False )
+        self._dictionary[ 'frame_locations' ][ 'deeply_nested_dialog' ] = ( False, False, None, None, ( -1, -1 ), 'topleft', False, False )
+        
+        #
+        
+        self._dictionary[ 'media_launch' ] = HydrusSerialisable.SerialisableDictionary() # integer keys, so got to be cleverer dict
+        
+        for mime in HC.SEARCHABLE_MIMES:
+            
+            self._dictionary[ 'media_launch' ][ mime ] = None
+            
         
         #
         
@@ -965,6 +1320,9 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
         self._dictionary[ 'media_view' ][ HC.APPLICATION_PDF ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, null_zoom_info )
+        self._dictionary[ 'media_view' ][ HC.APPLICATION_ZIP ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, null_zoom_info )
+        self._dictionary[ 'media_view' ][ HC.APPLICATION_7Z ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, null_zoom_info )
+        self._dictionary[ 'media_view' ][ HC.APPLICATION_RAR ] = ( CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, null_zoom_info )
         self._dictionary[ 'media_view' ][ HC.APPLICATION_HYDRUS_UPDATE_CONTENT ] = ( CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW, CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW, null_zoom_info )
         self._dictionary[ 'media_view' ][ HC.APPLICATION_HYDRUS_UPDATE_DEFINITIONS ] = ( CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW, CC.MEDIA_VIEWER_ACTION_DO_NOT_SHOW, null_zoom_info )
         
@@ -985,9 +1343,22 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         #
         
+        self._dictionary[ 'misc' ] = HydrusSerialisable.SerialisableDictionary()
+        
+        self._dictionary[ 'misc' ][ 'default_thread_watcher_options' ] = CheckerOptions( intended_files_per_check = 4, never_faster_than = 300, never_slower_than = 86400, death_file_velocity = ( 1, 86400 ) )
+        
+        #
+        
         self._dictionary[ 'suggested_tags' ] = HydrusSerialisable.SerialisableDictionary()
         
         self._dictionary[ 'suggested_tags' ][ 'favourites' ] = {}
+        
+        #
+        
+        import ClientMedia
+        
+        self._dictionary[ 'default_sort' ] = ClientMedia.MediaSort( ( 'system', CC.SORT_FILES_BY_FILESIZE ), CC.SORT_ASC )
+        self._dictionary[ 'fallback_sort' ] = ClientMedia.MediaSort( ( 'system', CC.SORT_FILES_BY_IMPORT_TIME ), CC.SORT_ASC )
         
     
     def _InitialiseFromSerialisableInfo( self, serialisable_info ):
@@ -1124,11 +1495,19 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
     
-    def ClearDefaultImportTagOptions( self ):
+    def ClearDefaultTagImportOptions( self ):
         
         with self._lock:
             
             self._dictionary[ 'default_import_tag_options' ] = HydrusSerialisable.SerialisableDictionary()
+            
+        
+    
+    def FlipBoolean( self, name ):
+        
+        with self._lock:
+            
+            self._dictionary[ 'booleans' ][ name ] = not self._dictionary[ 'booleans' ][ name ]
             
         
     
@@ -1172,21 +1551,44 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
     
-    def GetDefaultImportTagOptions( self, gallery_identifier = None ):
+    def GetColour( self, colour_type, colourset = None ):
         
         with self._lock:
             
-            default_import_tag_options = self._dictionary[ 'default_import_tag_options' ]
+            if colourset is None:
+                
+                colourset = self._dictionary[ 'strings' ][ 'current_colourset' ]
+                
+            
+            ( r, g, b ) = self._dictionary[ 'colours' ][ colourset ][ colour_type ]
+            
+            return wx.Colour( r, g, b )
+            
+        
+    
+    def GetDefaultFileImportOptions( self, options_type ):
+        
+        with self._lock:
+            
+            return self._dictionary[ 'default_file_import_options' ][ options_type ]
+            
+        
+    
+    def GetDefaultTagImportOptions( self, gallery_identifier = None ):
+        
+        with self._lock:
+            
+            default_tag_import_options = self._dictionary[ 'default_import_tag_options' ]
             
             if gallery_identifier is None:
                 
-                return default_import_tag_options
+                return default_tag_import_options
                 
             else:
                 
-                if gallery_identifier in default_import_tag_options:
+                if gallery_identifier in default_tag_import_options:
                     
-                    import_tag_options = default_import_tag_options[ gallery_identifier ]
+                    tag_import_options = default_tag_import_options[ gallery_identifier ]
                     
                 else:
                     
@@ -1195,35 +1597,42 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
                     default_pixiv_gallery_identifier = ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_PIXIV )
                     default_gallery_identifier = ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_DEFAULT )
                     
-                    guidance_import_tag_options = None
+                    guidance_tag_import_options = None
                     
                     site_type = gallery_identifier.GetSiteType()
                     
-                    if site_type == HC.SITE_TYPE_BOORU and default_booru_gallery_identifier in default_import_tag_options:
+                    if site_type == HC.SITE_TYPE_THREAD_WATCHER:
                         
-                        guidance_import_tag_options = default_import_tag_options[ default_booru_gallery_identifier ]
+                        import ClientImporting
                         
-                    elif site_type in ( HC.SITE_TYPE_HENTAI_FOUNDRY_ARTIST, HC.SITE_TYPE_HENTAI_FOUNDRY_TAGS ) and default_hentai_foundry_gallery_identifier in default_import_tag_options:
+                        return ClientImporting.TagImportOptions() # if nothing set, do nothing in this special case
                         
-                        guidance_import_tag_options = default_import_tag_options[ default_hentai_foundry_gallery_identifier ]
+                    
+                    if site_type == HC.SITE_TYPE_BOORU and default_booru_gallery_identifier in default_tag_import_options:
                         
-                    elif site_type in ( HC.SITE_TYPE_PIXIV_ARTIST_ID, HC.SITE_TYPE_PIXIV_TAG ) and default_pixiv_gallery_identifier in default_import_tag_options:
+                        guidance_tag_import_options = default_tag_import_options[ default_booru_gallery_identifier ]
                         
-                        guidance_import_tag_options = default_import_tag_options[ default_pixiv_gallery_identifier ]
+                    elif site_type in ( HC.SITE_TYPE_HENTAI_FOUNDRY_ARTIST, HC.SITE_TYPE_HENTAI_FOUNDRY_TAGS ) and default_hentai_foundry_gallery_identifier in default_tag_import_options:
                         
-                    elif default_gallery_identifier in default_import_tag_options:
+                        guidance_tag_import_options = default_tag_import_options[ default_hentai_foundry_gallery_identifier ]
                         
-                        guidance_import_tag_options = default_import_tag_options[ default_gallery_identifier ]
+                    elif site_type in ( HC.SITE_TYPE_PIXIV_ARTIST_ID, HC.SITE_TYPE_PIXIV_TAG ) and default_pixiv_gallery_identifier in default_tag_import_options:
+                        
+                        guidance_tag_import_options = default_tag_import_options[ default_pixiv_gallery_identifier ]
+                        
+                    elif default_gallery_identifier in default_tag_import_options:
+                        
+                        guidance_tag_import_options = default_tag_import_options[ default_gallery_identifier ]
                         
                     
                     service_keys_to_namespaces = {}
                     service_keys_to_explicit_tags = {}
                     
-                    if guidance_import_tag_options is not None:
+                    if guidance_tag_import_options is not None:
                         
                         ( namespaces, search_value ) = ClientDefaults.GetDefaultNamespacesAndSearchValue( gallery_identifier )
                         
-                        guidance_service_keys_to_namespaces = guidance_import_tag_options.GetServiceKeysToNamespaces()
+                        guidance_service_keys_to_namespaces = guidance_tag_import_options.GetServiceKeysToNamespaces()
                         
                         for ( service_key, guidance_namespaces ) in guidance_service_keys_to_namespaces.items():
                             
@@ -1237,14 +1646,32 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
                                 
                             
                         
-                        service_keys_to_explicit_tags = guidance_import_tag_options.GetServiceKeysToExplicitTags()
+                        service_keys_to_explicit_tags = guidance_tag_import_options.GetServiceKeysToExplicitTags()
                         
                     
-                    import_tag_options = ImportTagOptions( service_keys_to_namespaces = service_keys_to_namespaces, service_keys_to_explicit_tags = service_keys_to_explicit_tags )
+                    import ClientImporting
+                    
+                    tag_import_options = ClientImporting.TagImportOptions( service_keys_to_namespaces = service_keys_to_namespaces, service_keys_to_explicit_tags = service_keys_to_explicit_tags )
                     
                 
-                return import_tag_options
+                return tag_import_options
                 
+            
+        
+    
+    def GetDefaultThreadCheckerOptions( self ):
+        
+        with self._lock:
+            
+            return self._dictionary[ 'misc' ][ 'default_thread_watcher_options' ]
+            
+        
+    
+    def GetDefaultSort( self ):
+        
+        with self._lock:
+            
+            return self._dictionary[ 'default_sort' ]
             
         
     
@@ -1253,6 +1680,14 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         with self._lock:
             
             return self._dictionary[ 'duplicate_action_options' ][ duplicate_type ]
+            
+        
+    
+    def GetFallbackSort( self ):
+        
+        with self._lock:
+            
+            return self._dictionary[ 'fallback_sort' ]
             
         
     
@@ -1302,6 +1737,11 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
             ( media_show_action, preview_show_action, zoom_info ) = self._dictionary[ 'media_view' ][ mime ]
             
+            if media_show_action not in CC.media_viewer_capabilities[ mime ]:
+                
+                return CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON
+                
+            
             return media_show_action
             
         
@@ -1342,6 +1782,19 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
     
+    def GetMimeLaunch( self, mime ):
+        
+        with self._lock:
+            
+            if mime not in self._dictionary[ 'media_launch' ]:
+                
+                self._dictionary[ 'media_launch' ][ mime ] = None
+                
+            
+            return self._dictionary[ 'media_launch' ][ mime ]
+            
+        
+    
     def GetNoneableInteger( self, name ):
         
         with self._lock:
@@ -1363,6 +1816,11 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         with self._lock:
             
             ( media_show_action, preview_show_action, zoom_info ) = self._dictionary[ 'media_view' ][ mime ]
+            
+            if preview_show_action not in CC.media_viewer_capabilities[ mime ]:
+                
+                return CC.MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON
+                
             
             return preview_show_action
             
@@ -1400,6 +1858,14 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
                 
                 return set()
                 
+            
+        
+    
+    def GetTagSummaryGenerator( self, name ):
+        
+        with self._lock:
+            
+            return self._dictionary[ 'tag_summary_generators' ][ name ]
             
         
     
@@ -1447,11 +1913,44 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
     
-    def SetDefaultImportTagOptions( self, gallery_identifier, import_tag_options ):
+    def SetColour( self, colour_type, colourset, colour ):
         
         with self._lock:
             
-            self._dictionary[ 'default_import_tag_options' ][ gallery_identifier ] = import_tag_options
+            if isinstance( colour, wx.Colour ):
+                
+                ( r, g, b, a ) = colour.Get()
+                
+            else:
+                
+                ( r, g, b ) = colour
+                
+            
+            self._dictionary[ 'colours' ][ colourset ][ colour_type ] = ( r, g, b )
+            
+        
+    
+    def SetDefaultTagImportOptions( self, gallery_identifier, tag_import_options ):
+        
+        with self._lock:
+            
+            self._dictionary[ 'default_import_tag_options' ][ gallery_identifier ] = tag_import_options
+            
+        
+    
+    def SetDefaultThreadCheckerOptions( self, checker_options ):
+        
+        with self._lock:
+            
+            self._dictionary[ 'misc' ][ 'default_thread_watcher_options' ] = checker_options
+            
+        
+    
+    def SetDefaultSort( self, media_sort ):
+        
+        with self._lock:
+            
+            self._dictionary[ 'default_sort' ] = media_sort
             
         
     
@@ -1460,6 +1959,22 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         with self._lock:
             
             self._dictionary[ 'duplicate_action_options' ][ duplicate_type ] = duplicate_action_options
+            
+        
+    
+    def SetFallbackSort( self, media_sort ):
+        
+        with self._lock:
+            
+            self._dictionary[ 'fallback_sort' ] = media_sort
+            
+        
+    
+    def SetDefaultFileImportOptions( self, options_type, file_import_options ):
+        
+        with self._lock:
+            
+            self._dictionary[ 'default_file_import_options' ][ options_type ] = file_import_options
             
         
     
@@ -1519,6 +2034,14 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
     
+    def SetMimeLaunch( self, mime, launch_path ):
+        
+        with self._lock:
+            
+            self._dictionary[ 'media_launch' ][ mime ] = launch_path
+            
+        
+    
     def SetNoneableInteger( self, name, value ):
         
         with self._lock:
@@ -1547,9 +2070,16 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
         
         with self._lock:
             
+            it_changed = False
+            
             if value is not None and value != '':
                 
-                self._dictionary[ 'strings' ][ name ] = value
+                if self._dictionary[ 'strings' ][ name ] != value:
+                    
+                    self._dictionary[ 'strings' ][ name ] = value
+                    
+                    it_changed = True
+                    
                 
             
         
@@ -1572,6 +2102,14 @@ class ClientOptions( HydrusSerialisable.SerialisableBase ):
             
         
     
+    def SetTagSummaryGenerator( self, name, tag_summary_generator ):
+        
+        with self._lock:
+            
+            self._dictionary[ 'tag_summary_generators' ][ name ] = tag_summary_generator
+            
+        
+    
 HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_CLIENT_OPTIONS ] = ClientOptions
 
 class Credentials( HydrusData.HydrusYAMLBase ):
@@ -1582,7 +2120,10 @@ class Credentials( HydrusData.HydrusYAMLBase ):
         
         HydrusData.HydrusYAMLBase.__init__( self )
         
-        if host == 'localhost': host = '127.0.0.1'
+        if host == 'localhost':
+            
+            host = '127.0.0.1'
+            
         
         self._host = host
         self._port = port
@@ -1619,6 +2160,7 @@ class Credentials( HydrusData.HydrusYAMLBase ):
 class DuplicateActionOptions( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_DUPLICATE_ACTION_OPTIONS
+    SERIALISABLE_NAME = 'Duplicate Action Options'
     SERIALISABLE_VERSION = 2
     
     def __init__( self, tag_service_actions = None, rating_service_actions = None, delete_second_file = False, sync_archive = False, delete_both_files = False ):
@@ -1981,210 +2523,10 @@ class Imageboard( HydrusData.HydrusYAMLBase ):
     
 sqlite3.register_adapter( Imageboard, yaml.safe_dump )
 
-class ImportFileOptions( HydrusSerialisable.SerialisableBase ):
-    
-    SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_FILE_OPTIONS
-    SERIALISABLE_VERSION = 1
-    
-    def __init__( self, automatic_archive = None, exclude_deleted = None, min_size = None, min_resolution = None ):
-        
-        HydrusSerialisable.SerialisableBase.__init__( self )
-        
-        self._automatic_archive = automatic_archive
-        self._exclude_deleted = exclude_deleted
-        self._min_size = min_size
-        self._min_resolution = min_resolution
-        
-    
-    def _GetSerialisableInfo( self ):
-        
-        return ( self._automatic_archive, self._exclude_deleted, self._min_size, self._min_resolution )
-        
-    
-    def _InitialiseFromSerialisableInfo( self, serialisable_info ):
-        
-        ( self._automatic_archive, self._exclude_deleted, self._min_size, self._min_resolution ) = serialisable_info
-        
-    
-    def FileIsValid( self, size, resolution = None ):
-        
-        if self._min_size is not None and size < self._min_size:
-            
-            return False
-            
-        
-        if resolution is not None and self._min_resolution is not None:
-            
-            ( x, y ) = resolution
-            
-            ( min_x, min_y ) = self._min_resolution
-            
-            if x < min_x or y < min_y:
-                
-                return False
-                
-            
-        
-        return True
-        
-    
-    def GetAutomaticArchive( self ):
-        
-        return self._automatic_archive
-        
-    
-    def GetExcludeDeleted( self ):
-        
-        return self._exclude_deleted
-        
-    
-    def ToTuple( self ):
-        
-        return ( self._automatic_archive, self._exclude_deleted, self._min_size, self._min_resolution )
-        
-    
-HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_FILE_OPTIONS ] = ImportFileOptions
-
-class ImportTagOptions( HydrusSerialisable.SerialisableBase ):
-    
-    SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_TAG_OPTIONS
-    SERIALISABLE_VERSION = 2
-    
-    def __init__( self, service_keys_to_namespaces = None, service_keys_to_explicit_tags = None ):
-        
-        HydrusSerialisable.SerialisableBase.__init__( self )
-        
-        if service_keys_to_namespaces is None:
-            
-            service_keys_to_namespaces = {}
-            
-        
-        if service_keys_to_explicit_tags is None:
-            
-            service_keys_to_explicit_tags = {}
-            
-        
-        self._service_keys_to_namespaces = service_keys_to_namespaces
-        self._service_keys_to_explicit_tags = service_keys_to_explicit_tags
-        
-    
-    def _GetSerialisableInfo( self ):
-        
-        if HG.client_controller.IsBooted():
-            
-            services_manager = HG.client_controller.services_manager
-            
-            test_func = services_manager.ServiceExists
-            
-        else:
-            
-            def test_func( service_key ):
-                
-                return True
-                
-            
-        
-        safe_service_keys_to_namespaces = { service_key.encode( 'hex' ) : list( namespaces ) for ( service_key, namespaces ) in self._service_keys_to_namespaces.items() if test_func( service_key ) }
-        safe_service_keys_to_explicit_tags = { service_key.encode( 'hex' ) : list( tags ) for ( service_key, tags ) in self._service_keys_to_explicit_tags.items() if test_func( service_key ) }
-        
-        return ( safe_service_keys_to_namespaces, safe_service_keys_to_explicit_tags )
-        
-    
-    def _InitialiseFromSerialisableInfo( self, serialisable_info ):
-        
-        ( safe_service_keys_to_namespaces, safe_service_keys_to_explicit_tags ) = serialisable_info
-        
-        self._service_keys_to_namespaces = { service_key.decode( 'hex' ) : set( namespaces ) for ( service_key, namespaces ) in safe_service_keys_to_namespaces.items() }
-        self._service_keys_to_explicit_tags = { service_key.decode( 'hex' ) : set( tags ) for ( service_key, tags ) in safe_service_keys_to_explicit_tags.items() }
-        
-    
-    def _UpdateSerialisableInfo( self, version, old_serialisable_info ):
-        
-        if version == 1:
-            
-            safe_service_keys_to_namespaces = old_serialisable_info
-            
-            safe_service_keys_to_explicit_tags = {}
-            
-            new_serialisable_info = ( safe_service_keys_to_namespaces, safe_service_keys_to_explicit_tags )
-            
-            return ( 2, new_serialisable_info )
-            
-        
-    
-    def GetServiceKeysToExplicitTags( self ):
-        
-        return dict( self._service_keys_to_explicit_tags )
-        
-    
-    def GetServiceKeysToNamespaces( self ):
-        
-        return dict( self._service_keys_to_namespaces )
-        
-    
-    def GetServiceKeysToContentUpdates( self, hash, tags ):
-        
-        tags = [ tag for tag in tags if tag is not None ]
-        
-        service_keys_to_tags = collections.defaultdict( set )
-        
-        siblings_manager = HG.client_controller.GetManager( 'tag_siblings' )
-        parents_manager = HG.client_controller.GetManager( 'tag_parents' )
-        
-        for ( service_key, namespaces ) in self._service_keys_to_namespaces.items():
-            
-            tags_to_add_here = []
-            
-            if len( namespaces ) > 0:
-                
-                for namespace in namespaces:
-                    
-                    if namespace == '': tags_to_add_here.extend( [ tag for tag in tags if not ':' in tag ] )
-                    else: tags_to_add_here.extend( [ tag for tag in tags if tag.startswith( namespace + ':' ) ] )
-                    
-                
-            
-            tags_to_add_here = HydrusTags.CleanTags( tags_to_add_here )
-            
-            if len( tags_to_add_here ) > 0:
-                
-                tags_to_add_here = siblings_manager.CollapseTags( service_key, tags_to_add_here )
-                tags_to_add_here = parents_manager.ExpandTags( service_key, tags_to_add_here )
-                
-                service_keys_to_tags[ service_key ].update( tags_to_add_here )
-                
-            
-        
-        for ( service_key, explicit_tags ) in self._service_keys_to_explicit_tags.items():
-            
-            tags_to_add_here = HydrusTags.CleanTags( explicit_tags )
-            
-            if len( tags_to_add_here ) > 0:
-                
-                tags_to_add_here = siblings_manager.CollapseTags( service_key, tags_to_add_here )
-                tags_to_add_here = parents_manager.ExpandTags( service_key, tags_to_add_here )
-                
-                service_keys_to_tags[ service_key ].update( tags_to_add_here )
-                
-            
-        
-        service_keys_to_content_updates = ConvertServiceKeysToTagsToServiceKeysToContentUpdates( { hash }, service_keys_to_tags )
-        
-        return service_keys_to_content_updates
-        
-    
-    def InterestedInTags( self ):
-        
-        i_am_interested = len( self._service_keys_to_namespaces ) > 0
-        
-        return i_am_interested
-        
-    
-HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_TAG_OPTIONS ] = ImportTagOptions
-
 class Shortcut( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUT
+    SERIALISABLE_NAME = 'Shortcut'
     SERIALISABLE_VERSION = 1
     
     def __init__( self, shortcut_type = None, shortcut_key = None, modifiers = None ):
@@ -2269,17 +2611,21 @@ class Shortcut( HydrusSerialisable.SerialisableBase ):
         
         if self._shortcut_type == CC.SHORTCUT_TYPE_KEYBOARD:
             
-            if self._shortcut_key in range( 65, 91 ):
+            if self._shortcut_key in CC.wxk_code_string_lookup:
+                
+                components.append( CC.wxk_code_string_lookup[ self._shortcut_key ] )
+                
+            elif OrdIsAlphaUpper( self._shortcut_key ):
                 
                 components.append( chr( self._shortcut_key + 32 ) ) # + 32 for converting ascii A -> a
                 
-            elif self._shortcut_key in range( 97, 123 ):
+            elif OrdIsSensibleASCII( self._shortcut_key ):
                 
                 components.append( chr( self._shortcut_key ) )
                 
             else:
                 
-                components.append( CC.wxk_code_string_lookup[ self._shortcut_key ] )
+                components.append( 'unknown key' )
                 
             
         elif self._shortcut_type == CC.SHORTCUT_TYPE_MOUSE:
@@ -2295,6 +2641,7 @@ HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIAL
 class Shortcuts( HydrusSerialisable.SerialisableBaseNamed ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS
+    SERIALISABLE_NAME = 'Shortcuts'
     SERIALISABLE_VERSION = 2
     
     def __init__( self, name ):
@@ -2427,7 +2774,7 @@ def ConvertKeyEventToShortcut( event ):
     
     key = event.KeyCode
     
-    if key in range( 65, 91 ) or key in CC.wxk_code_string_lookup.keys():
+    if OrdIsSensibleASCII( key ) or key in CC.wxk_code_string_lookup.keys():
         
         modifiers = []
         
@@ -2529,6 +2876,7 @@ def ConvertMouseEventToShortcut( event ):
 class TagCensor( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_TAG_CENSOR
+    SERIALISABLE_NAME = 'Tag Censorship Rules'
     SERIALISABLE_VERSION = 1
     
     def __init__( self ):

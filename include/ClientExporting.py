@@ -8,13 +8,19 @@ import HydrusGlobals as HG
 import HydrusPaths
 import HydrusSerialisable
 import HydrusTags
+import HydrusThreading
 import os
 import re
 import stat
 
-def GenerateExportFilename( media, terms ):
+MAX_PATH_LENGTH = 245 # bit of padding from 255 for .txt neigbouring and other surprises
+
+def GenerateExportFilename( destination_directory, media, terms ):
     
-    mime = media.GetMime()
+    if len( destination_directory ) > ( MAX_PATH_LENGTH - 10 ):
+        
+        raise Exception( 'The destination directory is too long!' )
+        
     
     filename = ''
     
@@ -80,6 +86,8 @@ def GenerateExportFilename( media, terms ):
             
         elif term_type == 'tag':
             
+            tag = term
+            
             ( namespace, subtag ) = HydrusTags.SplitTag( tag )
             
             if tags_manager.HasTag( subtag ):
@@ -98,20 +106,33 @@ def GenerateExportFilename( media, terms ):
         filename = re.sub( '/', '_', filename, flags = re.UNICODE )
         
     
+    #
+    
+    mime = media.GetMime()
+    
     ext = HC.mime_ext_lookup[ mime ]
     
-    if not filename.endswith( ext ):
+    if filename.endswith( ext ):
         
-        filename += ext
+        filename = filename[ : - len( ext ) ]
         
+    
+    example_dest_path = os.path.join( destination_directory, filename + ext )
+    
+    excess_chars = len( example_dest_path ) - MAX_PATH_LENGTH
+    
+    if excess_chars > 0:
+        
+        filename = filename[ : - excess_chars ]
+        
+    
+    filename = filename + ext
     
     return filename
     
 def GetExportPath():
     
-    options = HG.client_controller.GetOptions()
-    
-    portable_path = options[ 'export_path' ]
+    portable_path = HG.client_controller.options[ 'export_path' ]
     
     if portable_path is None:
         
@@ -206,6 +227,7 @@ def ParseExportPhrase( phrase ):
 class ExportFolder( HydrusSerialisable.SerialisableBaseNamed ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER
+    SERIALISABLE_NAME = 'Export Folder'
     SERIALISABLE_VERSION = 2
     
     def __init__( self, name, path = '', export_type = HC.EXPORT_FOLDER_TYPE_REGULAR, file_search_context = None, period = 3600, phrase = '{md5}' ):
@@ -219,9 +241,7 @@ class ExportFolder( HydrusSerialisable.SerialisableBaseNamed ):
         
         if phrase is None:
             
-            new_options = HG.client_controller.GetNewOptions()
-            
-            phrase = new_options.GetString( 'export_phrase' )
+            phrase = HG.client_controller.new_options.GetString( 'export_phrase' )
             
         
         self._path = path
@@ -278,7 +298,7 @@ class ExportFolder( HydrusSerialisable.SerialisableBaseNamed ):
                 
                 while i < len( query_hash_ids ):
                     
-                    if HC.options[ 'pause_export_folders_sync' ]:
+                    if HC.options[ 'pause_export_folders_sync' ] or HydrusThreading.IsThreadShuttingDown():
                         
                         return
                         
@@ -307,13 +327,18 @@ class ExportFolder( HydrusSerialisable.SerialisableBaseNamed ):
                 
                 for media_result in media_results:
                     
+                    if HC.options[ 'pause_export_folders_sync' ] or HydrusThreading.IsThreadShuttingDown():
+                        
+                        return
+                        
+                    
                     hash = media_result.GetHash()
                     mime = media_result.GetMime()
                     size = media_result.GetSize()
                     
                     source_path = client_files_manager.GetFilePath( hash, mime )
                     
-                    filename = GenerateExportFilename( media_result, terms )
+                    filename = GenerateExportFilename( folder_path, media_result, terms )
                     
                     dest_path = os.path.join( folder_path, filename )
                     

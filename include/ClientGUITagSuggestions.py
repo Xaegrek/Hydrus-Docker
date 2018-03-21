@@ -22,7 +22,7 @@ class ListBoxTagsSuggestionsFavourites( ClientGUIListBoxes.ListBoxTagsStrings ):
         
         self._activate_callable = activate_callable
         
-        width = HG.client_controller.GetNewOptions().GetInteger( 'suggested_tags_width' )
+        width = HG.client_controller.new_options.GetInteger( 'suggested_tags_width' )
         
         if width is not None:
             
@@ -53,7 +53,7 @@ class ListBoxTagsSuggestionsRelated( ClientGUIListBoxes.ListBoxTagsPredicates ):
         
         self._activate_callable = activate_callable
         
-        width = HG.client_controller.GetNewOptions().GetInteger( 'suggested_tags_width' )
+        width = HG.client_controller.new_options.GetInteger( 'suggested_tags_width' )
         
         self.SetMinSize( ( width, -1 ) )
         
@@ -96,7 +96,7 @@ class RecentTagsPanel( wx.Panel ):
         self._service_key = service_key
         self._canvas_key = canvas_key
         
-        self._new_options = HG.client_controller.GetNewOptions()
+        self._new_options = HG.client_controller.new_options
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
@@ -105,8 +105,8 @@ class RecentTagsPanel( wx.Panel ):
         
         self._recent_tags = ListBoxTagsSuggestionsFavourites( self, activate_callable, sort_tags = False )
         
-        vbox.AddF( clear_button, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._recent_tags, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( clear_button, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._recent_tags, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
@@ -120,9 +120,24 @@ class RecentTagsPanel( wx.Panel ):
     
     def _RefreshRecentTags( self ):
         
-        recent_tags = HG.client_controller.Read( 'recent_tags', self._service_key )
+        def do_it( service_key ):
+            
+            def wx_code():
+                
+                if not self:
+                    
+                    return
+                    
+                
+                self._recent_tags.SetTags( recent_tags )
+                
+            
+            recent_tags = HG.client_controller.Read( 'recent_tags', service_key )
+            
+            wx.CallAfter( wx_code )
+            
         
-        self._recent_tags.SetTags( recent_tags )
+        HG.client_controller.CallToThread( do_it, self._service_key )
         
     
     def CanvasHasNewMedia( self, canvas_key, new_media_singleton ):
@@ -135,7 +150,7 @@ class RecentTagsPanel( wx.Panel ):
     
     def EventClear( self, event ):
         
-        HG.client_controller.WriteSynchronous( 'push_recent_tags', self._service_key, None )
+        HG.client_controller.Write( 'push_recent_tags', self._service_key, None )
         
         self._RefreshRecentTags()
         
@@ -150,7 +165,7 @@ class RelatedTagsPanel( wx.Panel ):
         self._media = media
         self._canvas_key = canvas_key
         
-        self._new_options = HG.client_controller.GetNewOptions()
+        self._new_options = HG.client_controller.new_options
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
@@ -166,11 +181,11 @@ class RelatedTagsPanel( wx.Panel ):
         
         button_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        button_hbox.AddF( button_2, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        button_hbox.AddF( button_3, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        button_hbox.Add( button_2, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        button_hbox.Add( button_3, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
         
-        vbox.AddF( button_hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._related_tags, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( button_hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._related_tags, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
@@ -183,6 +198,25 @@ class RelatedTagsPanel( wx.Panel ):
         
     
     def _FetchRelatedTags( self, max_time_to_take ):
+        
+        def do_it( service_key ):
+            
+            def wx_code():
+                
+                if not self:
+                    
+                    return
+                    
+                
+                self._related_tags.SetPredicates( predicates )
+                
+            
+            predicates = HG.client_controller.Read( 'related_tags', service_key, hash, search_tags, max_results, max_time_to_take )
+            
+            predicates = ClientSearch.SortPredicates( predicates )
+            
+            wx.CallAfter( wx_code )
+            
         
         ( m, ) = self._media
         
@@ -199,11 +233,7 @@ class RelatedTagsPanel( wx.Panel ):
         
         max_results = 100
         
-        predicates = HG.client_controller.Read( 'related_tags', self._service_key, hash, search_tags, max_results, max_time_to_take )
-        
-        predicates = ClientSearch.SortPredicates( predicates )
-        
-        self._related_tags.SetPredicates( predicates )
+        HG.client_controller.CallToThread( do_it, self._service_key )
         
     
     def _QuickSuggestedRelatedTags( self ):
@@ -247,31 +277,13 @@ class FileLookupScriptTagsPanel( wx.Panel ):
         self._media = media
         self._canvas_key = canvas_key
         
-        scripts = HG.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_PARSE_ROOT_FILE_LOOKUP )
-        
-        script_names_to_scripts = { script.GetName() : script for script in scripts }
-        
         self._script_choice = ClientGUICommon.BetterChoice( self )
         
-        for ( name, script ) in script_names_to_scripts.items():
-            
-            self._script_choice.Append( script.GetName(), script )
-            
+        self._script_choice.Disable()
         
-        new_options = HG.client_controller.GetNewOptions()
+        self._fetch_button = ClientGUICommon.BetterButton( self, 'fetch tags', self.FetchTags )
         
-        favourite_file_lookup_script = new_options.GetNoneableString( 'favourite_file_lookup_script' )
-        
-        if favourite_file_lookup_script in script_names_to_scripts:
-            
-            self._script_choice.SelectClientData( script_names_to_scripts[ favourite_file_lookup_script ] )
-            
-        else:
-            
-            self._script_choice.Select( 0 )
-            
-        
-        fetch_button = ClientGUICommon.BetterButton( self, 'fetch tags', self.FetchTags )
+        self._fetch_button.Disable()
         
         self._script_management = ClientGUIParsing.ScriptManagementControl( self )
         
@@ -281,11 +293,11 @@ class FileLookupScriptTagsPanel( wx.Panel ):
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._script_choice, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( fetch_button, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._script_management, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._add_all, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._tags, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( self._script_choice, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._fetch_button, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._script_management, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._add_all, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._tags, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self._SetTags( [] )
         
@@ -295,6 +307,51 @@ class FileLookupScriptTagsPanel( wx.Panel ):
             
             HG.client_controller.sub( self, 'CanvasHasNewMedia', 'canvas_new_display_media' )
             
+        
+        self._FetchScripts()
+        
+    
+    def _FetchScripts( self ):
+        
+        def do_it():
+            
+            def wx_code():
+                
+                if not self:
+                    
+                    return
+                    
+                
+                script_names_to_scripts = { script.GetName() : script for script in scripts }
+                
+                for ( name, script ) in script_names_to_scripts.items():
+                    
+                    self._script_choice.Append( script.GetName(), script )
+                    
+                
+                new_options = HG.client_controller.new_options
+                
+                favourite_file_lookup_script = new_options.GetNoneableString( 'favourite_file_lookup_script' )
+                
+                if favourite_file_lookup_script in script_names_to_scripts:
+                    
+                    self._script_choice.SelectClientData( script_names_to_scripts[ favourite_file_lookup_script ] )
+                    
+                else:
+                    
+                    self._script_choice.Select( 0 )
+                    
+                
+                self._script_choice.Enable()
+                self._fetch_button.Enable()
+                
+            
+            scripts = HG.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_PARSE_ROOT_FILE_LOOKUP )
+            
+            wx.CallAfter( wx_code )
+            
+        
+        HG.client_controller.CallToThread( do_it )
         
     
     def _SetTags( self, tags ):
@@ -352,18 +409,26 @@ class FileLookupScriptTagsPanel( wx.Panel ):
         
         self._script_management.SetJobKey( job_key )
         
-        desired_content = 'all'
-        
-        HG.client_controller.CallToThread( self.THREADFetchTags, script, job_key, file_identifier, desired_content )
+        HG.client_controller.CallToThread( self.THREADFetchTags, script, job_key, file_identifier )
         
     
-    def THREADFetchTags( self, script, job_key, file_identifier, desired_content ):
+    def THREADFetchTags( self, script, job_key, file_identifier ):
         
-        content_results = script.DoQuery( job_key, file_identifier, desired_content )
+        def wx_code( tags ):
+            
+            if not self:
+                
+                return
+                
+            
+            self._SetTags( tags )
+            
         
-        tags = ClientParsing.GetTagsFromContentResults( content_results )
+        parse_results = script.DoQuery( job_key, file_identifier )
         
-        wx.CallAfter( self._SetTags, tags )
+        tags = ClientParsing.GetTagsFromParseResults( parse_results )
+        
+        wx.CallAfter( wx_code, tags )
         
     
 class SuggestedTagsPanel( wx.Panel ):
@@ -376,7 +441,7 @@ class SuggestedTagsPanel( wx.Panel ):
         self._media = media
         self._canvas_key = canvas_key
         
-        self._new_options = HG.client_controller.GetNewOptions()
+        self._new_options = HG.client_controller.new_options
         
         layout_mode = self._new_options.GetNoneableString( 'suggested_tags_layout' )
         
@@ -434,7 +499,7 @@ class SuggestedTagsPanel( wx.Panel ):
                 notebook.AddPage( panel, name )
                 
             
-            hbox.AddF( notebook, CC.FLAGS_EXPAND_BOTH_WAYS )
+            hbox.Add( notebook, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             self.SetSizer( hbox )
             
@@ -444,7 +509,7 @@ class SuggestedTagsPanel( wx.Panel ):
             
             for ( name, panel ) in panels:
                 
-                hbox.AddF( panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+                hbox.Add( panel, CC.FLAGS_EXPAND_PERPENDICULAR )
                 
             
             self.SetSizer( hbox )

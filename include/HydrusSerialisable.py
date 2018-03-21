@@ -1,6 +1,18 @@
 import json
-import lz4.block
 import zlib
+
+LZ4_OK = False
+
+try:
+    
+    import lz4.block
+    
+    LZ4_OK = True
+    
+except ImportError:
+    
+    print( 'Could not import lz4.' )
+    
 
 SERIALISABLE_TYPE_BASE = 0
 SERIALISABLE_TYPE_BASE_NAMED = 1
@@ -8,8 +20,8 @@ SERIALISABLE_TYPE_SHORTCUTS = 2
 SERIALISABLE_TYPE_SUBSCRIPTION = 3
 SERIALISABLE_TYPE_PERIODIC = 4
 SERIALISABLE_TYPE_GALLERY_IDENTIFIER = 5
-SERIALISABLE_TYPE_IMPORT_TAG_OPTIONS = 6
-SERIALISABLE_TYPE_IMPORT_FILE_OPTIONS = 7
+SERIALISABLE_TYPE_TAG_IMPORT_OPTIONS = 6
+SERIALISABLE_TYPE_FILE_IMPORT_OPTIONS = 7
 SERIALISABLE_TYPE_SEED_CACHE = 8
 SERIALISABLE_TYPE_HDD_IMPORT = 9
 SERIALISABLE_TYPE_SERVER_TO_CLIENT_CONTENT_UPDATE_PACKAGE = 10
@@ -32,7 +44,7 @@ SERIALISABLE_TYPE_LIST = 26
 SERIALISABLE_TYPE_PARSE_FORMULA_HTML = 27
 SERIALISABLE_TYPE_URLS_IMPORT = 28
 SERIALISABLE_TYPE_PARSE_NODE_CONTENT_LINK = 29
-SERIALISABLE_TYPE_PARSE_NODE_CONTENT = 30
+SERIALISABLE_TYPE_CONTENT_PARSER = 30
 SERIALISABLE_TYPE_PARSE_FORMULA_JSON = 31
 SERIALISABLE_TYPE_PARSE_ROOT_FILE_LOOKUP = 32
 SERIALISABLE_TYPE_BYTES_DICT = 33
@@ -51,6 +63,19 @@ SERIALISABLE_TYPE_NETWORK_BANDWIDTH_MANAGER = 45
 SERIALISABLE_TYPE_NETWORK_SESSION_MANAGER = 46
 SERIALISABLE_TYPE_NETWORK_CONTEXT = 47
 SERIALISABLE_TYPE_NETWORK_LOGIN_MANAGER = 48
+SERIALISABLE_TYPE_MEDIA_SORT = 49
+SERIALISABLE_TYPE_URL_MATCH = 50
+SERIALISABLE_TYPE_STRING_MATCH = 51
+SERIALISABLE_TYPE_CHECKER_OPTIONS = 52
+SERIALISABLE_TYPE_NETWORK_DOMAIN_MANAGER = 53
+SERIALISABLE_TYPE_SUBSCRIPTION_QUERY = 54
+SERIALISABLE_TYPE_STRING_CONVERTER = 55
+SERIALISABLE_TYPE_FILENAME_TAGGING_OPTIONS = 56
+SERIALISABLE_TYPE_SEED = 57
+SERIALISABLE_TYPE_PAGE_PARSER = 58
+SERIALISABLE_TYPE_PARSE_FORMULA_COMPOUND = 59
+SERIALISABLE_TYPE_PARSE_FORMULA_CONTEXT_VARIABLE = 60
+SERIALISABLE_TYPE_TAG_SUMMARY_GENERATOR = 61
 
 SERIALISABLE_TYPES_TO_OBJECT_TYPES = {}
 
@@ -62,7 +87,14 @@ def CreateFromNetworkString( network_string ):
         
     except zlib.error:
         
-        obj_string = lz4.block.decompress( network_string )
+        if LZ4_OK:
+            
+            obj_string = lz4.block.decompress( network_string )
+            
+        else:
+            
+            raise
+            
         
     
     return CreateFromString( obj_string )
@@ -95,6 +127,7 @@ def CreateFromSerialisableTuple( obj_tuple ):
 class SerialisableBase( object ):
     
     SERIALISABLE_TYPE = SERIALISABLE_TYPE_BASE
+    SERIALISABLE_NAME = 'Base Serialisable Object'
     SERIALISABLE_VERSION = 1
     
     def _GetSerialisableInfo( self ):
@@ -149,6 +182,7 @@ class SerialisableBase( object ):
 class SerialisableBaseNamed( SerialisableBase ):
     
     SERIALISABLE_TYPE = SERIALISABLE_TYPE_BASE_NAMED
+    SERIALISABLE_NAME = 'Named Base Serialisable Object'
     
     def __init__( self, name ):
         
@@ -166,9 +200,27 @@ class SerialisableBaseNamed( SerialisableBase ):
     
     def SetName( self, name ): self._name = name
     
+    def SetNonDupeName( self, disallowed_names ):
+        
+        i = 1
+        
+        new_name = self._name
+        original_name = self._name
+        
+        while new_name in disallowed_names:
+            
+            new_name = original_name + ' (' + str( i ) + ')'
+            
+            i += 1
+            
+        
+        self._name = new_name
+        
+    
 class SerialisableDictionary( SerialisableBase, dict ):
     
     SERIALISABLE_TYPE = SERIALISABLE_TYPE_DICTIONARY
+    SERIALISABLE_NAME = 'Serialisable Dictionary'
     SERIALISABLE_VERSION = 1
     
     def __init__( self, *args, **kwargs ):
@@ -263,6 +315,7 @@ SERIALISABLE_TYPES_TO_OBJECT_TYPES[ SERIALISABLE_TYPE_DICTIONARY ] = Serialisabl
 class SerialisableBytesDictionary( SerialisableBase, dict ):
     
     SERIALISABLE_TYPE = SERIALISABLE_TYPE_BYTES_DICT
+    SERIALISABLE_NAME = 'Serialisable Dictionary With Bytestring Key/Value Support'
     SERIALISABLE_VERSION = 1
     
     def __init__( self, *args, **kwargs ):
@@ -289,6 +342,10 @@ class SerialisableBytesDictionary( SerialisableBase, dict ):
             if isinstance( value, ( list, tuple, set ) ):
                 
                 encoded_value = [ item.encode( 'hex' ) for item in value ]
+                
+            elif value is None:
+                
+                encoded_value = value
                 
             else:
                 
@@ -318,6 +375,10 @@ class SerialisableBytesDictionary( SerialisableBase, dict ):
                 
                 value = [ encoded_item.decode( 'hex' ) for encoded_item in encoded_value ]
                 
+            elif encoded_value is None:
+                
+                value = encoded_value
+                
             else:
                 
                 value = encoded_value.decode( 'hex' )
@@ -332,6 +393,7 @@ SERIALISABLE_TYPES_TO_OBJECT_TYPES[ SERIALISABLE_TYPE_BYTES_DICT ] = Serialisabl
 class SerialisableList( SerialisableBase, list ):
     
     SERIALISABLE_TYPE = SERIALISABLE_TYPE_LIST
+    SERIALISABLE_NAME = 'Serialisable List'
     SERIALISABLE_VERSION = 1
     
     def __init__( self, *args, **kwargs ):

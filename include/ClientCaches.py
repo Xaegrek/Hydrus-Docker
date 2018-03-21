@@ -3,6 +3,7 @@ import ClientDownloading
 import ClientNetworking
 import ClientRendering
 import ClientSearch
+import ClientServices
 import ClientThreading
 import HydrusConstants as HC
 import HydrusExceptions
@@ -10,6 +11,7 @@ import HydrusFileHandling
 import HydrusPaths
 import HydrusSerialisable
 import HydrusSessions
+import HydrusThreading
 import itertools
 import json
 import os
@@ -25,7 +27,6 @@ import ClientConstants as CC
 import HydrusGlobals as HG
 import collections
 import HydrusTags
-import itertools
 import traceback
 
 # important thing here, and reason why it is recursive, is because we want to preserve the parent-grandparent interleaving
@@ -257,20 +258,29 @@ class ClientFilesManager( object ):
         return path
         
     
-    def _GenerateFullSizeThumbnail( self, hash ):
+    def _GenerateFullSizeThumbnail( self, hash, mime = None ):
+        
+        if mime is None:
+            
+            try:
+                
+                file_path = self._LookForFilePath( hash )
+                
+            except HydrusExceptions.FileMissingException:
+                
+                raise HydrusExceptions.FileMissingException( 'The thumbnail for file ' + hash.encode( 'hex' ) + ' was missing. It could not be regenerated because the original file was also missing. This event could indicate hard drive corruption or an unplugged external drive. Please check everything is ok.' )
+                
+            
+            mime = HydrusFileHandling.GetMime( file_path )
+            
+        else:
+            
+            file_path = self._GenerateExpectedFilePath( hash, mime )
+            
         
         try:
             
-            file_path = self._LookForFilePath( hash )
-            
-        except HydrusExceptions.FileMissingException:
-            
-            raise HydrusExceptions.FileMissingException( 'The thumbnail for file ' + hash.encode( 'hex' ) + ' was missing. It could not be regenerated because the original file was also missing. This event could indicate hard drive corruption or an unplugged external drive. Please check everything is ok.' )
-            
-        
-        try:
-            
-            thumbnail = HydrusFileHandling.GenerateThumbnail( file_path )
+            thumbnail = HydrusFileHandling.GenerateThumbnail( file_path, mime )
             
         except Exception as e:
             
@@ -296,17 +306,24 @@ class ClientFilesManager( object ):
             
         
     
-    def _GenerateResizedThumbnail( self, hash ):
+    def _GenerateResizedThumbnail( self, hash, mime ):
         
         full_size_path = self._GenerateExpectedFullSizeThumbnailPath( hash )
         
-        options = self._controller.GetOptions()
+        thumbnail_dimensions = self._controller.options[ 'thumbnail_dimensions' ]
         
-        thumbnail_dimensions = options[ 'thumbnail_dimensions' ]
+        if mime in ( HC.IMAGE_GIF, HC.IMAGE_PNG ):
+            
+            fullsize_thumbnail_mime = HC.IMAGE_PNG
+            
+        else:
+            
+            fullsize_thumbnail_mime = HC.IMAGE_JPEG
+            
         
         try:
             
-            thumbnail_resized = HydrusFileHandling.GenerateThumbnailFromStaticImage( full_size_path, thumbnail_dimensions )
+            thumbnail_resized = HydrusFileHandling.GenerateThumbnailFromStaticImage( full_size_path, thumbnail_dimensions, fullsize_thumbnail_mime )
             
         except:
             
@@ -319,9 +336,9 @@ class ClientFilesManager( object ):
                 raise HydrusExceptions.FileMissingException( 'The thumbnail for file ' + hash.encode( 'hex' ) + ' was found, but it would not render. An attempt to delete it was made, but that failed as well. This event could indicate hard drive corruption, and it also suggests that hydrus does not have permission to write to its thumbnail folder. Please check everything is ok.' )
                 
             
-            self._GenerateFullSizeThumbnail( hash )
+            self._GenerateFullSizeThumbnail( hash, mime )
             
-            thumbnail_resized = HydrusFileHandling.GenerateThumbnailFromStaticImage( full_size_path, thumbnail_dimensions )
+            thumbnail_resized = HydrusFileHandling.GenerateThumbnailFromStaticImage( full_size_path, thumbnail_dimensions, fullsize_thumbnail_mime )
             
         
         resized_path = self._GenerateExpectedResizedThumbnailPath( hash )
@@ -367,7 +384,7 @@ class ClientFilesManager( object ):
     
     def _GetRebalanceTuple( self ):
         
-        ( locations_to_ideal_weights, resized_thumbnail_override, full_size_thumbnail_override ) = self._controller.GetNewOptions().GetClientFilesLocationsToIdealWeights()
+        ( locations_to_ideal_weights, resized_thumbnail_override, full_size_thumbnail_override ) = self._controller.new_options.GetClientFilesLocationsToIdealWeights()
         
         total_weight = sum( locations_to_ideal_weights.values() )
         
@@ -707,6 +724,14 @@ class ClientFilesManager( object ):
             f.write( thumbnail )
             
         
+        resized_path = self._GenerateExpectedResizedThumbnailPath( hash )
+        
+        if os.path.exists( resized_path ):
+            
+            HydrusPaths.DeletePath( resized_path )
+            
+        
+        self._controller.pub( 'clear_thumbnails', { hash } )
         self._controller.pub( 'new_thumbnails', { hash } )
         
     
@@ -982,29 +1007,22 @@ class ClientFilesManager( object ):
             
             file_import_job.GenerateInfo()
             
-            ( good_to_import, reason ) = file_import_job.IsGoodToImport()
+            file_import_job.CheckIsGoodToImport()
             
-            if good_to_import:
+            with self._lock:
                 
-                with self._lock:
+                ( temp_path, thumbnail ) = file_import_job.GetTempPathAndThumbnail()
+                
+                mime = file_import_job.GetMime()
+                
+                self.LocklessAddFile( hash, mime, temp_path )
+                
+                if thumbnail is not None:
                     
-                    ( temp_path, thumbnail ) = file_import_job.GetTempPathAndThumbnail()
-                    
-                    mime = file_import_job.GetMime()
-                    
-                    self.LocklessAddFile( hash, mime, temp_path )
-                    
-                    if thumbnail is not None:
-                        
-                        self.LocklessAddFullSizeThumbnail( hash, thumbnail )
-                        
-                    
-                    import_status = self._controller.WriteSynchronous( 'import_file', file_import_job )
+                    self.LocklessAddFullSizeThumbnail( hash, thumbnail )
                     
                 
-            else:
-                
-                raise Exception( reason )
+                import_status = self._controller.WriteSynchronous( 'import_file', file_import_job )
                 
             
         else:
@@ -1036,7 +1054,7 @@ class ClientFilesManager( object ):
         return path
         
     
-    def GetFullSizeThumbnailPath( self, hash ):
+    def GetFullSizeThumbnailPath( self, hash, mime = None ):
         
         with self._lock:
             
@@ -1044,7 +1062,7 @@ class ClientFilesManager( object ):
             
             if not os.path.exists( path ):
                 
-                self._GenerateFullSizeThumbnail( hash )
+                self._GenerateFullSizeThumbnail( hash, mime )
                 
                 if not self._bad_error_occured:
                     
@@ -1058,7 +1076,7 @@ class ClientFilesManager( object ):
             
         
     
-    def GetResizedThumbnailPath( self, hash ):
+    def GetResizedThumbnailPath( self, hash, mime ):
         
         with self._lock:
             
@@ -1066,7 +1084,7 @@ class ClientFilesManager( object ):
             
             if not os.path.exists( path ):
                 
-                self._GenerateResizedThumbnail( hash )
+                self._GenerateResizedThumbnail( hash, mime )
                 
             
             return path
@@ -1154,20 +1172,25 @@ class ClientFilesManager( object ):
             
         
     
-    def RegenerateResizedThumbnail( self, hash ):
-        
-        with self._lock:
-            
-            self._GenerateResizedThumbnail( hash )
-            
-        
-    
     def RebalanceWorkToDo( self ):
         
         with self._lock:
             
             return self._GetRebalanceTuple() is not None
             
+        
+    
+    def RegenerateResizedThumbnail( self, hash, mime ):
+        
+        with self._lock:
+            
+            self.LocklessRegenerateResizedThumbnail( hash, mime )
+            
+        
+    
+    def LocklessRegenerateResizedThumbnail( self, hash, mime ):
+        
+        self._GenerateResizedThumbnail( hash, mime )
         
     
     def RegenerateThumbnails( self, only_do_missing = False ):
@@ -1227,7 +1250,7 @@ class ClientFilesManager( object ):
                     
                     if mime in HC.MIMES_WITH_THUMBNAILS:
                         
-                        self._GenerateFullSizeThumbnail( hash )
+                        self._GenerateFullSizeThumbnail( hash, mime )
                         
                         thumbnail_resized_path = self._GenerateExpectedResizedThumbnailPath( hash )
                         
@@ -1263,10 +1286,11 @@ class ClientFilesManager( object ):
     
 class DataCache( object ):
     
-    def __init__( self, controller, cache_size ):
+    def __init__( self, controller, cache_size, timeout = 1200 ):
         
         self._controller = controller
         self._cache_size = cache_size
+        self._timeout = timeout
         
         self._keys_to_data = {}
         self._keys_fifo = collections.OrderedDict()
@@ -1278,15 +1302,25 @@ class DataCache( object ):
         self._controller.sub( self, 'MaintainCache', 'memory_maintenance_pulse' )
         
     
+    def _Delete( self, key ):
+        
+        if key not in self._keys_to_data:
+            
+            return
+            
+        
+        deletee_data = self._keys_to_data[ key ]
+        
+        del self._keys_to_data[ key ]
+        
+        self._RecalcMemoryUsage()
+        
+    
     def _DeleteItem( self ):
         
         ( deletee_key, last_access_time ) = self._keys_fifo.popitem( last = False )
         
-        deletee_data = self._keys_to_data[ deletee_key ]
-        
-        del self._keys_to_data[ deletee_key ]
-        
-        self._RecalcMemoryUsage()
+        self._Delete( deletee_key )
         
     
     def _RecalcMemoryUsage( self ):
@@ -1322,8 +1356,6 @@ class DataCache( object ):
             
             if key not in self._keys_to_data:
                 
-                options = self._controller.GetOptions()
-                
                 while self._total_estimated_memory_footprint > self._cache_size:
                     
                     self._DeleteItem()
@@ -1335,6 +1367,14 @@ class DataCache( object ):
                 
                 self._RecalcMemoryUsage()
                 
+            
+        
+    
+    def DeleteData( self, key ):
+        
+        with self._lock:
+            
+            self._Delete( key )
             
         
     
@@ -1392,7 +1432,7 @@ class DataCache( object ):
                     
                     ( key, last_access_time ) = next( self._keys_fifo.iteritems() )
                     
-                    if HydrusData.TimeHasPassed( last_access_time + 1200 ):
+                    if HydrusData.TimeHasPassed( last_access_time + self._timeout ):
                         
                         self._DeleteItem()
                         
@@ -1555,65 +1595,6 @@ class LocalBooruCache( object ):
             
         
     
-class HydrusSessionManager( object ):
-    
-    def __init__( self, controller ):
-        
-        self._controller = controller
-        
-        existing_sessions = self._controller.Read( 'hydrus_sessions' )
-        
-        self._service_keys_to_sessions = { service_key : ( session_key, expires ) for ( service_key, session_key, expires ) in existing_sessions }
-        
-        self._lock = threading.Lock()
-        
-    
-    def DeleteSessionKey( self, service_key ):
-        
-        with self._lock:
-            
-            self._controller.Write( 'delete_hydrus_session_key', service_key )
-            
-            if service_key in self._service_keys_to_sessions:
-                
-                del self._service_keys_to_sessions[ service_key ]
-                
-            
-        
-    
-    def GetSessionKey( self, service_key ):
-        
-        now = HydrusData.GetNow()
-        
-        with self._lock:
-            
-            if service_key in self._service_keys_to_sessions:
-                
-                ( session_key, expires ) = self._service_keys_to_sessions[ service_key ]
-                
-                if now + 600 > expires: del self._service_keys_to_sessions[ service_key ]
-                else: return session_key
-                
-            
-            # session key expired or not found
-            
-            service = self._controller.services_manager.GetService( service_key )
-            
-            ( response_gumpf, cookies ) = service.Request( HC.GET, 'session_key', return_cookies = True )
-            
-            try: session_key = cookies[ 'session_key' ].decode( 'hex' )
-            except: raise Exception( 'Service did not return a session key!' )
-            
-            expires = now + HydrusSessions.HYDRUS_SESSION_LIFETIME
-            
-            self._service_keys_to_sessions[ service_key ] = ( session_key, expires )
-            
-            self._controller.Write( 'hydrus_session', service_key, session_key, expires )
-            
-            return session_key
-            
-        
-    
 class MenuEventIdToActionCache( object ):
     
     def __init__( self ):
@@ -1716,14 +1697,15 @@ class RenderedImageCache( object ):
         
         self._controller = controller
         
-        options = self._controller.GetOptions()
+        cache_size = self._controller.options[ 'fullscreen_cache_size' ]
         
-        cache_size = options[ 'fullscreen_cache_size' ]
-        
-        self._data_cache = DataCache( self._controller, cache_size )
+        self._data_cache = DataCache( self._controller, cache_size, timeout = 600 )
         
     
-    def Clear( self ): self._data_cache.Clear()
+    def Clear( self ):
+        
+        self._data_cache.Clear()
+        
     
     def GetImageRenderer( self, media ):
         
@@ -1760,11 +1742,9 @@ class ThumbnailCache( object ):
         
         self._controller = controller
         
-        options = self._controller.GetOptions()
+        cache_size = self._controller.options[ 'thumbnail_cache_size' ]
         
-        cache_size = options[ 'thumbnail_cache_size' ]
-        
-        self._data_cache = DataCache( self._controller, cache_size )
+        self._data_cache = DataCache( self._controller, cache_size, timeout = 86400 )
         
         self._lock = threading.Lock()
         
@@ -1777,16 +1757,15 @@ class ThumbnailCache( object ):
         
         self.Clear()
         
-        threading.Thread( target = self.DAEMONWaterfall, name = 'Waterfall Daemon' ).start()
+        self._controller.CallToThreadLongRunning( self.DAEMONWaterfall )
         
         self._controller.sub( self, 'Clear', 'thumbnail_resize' )
+        self._controller.sub( self, 'ClearThumbnails', 'clear_thumbnails' )
         
     
     def _GetResizedHydrusBitmapFromHardDrive( self, display_media ):
         
-        options = self._controller.GetOptions()
-        
-        thumbnail_dimensions = options[ 'thumbnail_dimensions' ]
+        thumbnail_dimensions = self._controller.options[ 'thumbnail_dimensions' ]
         
         if tuple( thumbnail_dimensions ) == HC.UNSCALED_THUMBNAIL_DIMENSIONS:
             
@@ -1798,51 +1777,36 @@ class ThumbnailCache( object ):
             
         
         hash = display_media.GetHash()
+        mime = display_media.GetMime()
         
         locations_manager = display_media.GetLocationsManager()
         
-        if locations_manager.IsLocal():
+        try:
             
-            try:
+            if full_size:
                 
-                if full_size:
-                    
-                    path = self._controller.client_files_manager.GetFullSizeThumbnailPath( hash )
-                    
-                else:
-                    
-                    path = self._controller.client_files_manager.GetResizedThumbnailPath( hash )
-                    
+                path = self._controller.client_files_manager.GetFullSizeThumbnailPath( hash, mime )
                 
-            except HydrusExceptions.FileMissingException as e:
+            else:
+                
+                path = self._controller.client_files_manager.GetResizedThumbnailPath( hash, mime )
+                
+            
+        except HydrusExceptions.FileMissingException as e:
+            
+            if locations_manager.IsLocal():
                 
                 HydrusData.ShowException( e )
                 
-                return self._special_thumbs[ 'hydrus' ]
-                
             
-        else:
+            return self._special_thumbs[ 'hydrus' ]
             
-            try:
-                
-                if full_size:
-                    
-                    path = self._controller.client_files_manager.GetFullSizeThumbnailPath( hash )
-                    
-                else:
-                    
-                    path = self._controller.client_files_manager.GetResizedThumbnailPath( hash )
-                    
-                
-            except HydrusExceptions.FileMissingException:
-                
-                return self._special_thumbs[ 'hydrus' ]
-                
-            
+        
+        mime = display_media.GetMime()
         
         try:
             
-            hydrus_bitmap = ClientRendering.GenerateHydrusBitmap( path )
+            hydrus_bitmap = ClientRendering.GenerateHydrusBitmap( path, mime )
             
         except Exception as e:
             
@@ -1850,11 +1814,11 @@ class ThumbnailCache( object ):
             
             try:
                 
-                self._controller.client_files_manager.RegenerateResizedThumbnail( hash )
+                self._controller.client_files_manager.RegenerateResizedThumbnail( hash, mime )
                 
                 try:
                     
-                    hydrus_bitmap = ClientRendering.GenerateHydrusBitmap( path )
+                    hydrus_bitmap = ClientRendering.GenerateHydrusBitmap( path, mime )
                     
                 except Exception as e:
                     
@@ -1871,11 +1835,9 @@ class ThumbnailCache( object ):
                 
             
         
-        options = HG.client_controller.GetOptions()
-        
         ( media_x, media_y ) = display_media.GetResolution()
         ( actual_x, actual_y ) = hydrus_bitmap.GetSize()
-        ( desired_x, desired_y ) = options[ 'thumbnail_dimensions' ]
+        ( desired_x, desired_y ) = self._controller.options[ 'thumbnail_dimensions' ]
         
         too_large = actual_x > desired_x or actual_y > desired_y
         
@@ -1885,19 +1847,26 @@ class ThumbnailCache( object ):
         
         if too_large or ( too_small and not small_original_image ):
             
-            self._controller.client_files_manager.RegenerateResizedThumbnail( hash )
+            self._controller.client_files_manager.RegenerateResizedThumbnail( hash, mime )
             
-            hydrus_bitmap = ClientRendering.GenerateHydrusBitmap( path )
+            hydrus_bitmap = ClientRendering.GenerateHydrusBitmap( path, mime )
             
         
         return hydrus_bitmap
         
     
     def _RecalcWaterfallQueueRandom( self ):
-    
+        
+        # here we sort by the hash since this is both breddy random and more likely to access faster on a well defragged hard drive!
+        
+        def sort_by_hash_key( ( page_key, media ) ):
+            
+            return media.GetDisplayMedia().GetHash()
+            
+        
         self._waterfall_queue_random = list( self._waterfall_queue_quick )
         
-        random.shuffle( self._waterfall_queue_random )
+        self._waterfall_queue_random.sort( key = sort_by_hash_key )
         
     
     def CancelWaterfall( self, page_key, medias ):
@@ -1918,7 +1887,7 @@ class ThumbnailCache( object ):
             
             self._special_thumbs = {}
             
-            names = [ 'hydrus', 'flash', 'pdf', 'audio', 'video' ]
+            names = [ 'hydrus', 'flash', 'pdf', 'audio', 'video', 'zip' ]
             
             ( os_file_handle, temp_path ) = HydrusPaths.GetTempPath()
             
@@ -1928,16 +1897,16 @@ class ThumbnailCache( object ):
                     
                     path = os.path.join( HC.STATIC_DIR, name + '.png' )
                     
-                    options = self._controller.GetOptions()
+                    thumbnail_dimensions = self._controller.options[ 'thumbnail_dimensions' ]
                     
-                    thumbnail = HydrusFileHandling.GenerateThumbnailFromStaticImage( path, options[ 'thumbnail_dimensions' ] )
+                    thumbnail = HydrusFileHandling.GenerateThumbnailFromStaticImage( path, thumbnail_dimensions, HC.IMAGE_PNG )
                     
                     with open( temp_path, 'wb' ) as f:
                         
                         f.write( thumbnail )
                         
                     
-                    hydrus_bitmap = ClientRendering.GenerateHydrusBitmap( temp_path )
+                    hydrus_bitmap = ClientRendering.GenerateHydrusBitmap( temp_path, HC.IMAGE_PNG )
                     
                     self._special_thumbs[ name ] = hydrus_bitmap
                     
@@ -1949,9 +1918,38 @@ class ThumbnailCache( object ):
             
         
     
+    def ClearThumbnails( self, hashes ):
+        
+        with self._lock:
+            
+            for hash in hashes:
+                
+                self._data_cache.DeleteData( hash )
+                
+            
+        
+    
+    def DoingWork( self ):
+        
+        with self._lock:
+            
+            return len( self._waterfall_queue_random ) > 0
+            
+        
+    
     def GetThumbnail( self, media ):
         
-        display_media = media.GetDisplayMedia()
+        try:
+            
+            display_media = media.GetDisplayMedia()
+            
+        except:
+            
+            # sometimes media can get switched around during a collect event, and if this happens during waterfall, we have a problem here
+            # just return for now, we'll see how it goes
+            
+            return self._special_thumbs[ 'hydrus' ]
+            
         
         if display_media.GetLocationsManager().ShouldHaveThumbnail():
             
@@ -1980,6 +1978,7 @@ class ThumbnailCache( object ):
             elif mime in HC.VIDEO: return self._special_thumbs[ 'video' ]
             elif mime == HC.APPLICATION_FLASH: return self._special_thumbs[ 'flash' ]
             elif mime == HC.APPLICATION_PDF: return self._special_thumbs[ 'pdf' ]
+            elif mime in HC.ARCHIVES: return self._special_thumbs[ 'zip' ]
             else: return self._special_thumbs[ 'hydrus' ]
             
         else:
@@ -2022,7 +2021,7 @@ class ThumbnailCache( object ):
         
         last_paused = HydrusData.GetNowPrecise()
         
-        while not HG.view_shutdown:
+        while not HydrusThreading.IsThreadShuttingDown():
             
             with self._lock:
                 
@@ -2110,6 +2109,8 @@ class ServicesManager( object ):
     def _SetServices( self, services ):
         
         self._keys_to_services = { service.GetServiceKey() : service for service in services }
+        
+        self._keys_to_services[ CC.TEST_SERVICE_KEY ] = ClientServices.GenerateService( CC.TEST_SERVICE_KEY, HC.TEST_SERVICE, CC.TEST_SERVICE_KEY )
         
         def compare_function( a, b ):
             
@@ -2214,6 +2215,7 @@ class ServicesManager( object ):
             
             self._SetServices( services )
             
+        
     
     def ServiceExists( self, service_key ):
         
@@ -2475,9 +2477,7 @@ class TagParentsManager( object ):
     
     def ExpandPredicates( self, service_key, predicates ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_parents_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_parents_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2511,9 +2511,7 @@ class TagParentsManager( object ):
     
     def ExpandTags( self, service_key, tags ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_parents_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_parents_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2533,9 +2531,7 @@ class TagParentsManager( object ):
     
     def GetParents( self, service_key, tag ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_parents_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_parents_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2633,9 +2629,7 @@ class TagSiblingsManager( object ):
     
     def GetAutocompleteSiblings( self, service_key, search_text, exact_match = False ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2686,9 +2680,7 @@ class TagSiblingsManager( object ):
     
     def GetSibling( self, service_key, tag ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2710,9 +2702,7 @@ class TagSiblingsManager( object ):
     
     def GetAllSiblings( self, service_key, tag ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2753,9 +2743,7 @@ class TagSiblingsManager( object ):
     
     def CollapsePredicates( self, service_key, predicates ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2812,9 +2800,7 @@ class TagSiblingsManager( object ):
     
     def CollapsePairs( self, service_key, pairs ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2846,9 +2832,7 @@ class TagSiblingsManager( object ):
     
     def CollapseStatusesToTags( self, service_key, statuses_to_tags ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2870,9 +2854,7 @@ class TagSiblingsManager( object ):
     
     def CollapseTag( self, service_key, tag ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2894,9 +2876,7 @@ class TagSiblingsManager( object ):
     
     def CollapseTags( self, service_key, tags ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -2909,9 +2889,7 @@ class TagSiblingsManager( object ):
     
     def CollapseTagsToCount( self, service_key, tags_to_count ):
         
-        new_options = self._controller.GetNewOptions()
-        
-        if new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
+        if self._controller.new_options.GetBoolean( 'apply_all_siblings_to_all_services' ):
             
             service_key = CC.COMBINED_TAG_SERVICE_KEY
             
@@ -3169,220 +3147,5 @@ class UndoManager( object ):
             
             self._controller.pub( 'notify_new_undo' )
             
-        
-    
-class WebSessionManagerClient( object ):
-    
-    SESSION_TIMEOUT = 90 * 60
-    
-    def __init__( self, controller ):
-        
-        self._controller = controller
-        
-        self._error_names = set()
-        
-        self._network_contexts_to_session_timeouts = {}
-        
-        self._lock = threading.Lock()
-        
-    
-    def _GetCookiesDict( self, network_context ):
-        
-        session = self._GetSession( network_context )
-        
-        cookies = session.cookies
-        
-        cookies.clear_expired_cookies()
-        
-        domains = cookies.list_domains()
-        
-        for domain in domains:
-            
-            if domain.endswith( network_context.context_data ):
-                
-                return cookies.get_dict( domain )
-                
-            
-        
-        return {}
-        
-    
-    def _GetSession( self, network_context ):
-        
-        session = self._controller.network_engine.session_manager.GetSession( network_context )
-        
-        if network_context not in self._network_contexts_to_session_timeouts:
-            
-            self._network_contexts_to_session_timeouts[ network_context ] = 0
-            
-        
-        if HydrusData.TimeHasPassed( self._network_contexts_to_session_timeouts[ network_context ] ):
-            
-            session.cookies.clear_session_cookies()
-            
-        
-        self._network_contexts_to_session_timeouts[ network_context ] = HydrusData.GetNow() + self.SESSION_TIMEOUT
-        
-        return session
-        
-    
-    def _IsLoggedIn( self, network_context, required_cookies ):
-        
-        cookie_dict = self._GetCookiesDict( network_context )
-        
-        for name in required_cookies:
-            
-            if name not in cookie_dict:
-                
-                return False
-                
-            
-        
-        return True
-        
-    
-    def EnsureLoggedIn( self, name ):
-        
-        if name in self._error_names:
-            
-            raise Exception( name + ' could not establish a session! This ugly error is temporary due to the network engine rewrite. Please restart the client to reattempt this network context.' )
-            
-        
-        now = HydrusData.GetNow()
-        
-        with self._lock:
-            
-            if name == 'hentai foundry':
-                
-                network_context = ClientNetworking.NetworkContext( CC.NETWORK_CONTEXT_DOMAIN, 'hentai-foundry.com' )
-                
-                required_cookies = [ 'PHPSESSID', 'YII_CSRF_TOKEN' ]
-                
-            elif name == 'pixiv':
-                
-                network_context = ClientNetworking.NetworkContext( CC.NETWORK_CONTEXT_DOMAIN, 'pixiv.net' )
-                
-                required_cookies = [ 'PHPSESSID' ]
-                
-            
-            if self._IsLoggedIn( network_context, required_cookies ):
-                
-                return
-                
-            
-            try:
-                
-                if name == 'hentai foundry':
-                    
-                    self.LoginHF( network_context )
-                    
-                elif name == 'pixiv':
-                    
-                    result = self._controller.Read( 'serialisable_simple', 'pixiv_account' )
-                    
-                    if result is None:
-                        
-                        raise HydrusExceptions.DataMissing( 'You need to set up your pixiv credentials in services->manage pixiv account.' )
-                        
-                    
-                    ( pixiv_id, password ) = result
-                    
-                    self.LoginPixiv( network_context, pixiv_id, password )
-                    
-                
-                if not self._IsLoggedIn( network_context, required_cookies ):
-                    
-                    raise Exception( name + ' login did not work correctly!' )
-                    
-                
-                HydrusData.Print( 'Successfully logged into ' + name + '.' )
-                
-            except:
-                
-                self._error_names.add( name )
-                
-                raise
-                
-            
-        
-    
-    def LoginHF( self, network_context ):
-        
-        session = self._GetSession( network_context )
-        
-        response = session.get( 'https://www.hentai-foundry.com/' )
-        
-        response.content
-        
-        time.sleep( 1 )
-        
-        response = session.get( 'https://www.hentai-foundry.com/?enterAgree=1' )
-        
-        response.content
-        
-        time.sleep( 1 )
-        
-        cookie_dict = self._GetCookiesDict( network_context )
-        
-        raw_csrf = cookie_dict[ 'YII_CSRF_TOKEN' ] # 19b05b536885ec60b8b37650a32f8deb11c08cd1s%3A40%3A%222917dcfbfbf2eda2c1fbe43f4d4c4ec4b6902b32%22%3B
-        
-        processed_csrf = urllib.unquote( raw_csrf ) # 19b05b536885ec60b8b37650a32f8deb11c08cd1s:40:"2917dcfbfbf2eda2c1fbe43f4d4c4ec4b6902b32";
-        
-        csrf_token = processed_csrf.split( '"' )[1] # the 2917... bit
-        
-        hentai_foundry_form_info = ClientDefaults.GetDefaultHentaiFoundryInfo()
-        
-        hentai_foundry_form_info[ 'YII_CSRF_TOKEN' ] = csrf_token
-        
-        response = session.post( 'http://www.hentai-foundry.com/site/filters', data = hentai_foundry_form_info )
-        
-        response.content
-        
-        time.sleep( 1 )
-        
-    
-    # This updated login form is cobbled together from the example in PixivUtil2
-    # it is breddy shid because I'm not using mechanize or similar browser emulation (like requests's sessions) yet
-    # Pixiv 400s if cookies and referrers aren't passed correctly
-    # I am leaving this as a mess with the hope the eventual login engine will replace it
-    def LoginPixiv( self, network_context, pixiv_id, password ):
-        
-        session = self._GetSession( network_context )
-        
-        response = session.get( 'https://accounts.pixiv.net/login' )
-        
-        soup = ClientDownloading.GetSoup( response.content )
-        
-        # some whocking 20kb bit of json tucked inside a hidden form input wew lad
-        i = soup.find( 'input', id = 'init-config' )
-        
-        raw_json = i['value']
-        
-        j = json.loads( raw_json )
-        
-        if 'pixivAccount.postKey' not in j:
-            
-            raise HydrusExceptions.ForbiddenException( 'When trying to log into Pixiv, I could not find the POST key!' )
-            
-        
-        post_key = j[ 'pixivAccount.postKey' ]
-        
-        form_fields = {}
-        
-        form_fields[ 'pixiv_id' ] = pixiv_id
-        form_fields[ 'password' ] = password
-        form_fields[ 'captcha' ] = ''
-        form_fields[ 'g_recaptcha_response' ] = ''
-        form_fields[ 'return_to' ] = 'https://www.pixiv.net'
-        form_fields[ 'lang' ] = 'en'
-        form_fields[ 'post_key' ] = post_key
-        form_fields[ 'source' ] = 'pc'
-        
-        headers = {}
-        
-        headers[ 'referer' ] = "https://accounts.pixiv.net/login?lang=en^source=pc&view_type=page&ref=wwwtop_accounts_index"
-        headers[ 'origin' ] = "https://accounts.pixiv.net"
-        
-        r = session.post( 'https://accounts.pixiv.net/api/login?lang=en', data = form_fields, headers = headers )
         
     

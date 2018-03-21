@@ -40,6 +40,7 @@ def CheckFFMPEGError( lines ):
         
     
 def GetFFMPEGVersion():
+    
     # open the file in a pipe, provoke an error, read output
     
     cmd = [ FFMPEG_PATH, '-version' ]
@@ -170,7 +171,16 @@ def GetFFMPEGInfoLines( path, count_frames_manually = False ):
     
     lines = info.splitlines()
     
-    CheckFFMPEGError( lines )
+    try:
+        
+        CheckFFMPEGError( lines )
+        
+    except:
+        
+        HydrusData.Print( 'FFMPEG had problem with file: ' + path )
+        
+        raise
+        
     
     return lines
     
@@ -209,6 +219,8 @@ def GetFFMPEGVideoProperties( path, count_frames_manually = False ):
         
     else:
         
+        num_frames = None
+        
         if not count_frames_manually:
             
             fps = ParseFFMPEGFPS( lines )
@@ -238,7 +250,17 @@ def GetFFMPEGVideoProperties( path, count_frames_manually = False ):
         
         if count_frames_manually:
             
-            num_frames = ParseFFMPEGNumFramesManually( lines )
+            try:
+                
+                num_frames = ParseFFMPEGNumFramesManually( lines )
+                
+            except HydrusExceptions.MimeException:
+                
+                if num_frames is None:
+                    
+                    raise
+                    
+                
             
         
     
@@ -360,7 +382,7 @@ def ParseFFMPEGAudio( lines ):
     
     # this is from the old stuff--might be helpful later when we add audio
     
-    lines_audio = [l for l in lines if ' Audio: ' in l]
+    lines_audio = [l for l in lines if 'Audio: ' in l]
     
     audio_found = lines_audio != []
     
@@ -526,7 +548,7 @@ def ParseFFMPEGNumFramesManually( lines ):
 def ParseFFMPEGVideoLine( lines ):
     
     # get the output line that speaks about video
-    lines_video = [ l for l in lines if ' Video: ' in l and not ( ' Video: png' in l or ' Video: jpg' in l ) ] # mp3 says it has a 'png' video stream
+    lines_video = [ l for l in lines if 'Video: ' in l and not ( 'Video: png' in l or 'Video: jpg' in l ) ] # mp3 says it has a 'png' video stream
     
     if len( lines_video ) == 0:
         
@@ -548,11 +570,33 @@ def ParseFFMPEGVideoResolution( lines ):
         
         resolution = list(map(int, line[match.start():match.end()-1].split('x')))
         
+        sar_match = re.search( " SAR [0-9]*:[0-9]* ", line )
+        
+        if sar_match is not None:
+            
+            # ' SAR 2:3 '
+            sar_string = line[ sar_match.start() : sar_match.end() ]
+            
+            # '2:3'
+            sar_string = sar_string[5:-1]
+            
+            ( sar_w, sar_h ) = sar_string.split( ':' )
+            
+            ( sar_w, sar_h ) = ( int( sar_w ), int( sar_h ) )
+            
+            ( x, y ) = resolution
+            
+            x *= sar_w
+            x //= sar_h
+            
+            resolution = ( x, y )
+            
+        
         return resolution
         
     except:
         
-        raise HydrusExceptions.MimeException( 'Error counting number of frames!' )
+        raise HydrusExceptions.MimeException( 'Error parsing resolution!' )
         
     
 # This was built from moviepy's FFMPEG_VideoReader
@@ -615,11 +659,21 @@ class VideoRendererFFMPEG( object ):
         
         if self._mime in ( HC.IMAGE_APNG, HC.IMAGE_GIF ):
             
+            do_ss = False
             ss = 0
             self.pos = 0
             skip_frames = start_index
             
         else:
+            
+            if start_index == 0:
+                
+                do_ss = False
+                
+            else:
+                
+                do_ss = True
+                
             
             ss = float( start_index ) / self.fps
             self.pos = start_index
@@ -628,15 +682,20 @@ class VideoRendererFFMPEG( object ):
         
         ( w, h ) = self._target_resolution
         
-        cmd = [ FFMPEG_PATH,
-            '-ss', "%.03f" % ss,
-            '-i', self._path,
+        cmd = [ FFMPEG_PATH ]
+        
+        if do_ss:
+            
+            cmd.extend( [ '-ss', "%.03f" % ss ] )
+            
+        
+        cmd.extend( [ '-i', self._path,
             '-loglevel', 'quiet',
             '-f', 'image2pipe',
             "-pix_fmt", self.pix_fmt,
             "-s", str( w ) + 'x' + str( h ),
             '-vsync', '0',
-            '-vcodec', 'rawvideo', '-' ]
+            '-vcodec', 'rawvideo', '-' ] )
             
         
         try:
@@ -698,6 +757,11 @@ class VideoRendererFFMPEG( object ):
             s = self.process.stdout.read(nbytes)
             
             if len(s) != nbytes:
+                
+                if self.lastread is None:
+                    
+                    raise Exception( 'Unable to render that video! Please send it to hydrus dev so he can look at it!' )
+                    
                 
                 result = self.lastread
                 

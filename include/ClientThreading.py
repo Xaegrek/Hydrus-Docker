@@ -11,15 +11,18 @@ import wx
 
 class JobKey( object ):
     
-    def __init__( self, pausable = False, cancellable = False, only_when_idle = False, only_start_if_unbusy = False, stop_time = None ):
+    def __init__( self, pausable = False, cancellable = False, only_when_idle = False, only_start_if_unbusy = False, stop_time = None, cancel_on_shutdown = True ):
         
         self._key = HydrusData.GenerateKey()
+        
+        self._creation_time = HydrusData.GetNowFloat()
         
         self._pausable = pausable
         self._cancellable = cancellable
         self._only_when_idle = only_when_idle
         self._only_start_if_unbusy = only_start_if_unbusy
         self._stop_time = stop_time
+        self._cancel_on_shutdown = cancel_on_shutdown
         
         self._start_time = HydrusData.GetNow()
         
@@ -56,7 +59,7 @@ class JobKey( object ):
             
             should_cancel = False
             
-            if HydrusThreading.IsThreadShuttingDown():
+            if self._cancel_on_shutdown and HydrusThreading.IsThreadShuttingDown():
                 
                 should_cancel = True
                 
@@ -131,7 +134,7 @@ class JobKey( object ):
             
         else:
             
-            wx.CallAfter( wx.CallLater, seconds * 1000, self.Cancel )
+            HG.client_controller.CallLater( seconds, self.Cancel )
             
         
     
@@ -165,8 +168,13 @@ class JobKey( object ):
             
         else:
             
-            wx.CallAfter( wx.CallLater, seconds * 1000, self.Finish )
+            HG.client_controller.CallLater( seconds, self.Finish )
             
+        
+    
+    def GetCreationTime( self ):
+        
+        return self._creation_time
         
     
     def GetIfHasVariable( self, name ):
@@ -220,21 +228,21 @@ class JobKey( object ):
         
         self._CheckCancelTests()
         
-        return HydrusThreading.IsThreadShuttingDown() or self._cancelled.is_set()
+        return self._cancelled.is_set()
         
     
     def IsDeleted( self ):
         
         self._CheckCancelTests()
         
-        return HydrusThreading.IsThreadShuttingDown() or self._deleted.is_set()
+        return self._deleted.is_set()
         
     
     def IsDone( self ):
         
         self._CheckCancelTests()
         
-        return HydrusThreading.IsThreadShuttingDown() or self._done.is_set()
+        return self._done.is_set()
         
     
     def IsPausable( self ):
@@ -351,5 +359,97 @@ class JobKey( object ):
             
         
         return ( i_paused, should_quit )
+        
+    
+class WXAwareJob( HydrusThreading.SchedulableJob ):
+    
+    def __init__( self, controller, scheduler, window, work_callable, initial_delay = 0.0 ):
+        
+        HydrusThreading.SchedulableJob.__init__( self, controller, scheduler, work_callable, initial_delay = initial_delay )
+        
+        self._window = window
+        
+    
+    def _BootWorker( self ):
+        
+        def wx_code():
+            
+            if not self._window:
+                
+                return
+                
+            
+            self.Work()
+            
+        
+        wx.CallAfter( wx_code )
+        
+    
+    def _MyWindowDead( self ):
+        
+        return not self._window
+        
+    
+    def IsCancelled( self ):
+        
+        my_window_dead = self._MyWindowDead()
+        
+        if my_window_dead:
+            
+            self._is_cancelled.set()
+            
+        
+        return HydrusThreading.SchedulableJob.IsCancelled( self )
+        
+    
+    def IsDead( self ):
+        
+        return self._MyWindowDead()
+        
+    
+class WXAwareRepeatingJob( HydrusThreading.RepeatingJob ):
+    
+    def __init__( self, controller, scheduler, window, work_callable, period, initial_delay = 0.0 ):
+        
+        HydrusThreading.RepeatingJob.__init__( self, controller, scheduler, work_callable, period, initial_delay = initial_delay )
+        
+        self._window = window
+        
+    
+    def _BootWorker( self ):
+        
+        def wx_code():
+            
+            if not self._window:
+                
+                return
+                
+            
+            self.Work()
+            
+        
+        wx.CallAfter( wx_code )
+        
+    
+    def _MyWindowDead( self ):
+        
+        return not self._window
+        
+    
+    def IsCancelled( self ):
+        
+        my_window_dead = self._MyWindowDead()
+        
+        if my_window_dead:
+            
+            self._is_cancelled.set()
+            
+        
+        return HydrusThreading.SchedulableJob.IsCancelled( self )
+        
+    
+    def IsDead( self ):
+        
+        return self._MyWindowDead()
         
     

@@ -8,15 +8,26 @@ import HydrusImageHandling
 import HydrusGlobals as HG
 import HydrusThreading
 import HydrusVideoHandling
-import lz4.block
 import os
 import threading
 import time
 import wx
 
-def GenerateHydrusBitmap( path, compressed = True ):
+LZ4_OK = False
+
+try:
     
-    numpy_image = ClientImageHandling.GenerateNumpyImage( path )
+    import lz4.block
+    
+    LZ4_OK = True
+    
+except ImportError:
+    
+    pass
+    
+def GenerateHydrusBitmap( path, mime, compressed = True ):
+    
+    numpy_image = ClientImageHandling.GenerateNumpyImage( path, mime )
     
     return GenerateHydrusBitmapFromNumPyImage( numpy_image, compressed = compressed )
     
@@ -57,12 +68,12 @@ class ImageRenderer( object ):
         self._media = media
         self._numpy_image = None
         
-        hash = self._media.GetHash()
-        mime = self._media.GetMime()
+        self._hash = self._media.GetHash()
+        self._mime = self._media.GetMime()
         
         client_files_manager = HG.client_controller.client_files_manager
         
-        self._path = client_files_manager.GetFilePath( hash, mime )
+        self._path = client_files_manager.GetFilePath( self._hash, self._mime )
         
         HG.client_controller.CallToThread( self._Initialise )
         
@@ -71,7 +82,7 @@ class ImageRenderer( object ):
         
         time.sleep( 0.00001 )
         
-        self._numpy_image = ClientImageHandling.GenerateNumpyImage( self._path )
+        self._numpy_image = ClientImageHandling.GenerateNumpyImage( self._path, self._mime )
         
     
     def GetEstimatedMemoryFootprint( self ):
@@ -115,11 +126,11 @@ class ImageRenderer( object ):
         
         if wx_depth == 3:
             
-            return wx.BitmapFromBuffer( wx_width, wx_height, wx_data )
+            return wx.Bitmap.FromBuffer( wx_width, wx_height, wx_data )
             
         else:
             
-            return wx.BitmapFromBufferRGBA( wx_width, wx_height, wx_data )
+            return wx.Bitmap.FromBufferRGBA( wx_width, wx_height, wx_data )
             
         
     
@@ -190,7 +201,7 @@ class RasterContainerVideo( RasterContainer ):
         
         ( x, y ) = self._target_resolution
         
-        new_options = HG.client_controller.GetNewOptions()
+        new_options = HG.client_controller.new_options
         
         video_buffer_size_mb = new_options.GetInteger( 'video_buffer_size_mb' )
         
@@ -586,6 +597,11 @@ class HydrusBitmap( object ):
     
     def __init__( self, data, format, size, compressed = True ):
         
+        if not LZ4_OK:
+            
+            compressed = False
+            
+        
         self._compressed = compressed
         
         if self._compressed:
@@ -634,8 +650,14 @@ class HydrusBitmap( object ):
         
         ( width, height ) = self._size
         
-        if self._format == wx.BitmapBufferFormat_RGB: return wx.BitmapFromBuffer( width, height, self._GetData() )
-        else: return wx.BitmapFromBufferRGBA( width, height, self._GetData() )
+        if self._format == wx.BitmapBufferFormat_RGB:
+            
+            return wx.Bitmap.FromBuffer( width, height, self._GetData() )
+            
+        else:
+            
+            return wx.Bitmap.FromBufferRGBA( width, height, self._GetData() )
+            
         
     
     def GetWxImage( self ):
@@ -648,7 +670,7 @@ class HydrusBitmap( object ):
             
         else:
             
-            bitmap = wx.BitmapFromBufferRGBA( width, height, self._GetData() )
+            bitmap = wx.Bitmap.FromBufferRGBA( width, height, self._GetData() )
             
             image = wx.ImageFromBitmap( bitmap )
             
@@ -663,5 +685,8 @@ class HydrusBitmap( object ):
         return len( self._data )
         
     
-    def GetSize( self ): return self._size
+    def GetSize( self ):
+        
+        return self._size
+        
     

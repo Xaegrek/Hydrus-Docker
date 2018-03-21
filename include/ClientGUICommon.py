@@ -3,28 +3,386 @@ import ClientData
 import ClientConstants as CC
 import ClientGUIMenus
 import ClientGUITopLevelWindows
+import ClientMedia
 import ClientRatings
 import ClientThreading
 import HydrusConstants as HC
 import HydrusData
 import HydrusExceptions
 import HydrusGlobals as HG
+import HydrusText
 import os
 import sys
 import threading
 import time
 import traceback
 import wx
-import wx.combo
-import wx.richtext
 import wx.lib.newevent
-from wx.lib.mixins.listctrl import ListCtrlAutoWidthMixin
-from wx.lib.mixins.listctrl import ColumnSorterMixin
 
 ID_TIMER_ANIMATED = wx.NewId()
 ID_TIMER_SLIDESHOW = wx.NewId()
 ID_TIMER_MEDIA_INFO_DISPLAY = wx.NewId()
 
+def ApplyContentApplicationCommandToMedia( parent, command, media ):
+    
+    data = command.GetData()
+    
+    ( service_key, content_type, action, value ) = data
+    
+    try:
+        
+        service = HG.client_controller.services_manager.GetService( service_key )
+        
+    except HydrusExceptions.DataMissing:
+        
+        command_processed = False
+        
+        return command_processed
+        
+    
+    service_type = service.GetServiceType()
+    
+    hashes = set()
+    
+    for m in media:
+        
+        hashes.update( m.GetHashes() )
+        
+    
+    if service_type in HC.TAG_SERVICES:
+        
+        tag = value
+        
+        can_add = False
+        can_pend = False
+        can_delete = False
+        can_petition = True
+        can_rescind_pend = False
+        can_rescind_petition = False
+        
+        for m in media:
+            
+            tags_manager = m.GetTagsManager()
+            
+            current = tags_manager.GetCurrent( service_key )
+            pending = tags_manager.GetPending( service_key )
+            petitioned = tags_manager.GetPetitioned( service_key )
+            
+            if tag not in current:
+                
+                can_add = True
+                
+            
+            if tag not in current and tag not in pending:
+                
+                can_pend = True
+                
+            
+            if tag in current and action == HC.CONTENT_UPDATE_FLIP:
+                
+                can_delete = True
+                
+            
+            if tag in current and tag not in petitioned and action == HC.CONTENT_UPDATE_FLIP:
+                
+                can_petition = True
+                
+            
+            if tag in pending and action == HC.CONTENT_UPDATE_FLIP:
+                
+                can_rescind_pend = True
+                
+            
+            if tag in petitioned:
+                
+                can_rescind_petition = True
+                
+            
+        
+        if service_type == HC.LOCAL_TAG:
+            
+            tags = [ tag ]
+            
+            if can_add:
+                
+                content_update_action = HC.CONTENT_UPDATE_ADD
+                
+                tag_parents_manager = HG.client_controller.GetManager( 'tag_parents' )
+                
+                parents = tag_parents_manager.GetParents( service_key, tag )
+                
+                tags.extend( parents )
+                
+            elif can_delete:
+                
+                content_update_action = HC.CONTENT_UPDATE_DELETE
+                
+            else:
+                
+                return True
+                
+            
+            rows = [ ( tag, hashes ) for tag in tags ]
+            
+        else:
+            
+            if can_rescind_petition:
+                
+                content_update_action = HC.CONTENT_UPDATE_RESCIND_PETITION
+                
+                rows = [ ( tag, hashes ) ]
+                
+            elif can_pend:
+                
+                tags = [ tag ]
+                
+                content_update_action = HC.CONTENT_UPDATE_PEND
+                
+                tag_parents_manager = HG.client_controller.GetManager( 'tag_parents' )
+                
+                parents = tag_parents_manager.GetParents( service_key, tag )
+                
+                tags.extend( parents )
+                
+                rows = [ ( tag, hashes ) for tag in tags ]
+                
+            elif can_rescind_pend:
+                
+                content_update_action = HC.CONTENT_UPDATE_RESCIND_PEND
+                
+                rows = [ ( tag, hashes ) ]
+                
+            elif can_petition:
+                
+                message = 'Enter a reason for this tag to be removed. A janitor will review your petition.'
+                
+                import ClientGUIDialogs
+                
+                with ClientGUIDialogs.DialogTextEntry( parent, message ) as dlg:
+                    
+                    if dlg.ShowModal() == wx.ID_OK:
+                        
+                        content_update_action = HC.CONTENT_UPDATE_PETITION
+                        
+                        rows = [ ( dlg.GetValue(), tag, hashes ) ]
+                        
+                    else:
+                        
+                        return True
+                        
+                    
+                
+            else:
+                
+                return True
+                
+            
+        
+        content_updates = [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_MAPPINGS, content_update_action, row ) for row in rows ]
+        
+    elif service_type in ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ):
+        
+        rating = value
+        
+        can_set = False
+        can_unset = False
+        
+        for m in media:
+            
+            ratings_manager = m.GetRatingsManager()
+            
+            current_rating = ratings_manager.GetRating( service_key )
+            
+            if current_rating == rating and action == HC.CONTENT_UPDATE_FLIP:
+                
+                can_unset = True
+                
+            else:
+                
+                can_set = True
+                
+            
+        
+        if can_set:
+            
+            row = ( rating, hashes )
+            
+        elif can_unset:
+            
+            row = ( None, hashes )
+            
+        else:
+            
+            return True
+            
+        
+        content_updates = [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_ADD, row ) ]
+        
+    else:
+        
+        return False
+        
+    
+    HG.client_controller.Write( 'content_updates', { service_key : content_updates } )
+    
+    return True
+    
+def GetFocusTLP():
+    
+    focus = wx.Window.FindFocus()
+    
+    return GetTLP( focus )
+    
+def GetTLP( window ):
+    
+    if window is None:
+        
+        return None
+        
+    elif isinstance( window, wx.TopLevelWindow ):
+        
+        return window
+        
+    else:
+        
+        return window.GetTopLevelParent()
+        
+    
+def GetTLPParents( window ):
+    
+    if not isinstance( window, wx.TopLevelWindow ):
+        
+        window = GetTLP( window )
+        
+    
+    parents = []
+    
+    parent = window.GetParent()
+    
+    while parent is not None:
+        
+        parents.append( parent )
+        
+        parent = parent.GetParent()
+        
+    
+    return parents
+    
+def GetXYTopTLP( screen_position ):
+    
+    tlps = wx.GetTopLevelWindows()
+    
+    hittest_tlps = [ tlp for tlp in tlps if tlp.HitTest( tlp.ScreenToClient( screen_position ) ) == wx.HT_WINDOW_INSIDE and tlp.IsShown() ]
+    
+    if len( hittest_tlps ) == 0:
+        
+        return None
+        
+    
+    most_childish = hittest_tlps[0]
+    
+    for tlp in hittest_tlps[1:]:
+        
+        if most_childish in GetTLPParents( tlp ):
+            
+            most_childish = tlp
+            
+        
+    
+    return most_childish
+    
+def IsWXAncestor( child, ancestor, through_tlws = False ):
+    
+    parent = child
+    
+    if through_tlws:
+        
+        while not parent is None:
+            
+            if parent == ancestor:
+                
+                return True
+                
+            
+            parent = parent.GetParent()
+            
+        
+    else:
+        
+        while not isinstance( parent, wx.TopLevelWindow ):
+            
+            if parent == ancestor:
+                
+                return True
+                
+            
+            parent = parent.GetParent()
+            
+        
+    
+    return False
+    
+def NotebookScreenToHitTest( notebook, screen_position ):
+    
+    if HC.PLATFORM_OSX:
+        
+        # OS X has some unusual coordinates for its notebooks
+        # the notebook tabs are not considered to be in the client area (they are actually negative on getscreenposition())
+        # its hittest works on window coords, not client coords
+        # hence to get hittest position, we get our parent's client position and adjust by our given position in that
+        
+        # this also seems to cause menus popped on notebooks to spawn high and left, wew
+        
+        ( my_x, my_y ) = notebook.GetPosition()
+        
+        ( p_x, p_y ) = notebook.GetParent().ScreenToClient( wx.GetMousePosition() )
+        
+        position = ( p_x - my_x, p_y - my_y )
+        
+    else:
+        
+        position = notebook.ScreenToClient( screen_position )
+        
+    
+    return notebook.HitTest( position )
+    
+def SetBitmapButtonBitmap( button, bitmap ):
+    
+    # the button's bitmap, retrieved via GetBitmap, is not the same as the one we gave it!
+    # hence testing bitmap vs that won't work to save time on an update loop, so we'll just save it here custom
+    # this isn't a big memory deal for our purposes since they are small and mostly if not all from the GlobalBMPs library so shared anyway
+    
+    if hasattr( button, 'last_bitmap' ):
+        
+        if button.last_bitmap == bitmap:
+            
+            return
+            
+        
+    
+    button.SetBitmap( bitmap )
+    
+    button.last_bitmap = bitmap
+    
+def TLPHasFocus( window ):
+    
+    focus_tlp = GetFocusTLP()
+    
+    window_tlp = GetTLP( window )
+    
+    return window_tlp == focus_tlp
+    
+def WindowHasFocus( window ):
+    
+    focus = wx.Window.FindFocus()
+    
+    if focus is None:
+        
+        return False
+        
+    
+    return window == focus
+    
 def WindowOrAnyTLPChildHasFocus( window ):
     
     focus = wx.Window.FindFocus()
@@ -62,65 +420,9 @@ def WindowOrSameTLPChildHasFocus( window ):
     
     return False
     
-def GetFocusTLP():
-    
-    focus = wx.Window.FindFocus()
-    
-    return GetTLP( focus )
-    
-def GetTLP( window ):
-    
-    if window is None:
-        
-        return None
-        
-    elif isinstance( window, wx.TopLevelWindow ):
-        
-        return window
-        
-    else:
-        
-        return window.GetTopLevelParent()
-        
-    
-def TLPHasFocus( window ):
-    
-    focus_tlp = GetFocusTLP()
-    
-    window_tlp = GetTLP( window )
-    
-    return window_tlp == focus_tlp
-    
-def WindowHasFocus( window ):
-    
-    focus = wx.Window.FindFocus()
-    
-    if focus is None:
-        
-        return False
-        
-    
-    return window == focus
-    
-def IsWXAncestor( child, ancestor ):
-    
-    parent = child
-    
-    while not isinstance( parent, wx.TopLevelWindow ):
-        
-        if parent == ancestor:
-            
-            return True
-            
-        
-        parent = parent.GetParent()
-        
-    
-    return False
-    
 def WrapInGrid( parent, rows, expand_text = False ):
     
-    gridbox = wx.FlexGridSizer( 0, 2 )
+    gridbox = wx.FlexGridSizer( 2 )
     
     if expand_text:
         
@@ -152,74 +454,27 @@ def WrapInGrid( parent, rows, expand_text = False ):
         
         st = BetterStaticText( parent, text )
         
-        gridbox.AddF( st, text_flags )
-        gridbox.AddF( control, cflags )
+        gridbox.Add( st, text_flags )
+        gridbox.Add( control, cflags )
         
     
     return gridbox
     
-def WrapInText( control, parent, text ):
+def WrapInText( control, parent, text, colour = None ):
     
     hbox = wx.BoxSizer( wx.HORIZONTAL )
     
     st = BetterStaticText( parent, text )
     
-    hbox.AddF( st, CC.FLAGS_VCENTER )
-    hbox.AddF( control, CC.FLAGS_EXPAND_BOTH_WAYS )
+    if colour is not None:
+        
+        st.SetForegroundColour( colour )
+        
+    
+    hbox.Add( st, CC.FLAGS_VCENTER )
+    hbox.Add( control, CC.FLAGS_EXPAND_BOTH_WAYS )
     
     return hbox
-    
-class AnimatedStaticTextTimestamp( wx.StaticText ):
-    
-    def __init__( self, parent, prefix, rendering_function, timestamp, suffix ):
-        
-        self._prefix = prefix
-        self._rendering_function = rendering_function
-        self._timestamp = timestamp
-        self._suffix = suffix
-        
-        self._last_tick = HydrusData.GetNow()
-        
-        wx.StaticText.__init__( self, parent, label = self._prefix + self._rendering_function( self._timestamp ) + self._suffix )
-        
-        self.Bind( wx.EVT_TIMER, self.TIMEREventAnimated, id = ID_TIMER_ANIMATED )
-        
-        self._timer_animated = wx.Timer( self, ID_TIMER_ANIMATED )
-        self._timer_animated.Start( 1000, wx.TIMER_CONTINUOUS )
-        
-    
-    def TIMEREventAnimated( self ):
-        
-        try:
-            
-            update = False
-            
-            now = HydrusData.GetNow()
-            
-            difference = abs( now - self._timestamp )
-            
-            if difference < 3600: update = True
-            elif difference < 3600 * 24 and now - self._last_tick > 60: update = True
-            elif now - self._last_tick > 3600: update = True
-            
-            if update:
-                
-                self.SetLabelText( self._prefix + self._rendering_function( self._timestamp ) + self._suffix )
-                
-                wx.PostEvent( self.GetEventHandler(), wx.SizeEvent() )
-                
-            
-        except wx.PyDeadObjectError:
-            
-            self._timer_animated.Stop()
-            
-        except:
-            
-            self._timer_animated.Stop()
-            
-            raise
-            
-        
     
 class BetterBitmapButton( wx.BitmapButton ):
     
@@ -267,6 +522,16 @@ class BetterCheckListBox( wx.CheckListBox ):
         
     
 class BetterChoice( wx.Choice ):
+    
+    def Append( self, display_string, client_data ):
+        
+        wx.Choice.Append( self, display_string, client_data )
+        
+        if self.GetCount() == 1:
+            
+            self.Select( 0 )
+            
+        
     
     def GetChoice( self ):
         
@@ -347,11 +612,11 @@ class BufferedWindow( wx.Window ):
             
             ( x, y ) = kwargs[ 'size' ]
             
-            self._canvas_bmp = wx.EmptyBitmap( x, y, 24 )
+            self._canvas_bmp = wx.Bitmap( x, y, 24 )
             
         else:
             
-            self._canvas_bmp = wx.EmptyBitmap( 20, 20, 24 )
+            self._canvas_bmp = wx.Bitmap( 20, 20, 24 )
             
         
         self._dirty = True
@@ -386,7 +651,7 @@ class BufferedWindow( wx.Window ):
         
         if my_width != current_bmp_width or my_height != current_bmp_height:
             
-            self._canvas_bmp = wx.EmptyBitmap( my_width, my_height, 24 )
+            self._canvas_bmp = wx.Bitmap( my_width, my_height, 24 )
             
             self._dirty = True
             
@@ -416,19 +681,23 @@ class BufferedWindowIcon( BufferedWindow ):
         self._dirty = False
         
     
-class CheckboxCollect( wx.combo.ComboCtrl ):
+class CheckboxCollect( wx.ComboCtrl ):
     
     def __init__( self, parent, page_key = None ):
         
-        wx.combo.ComboCtrl.__init__( self, parent, style = wx.CB_READONLY )
+        wx.ComboCtrl.__init__( self, parent, style = wx.CB_READONLY )
         
         self._page_key = page_key
         
-        popup = self._Popup()
+        self._collect_by = HC.options[ 'default_collect' ]
+        
+        popup = self._Popup( self._collect_by )
         
         #self.UseAltPopupWindow( True )
         
         self.SetPopupControl( popup )
+        
+        self.SetValue( 'no collections' )
         
     
     def GetChoice( self ):
@@ -445,16 +714,20 @@ class CheckboxCollect( wx.combo.ComboCtrl ):
         HG.client_controller.pub( 'collect_media', self._page_key, self._collect_by )
         
     
-    class _Popup( wx.combo.ComboPopup ):
+    class _Popup( wx.ComboPopup ):
         
-        def __init__( self ):
+        def __init__( self, collect_by ):
             
-            wx.combo.ComboPopup.__init__( self )
+            wx.ComboPopup.__init__( self )
+            
+            self._initial_collect_by = collect_by
+            
+            self._control = None
             
         
         def Create( self, parent ):
             
-            self._control = self._Control( parent, self.GetCombo() )
+            self._control = self._Control( parent, self.GetComboCtrl(), self._initial_collect_by )
             
             return True
             
@@ -469,9 +742,24 @@ class CheckboxCollect( wx.combo.ComboCtrl ):
             return self._control
             
         
+        def GetStringValue( self ):
+            
+            # this is an abstract method that provides the strin to put in the comboctrl
+            # I've never used/needed it, but one user reported getting the NotImplemented thing by repeatedly clicking, so let's add it anyway
+            
+            if self._control is None:
+                
+                return 'initialising'
+                
+            else:
+                
+                return self._control.GetDescription()
+                
+            
+        
         class _Control( wx.CheckListBox ):
             
-            def __init__( self, parent, special_parent ):
+            def __init__( self, parent, special_parent, collect_by ):
                 
                 text_and_data_tuples = set()
                 
@@ -505,13 +793,11 @@ class CheckboxCollect( wx.combo.ComboCtrl ):
                 
                 self._special_parent = special_parent
                 
-                default = HC.options[ 'default_collect' ]
-                
-                self.SetValue( default )
-                
                 self.Bind( wx.EVT_CHECKLISTBOX, self.EventChanged )
                 
                 self.Bind( wx.EVT_LEFT_DOWN, self.EventLeftDown )
+                
+                wx.CallAfter( self.SetValue, collect_by )
                 
             
             def _BroadcastCollect( self ):
@@ -566,6 +852,13 @@ class CheckboxCollect( wx.combo.ComboCtrl ):
                 self._BroadcastCollect()
                 
             
+            def GetDescription( self ):
+                
+                ( collect_by, description ) = self._GetValues()
+                
+                return description
+                
+            
             def SetValue( self, collect_by ):
                 
                 # an old possible value, now collapsed to []
@@ -586,148 +879,304 @@ class CheckboxCollect( wx.combo.ComboCtrl ):
                         
                     
                 
-                self.SetChecked( indices_to_check )
-                
-                self._BroadcastCollect()
+                if len( indices_to_check ) > 0:
+                    
+                    self.SetChecked( indices_to_check )
+                    
+                    self._BroadcastCollect()
+                    
                 
             
         
     
-class ChoiceSort( BetterChoice ):
+class CheckboxManager( object ):
     
-    def __init__( self, parent, page_key = None, add_namespaces_and_ratings = True ):
+    def GetCurrentValue( self ):
         
-        BetterChoice.__init__( self, parent )
+        raise NotImplementedError()
         
-        self._page_key = page_key
+    
+    def Invert( self ):
         
-        services_manager = HG.client_controller.services_manager
+        raise NotImplementedError()
         
-        sort_choices = ClientData.GetSortChoices( add_namespaces_and_ratings = add_namespaces_and_ratings )
+    
+class CheckboxManagerCalls( CheckboxManager ):
+    
+    def __init__( self, invert_call, value_call ):
         
-        for sort_by in sort_choices:
+        CheckboxManager.__init__( self )
+        
+        self._invert_call = invert_call
+        self._value_call = value_call
+        
+    
+    def GetCurrentValue( self ):
+        
+        return self._value_call()
+        
+    
+    def Invert( self ):
+        
+        self._invert_call()
+        
+    
+class CheckboxManagerOptions( CheckboxManager ):
+    
+    def __init__( self, boolean_name ):
+        
+        CheckboxManager.__init__( self )
+        
+        self._boolean_name = boolean_name
+        
+    
+    def GetCurrentValue( self ):
+        
+        new_options = HG.client_controller.new_options
+        
+        return new_options.GetBoolean( self._boolean_name )
+        
+    
+    def Invert( self ):
+        
+        new_options = HG.client_controller.new_options
+        
+        new_options.InvertBoolean( self._boolean_name )
+        
+    
+class ChoiceSort( wx.Panel ):
+    
+    def __init__( self, parent, management_controller = None ):
+        
+        wx.Panel.__init__( self, parent )
+        
+        self._management_controller = management_controller
+        
+        self._sort_type_choice = BetterChoice( self )
+        self._sort_asc_choice = BetterChoice( self )
+        
+        asc_width = ClientData.ConvertTextToPixelWidth( self._sort_asc_choice, 15 )
+        
+        self._sort_asc_choice.SetMinSize( ( asc_width, -1 ) )
+        
+        sort_types = ClientData.GetSortTypeChoices()
+        
+        for sort_type in sort_types:
             
-            ( sort_by_type, sort_by_data ) = sort_by
+            example_sort = ClientMedia.MediaSort( sort_type, CC.SORT_ASC )
             
-            if sort_by_type == 'system':
-                
-                label = CC.sort_string_lookup[ sort_by_data ]
-                
-            elif sort_by_type == 'namespaces':
-                
-                label = '-'.join( sort_by_data )
-                
-            elif sort_by_type in ( 'rating_descend', 'rating_ascend' ):
-                
-                service_key = sort_by_data
-                
-                service = services_manager.GetService( service_key )
-                
-                if sort_by_type == 'rating_descend':
-                    
-                    label = service.GetName() + ' rating highest first'
-                    
-                elif sort_by_type == 'rating_ascend':
-                    
-                    label = service.GetName() + ' rating lowest first'
-                    
-                
-            
-            self.Append( 'sort by ' + label, sort_by )
+            self._sort_type_choice.Append( example_sort.GetSortTypeString(), sort_type )
             
         
-        self.Bind( wx.EVT_CHOICE, self.EventChoice )
+        type_width = ClientData.ConvertTextToPixelWidth( self._sort_type_choice, 10 )
+        
+        self._sort_type_choice.SetMinSize( ( type_width, -1 ) )
+        
+        self._sort_asc_choice.Append( '', CC.SORT_ASC )
+        
+        self._UpdateAscLabels()
+        
+        #
+        
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        hbox.Add( self._sort_type_choice, CC.FLAGS_EXPAND_BOTH_WAYS )
+        hbox.Add( self._sort_asc_choice, CC.FLAGS_VCENTER )
+        
+        self.SetSizer( hbox )
+        
+        self._sort_type_choice.Bind( wx.EVT_CHOICE, self.EventSortTypeChoice )
+        self._sort_asc_choice.Bind( wx.EVT_CHOICE, self.EventSortAscChoice )
         
         HG.client_controller.sub( self, 'ACollectHappened', 'collect_media' )
+        HG.client_controller.sub( self, 'BroadcastSort', 'do_page_sort' )
+        
+        if self._management_controller is not None and self._management_controller.HasVariable( 'media_sort' ):
+            
+            media_sort = self._management_controller.GetVariable( 'media_sort' )
+            
+            try:
+                
+                self.SetSort( media_sort )
+                
+            except:
+                
+                default_sort = ClientMedia.MediaSort( ( 'system', CC.SORT_FILES_BY_FILESIZE ), CC.SORT_ASC )
+                
+                self.SetSort( default_sort )
+                
+            
         
     
     def _BroadcastSort( self ):
         
-        selection = self.GetSelection()
+        media_sort = self._GetCurrentSort()
         
-        if selection != wx.NOT_FOUND:
+        if self._management_controller is not None:
             
-            sort_by = self.GetClientData( selection )
+            self._management_controller.SetVariable( 'media_sort', media_sort )
             
-            HG.client_controller.pub( 'sort_media', self._page_key, sort_by )
+            page_key = self._management_controller.GetKey( 'page' )
+            
+            HG.client_controller.pub( 'sort_media', page_key, media_sort )
+            
+        
+    
+    def _GetCurrentSort( self ):
+        
+        sort_type = self._sort_type_choice.GetChoice()
+        sort_asc = self._sort_asc_choice.GetChoice()
+        
+        media_sort = ClientMedia.MediaSort( sort_type, sort_asc )
+        
+        return media_sort
+        
+    
+    def _UpdateAscLabels( self ):
+        
+        media_sort = self._GetCurrentSort()
+        
+        self._sort_asc_choice.Clear()
+        
+        if media_sort.CanAsc():
+            
+            ( asc_str, desc_str ) = media_sort.GetSortAscStrings()
+            
+            self._sort_asc_choice.Append( asc_str, CC.SORT_ASC )
+            self._sort_asc_choice.Append( desc_str, CC.SORT_DESC )
+            
+            self._sort_asc_choice.SelectClientData( media_sort.sort_asc )
+            
+            self._sort_asc_choice.Enable()
+            
+        else:
+            
+            self._sort_asc_choice.Append( '', CC.SORT_ASC )
+            
+            self._sort_asc_choice.SelectClientData( CC.SORT_ASC )
+            
+            self._sort_asc_choice.Disable()
             
         
     
     def ACollectHappened( self, page_key, collect_by ):
         
-        if page_key == self._page_key:
+        if self._management_controller is not None:
             
-            self._BroadcastSort()
+            my_page_key = self._management_controller.GetKey( 'page' )
+            
+            if page_key == my_page_key:
+                
+                self._BroadcastSort()
+                
             
         
     
-    def BroadcastSort( self ):
+    def BroadcastSort( self, page_key = None ):
+        
+        if page_key is not None and page_key != self._management_controller.GetKey( 'page' ):
+            
+            return
+            
         
         self._BroadcastSort()
         
     
-    def EventChoice( self, event ):
+    def EventSortAscChoice( self, event ):
         
-        if self._page_key is not None:
-            
-            self._BroadcastSort()
-            
+        self._BroadcastSort()
         
     
-class ExportPatternButton( wx.Button ):
+    def EventSortTypeChoice( self, event ):
+        
+        self._UpdateAscLabels()
+        
+        self._BroadcastSort()
+        
     
-    ID_HASH = 0
-    ID_TAGS = 1
-    ID_NN_TAGS = 2
-    ID_NAMESPACE = 3
-    ID_TAG = 4
-    ID_MD5 = 5
+    def GetSort( self ):
+        
+        return self._GetCurrentSort()
+        
+    
+    def SetSort( self, media_sort ):
+        
+        self._sort_type_choice.SelectClientData( media_sort.sort_type )
+        self._sort_asc_choice.SelectClientData( media_sort.sort_asc )
+        
+        self._UpdateAscLabels()
+        
+    
+class AlphaColourControl( wx.Panel ):
     
     def __init__( self, parent ):
         
-        wx.Button.__init__( self, parent, label = 'pattern shortcuts' )
+        wx.Panel.__init__( self, parent )
         
-        self.Bind( wx.EVT_BUTTON, self.EventButton )
-        self.Bind( wx.EVT_MENU, self.EventMenu )
+        self._colour_picker = wx.ColourPickerCtrl( self )
         
-    
-    def EventMenu( self, event ):
+        self._alpha_selector = wx.SpinCtrl( self, min = 0, max = 255 )
         
-        id = event.GetId()
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        phrase = None
+        hbox.Add( self._colour_picker, CC.FLAGS_VCENTER )
+        hbox.Add( BetterStaticText( self, 'alpha: ' ), CC.FLAGS_VCENTER )
+        hbox.Add( self._alpha_selector, CC.FLAGS_VCENTER )
         
-        if id == self.ID_HASH: phrase = '{hash}'
-        if id == self.ID_MD5: phrase = '{md5}'
-        if id == self.ID_TAGS: phrase = '{tags}'
-        if id == self.ID_NN_TAGS: phrase = '{nn tags}'
-        if id == self.ID_NAMESPACE: phrase = u'[\u2026]'
-        if id == self.ID_TAG: phrase = u'(\u2026)'
-        else: event.Skip()
-        
-        if phrase is not None: HG.client_controller.pub( 'clipboard', 'text', phrase )
+        self.SetSizer( hbox )
         
     
-    def EventButton( self, event ):
+    def GetValue( self ):
+        
+        colour = self._colour_picker.GetColour()
+        
+        ( r, g, b, a ) = colour.Get() # no alpha support here, so it'll be 255
+        
+        a = self._alpha_selector.GetValue()
+        
+        colour = wx.Colour( r, g, b, a )
+        
+        return colour
+        
+    
+    def SetValue( self, colour ):
+        
+        ( r, g, b, a ) = colour.Get()
+        
+        picker_colour = wx.Colour( r, g, b )
+        
+        self._colour_picker.SetColour( picker_colour )
+        
+        self._alpha_selector.SetValue( a )
+        
+    
+class ExportPatternButton( BetterButton ):
+    
+    def __init__( self, parent ):
+        
+        BetterButton.__init__( self, parent, 'pattern shortcuts', self._Hit )
+        
+    
+    def _Hit( self ):
         
         menu = wx.Menu()
         
-        menu.Append( -1, 'click on a phrase to copy to clipboard' )
+        ClientGUIMenus.AppendMenuLabel( menu, 'click on a phrase to copy to clipboard' )
         
         ClientGUIMenus.AppendSeparator( menu )
         
-        menu.Append( self.ID_HASH, 'the file\'s hash - {hash}' )
-        menu.Append( self.ID_MD5, 'the file\'s md5 hash - {md5}' )
-        menu.Append( self.ID_TAGS, 'all the file\'s tags - {tags}' )
-        menu.Append( self.ID_NN_TAGS, 'all the file\'s non-namespaced tags - {nn tags}' )
+        ClientGUIMenus.AppendMenuItem( self, menu, 'the file\'s hash - {hash}', 'copy "{hash}" to the clipboard', HG.client_controller.pub, 'clipboard', 'text', '{hash}' )
+        ClientGUIMenus.AppendMenuItem( self, menu, 'the file\'s MD5 hash - {md5}', 'copy "{md5}" to the clipboard', HG.client_controller.pub, 'clipboard', 'text', '{md5}' )
+        ClientGUIMenus.AppendMenuItem( self, menu, 'all the file\'s tags - {tags}', 'copy "{tags}" to the clipboard', HG.client_controller.pub, 'clipboard', 'text', '{tags}' )
+        ClientGUIMenus.AppendMenuItem( self, menu, 'all the file\'s non-namespaced tags - {nn tags}', 'copy "{nn tags}" to the clipboard', HG.client_controller.pub, 'clipboard', 'text', '{nn tags}' )
         
         ClientGUIMenus.AppendSeparator( menu )
         
-        menu.Append( self.ID_NAMESPACE, u'all instances of a particular namespace - [\u2026]' )
+        ClientGUIMenus.AppendMenuItem( self, menu, u'all instances of a particular namespace - [\u2026]', u'copy "[\u2026]" to the clipboard', HG.client_controller.pub, 'clipboard', 'text', u'[\u2026]' )
         
         ClientGUIMenus.AppendSeparator( menu )
         
-        menu.Append( self.ID_TAG, u'a particular tag, if the file has it - (\u2026)' )
+        ClientGUIMenus.AppendMenuItem( self, menu, u'a particular tag, if the file has it - (\u2026)', u'copy "(\u2026)" to the clipboard', HG.client_controller.pub, 'clipboard', 'text', u'(\u2026)' )
         
         HG.client_controller.PopupMenu( self, menu )
         
@@ -833,6 +1282,8 @@ class Gauge( wx.Gauge ):
                     value = min( int( 1000 * ( float( value ) / self._actual_range ) ), 1000 )
                     
                 
+                value = min( value, self.GetRange() )
+                
                 if value != self.GetValue():
                     
                     wx.Gauge.SetValue( self, value )
@@ -874,18 +1325,16 @@ class ListBook( wx.Panel ):
         
         self._panel_sizer = wx.BoxSizer( wx.VERTICAL )
         
-        self._panel_sizer.AddF( self._empty_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+        self._panel_sizer.Add( self._empty_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        hbox.AddF( self._list_box, CC.FLAGS_EXPAND_PERPENDICULAR )
-        hbox.AddF( self._panel_sizer, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        hbox.Add( self._list_box, CC.FLAGS_EXPAND_PERPENDICULAR )
+        hbox.Add( self._panel_sizer, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
         
         self._list_box.Bind( wx.EVT_LISTBOX, self.EventSelection )
         
         self.SetSizer( hbox )
-        
-        self.Bind( wx.EVT_MENU, self.EventMenu )
         
     
     def _ActivatePage( self, key ):
@@ -896,7 +1345,7 @@ class ListBook( wx.Panel ):
         
         page.Hide()
         
-        self._panel_sizer.AddF( page, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        self._panel_sizer.Add( page, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
         
         self._keys_to_active_pages[ key ] = page
         
@@ -965,14 +1414,14 @@ class ListBook( wx.Panel ):
         # this tells any parent scrolled panel to update its virtualsize and recalc its scrollbars
         event = wx.NotifyEvent( wx.wxEVT_SIZE, self.GetId() )
         
-        wx.CallAfter( self.ProcessEvent, event )
+        wx.QueueEvent( self.GetEventHandler(), event )
         
         # now the virtualsize is updated, we now tell any parent resizing frame/dialog that is interested in resizing that now is the time
         ClientGUITopLevelWindows.PostSizeChangedEvent( self )
         
         event = wx.NotifyEvent( wx.wxEVT_COMMAND_NOTEBOOK_PAGE_CHANGED, -1 )
         
-        wx.CallAfter( self.ProcessEvent, event )
+        wx.QueueEvent( self.GetEventHandler(), event )
         
     
     def AddPage( self, display_name, key, page, select = False ):
@@ -986,7 +1435,7 @@ class ListBook( wx.Panel ):
             
             page.Hide()
             
-            self._panel_sizer.AddF( page, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+            self._panel_sizer.Add( page, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
             
         
         # Can't do LB_SORT because of Linux not being able to track clientdata, have to do it manually.
@@ -1062,9 +1511,9 @@ class ListBook( wx.Panel ):
         
         self._panel_sizer.Detach( self._empty_panel )
         
-        self._panel_sizer.Clear( deleteWindows = True )
+        self._panel_sizer.Clear( delete_windows = True )
         
-        self._panel_sizer.AddF( self._empty_panel, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        self._panel_sizer.Add( self._empty_panel, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
         
         self._current_key = None
         
@@ -1113,27 +1562,13 @@ class ListBook( wx.Panel ):
             
         
     
-    def EventMenu( self, event ):
-        
-        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
-        
-        if action is not None:
-            
-            ( command, data ) = action
-            
-            if command == 'select_down': self.SelectDown()
-            elif command == 'select_up': self.SelectUp()
-            else: event.Skip()
-            
-        
-    
     def EventSelection( self, event ):
         
         if self._list_box.GetSelection() != self._GetIndex( self._current_key ):
             
             event = wx.NotifyEvent( wx.wxEVT_COMMAND_NOTEBOOK_PAGE_CHANGING, -1 )
             
-            self.GetEventHandler().ProcessEvent( event )
+            wx.QueueEvent( self.GetEventHandler(), event )
             
             if event.IsAllowed():
                 
@@ -1213,7 +1648,7 @@ class ListBook( wx.Panel ):
             
             event = wx.NotifyEvent( wx.wxEVT_COMMAND_NOTEBOOK_PAGE_CHANGING, -1 )
             
-            self.GetEventHandler().ProcessEvent( event )
+            wx.QueueEvent( self.GetEventHandler(), event )
             
             if event.IsAllowed():
                 
@@ -1271,94 +1706,6 @@ class ListBook( wx.Panel ):
             
         
     
-class ListCtrlAutoWidth( wx.ListCtrl, ListCtrlAutoWidthMixin ):
-    
-    def __init__( self, parent, height ):
-        
-        wx.ListCtrl.__init__( self, parent, size=( -1, height ), style=wx.LC_REPORT )
-        ListCtrlAutoWidthMixin.__init__( self )
-        
-    
-    def GetAllSelected( self ):
-        
-        indices = []
-        
-        i = self.GetFirstSelected()
-        
-        while i != -1:
-            
-            indices.append( i )
-            
-            i = self.GetNextSelected( i )
-            
-        
-        return indices
-        
-    
-    def RemoveAllSelected( self ):
-        
-        indices = self.GetAllSelected()
-        
-        indices.reverse() # so we don't screw with the indices of deletees below
-        
-        for index in indices: self.DeleteItem( index )
-        
-    
-class CheckboxManager( object ):
-    
-    def GetCurrentValue( self ):
-        
-        raise NotImplementedError()
-        
-    
-    def Invert( self ):
-        
-        raise NotImplementedError()
-        
-    
-class CheckboxManagerCalls( CheckboxManager ):
-    
-    def __init__( self, invert_call, value_call ):
-        
-        CheckboxManager.__init__( self )
-        
-        self._invert_call = invert_call
-        self._value_call = value_call
-        
-    
-    def GetCurrentValue( self ):
-        
-        return self._value_call()
-        
-    
-    def Invert( self ):
-        
-        self._invert_call()
-        
-    
-class CheckboxManagerOptions( CheckboxManager ):
-    
-    def __init__( self, boolean_name ):
-        
-        CheckboxManager.__init__( self )
-        
-        self._boolean_name = boolean_name
-        
-    
-    def GetCurrentValue( self ):
-        
-        new_options = HG.client_controller.GetNewOptions()
-        
-        return new_options.GetBoolean( self._boolean_name )
-        
-    
-    def Invert( self ):
-        
-        new_options = HG.client_controller.GetNewOptions()
-        
-        new_options.InvertBoolean( self._boolean_name )
-        
-    
 class MenuBitmapButton( BetterBitmapButton ):
     
     def __init__( self, parent, bitmap, menu_items ):
@@ -1387,7 +1734,10 @@ class MenuBitmapButton( BetterBitmapButton ):
                 current_value = check_manager.GetCurrentValue()
                 func = check_manager.Invert
                 
-                ClientGUIMenus.AppendMenuCheckItem( self, menu, title, description, current_value, func )
+                if current_value is not None:
+                    
+                    ClientGUIMenus.AppendMenuCheckItem( self, menu, title, description, current_value, func )
+                    
                 
             elif item_type == 'separator':
                 
@@ -1427,6 +1777,7 @@ class MenuButton( BetterButton ):
                 
                 ClientGUIMenus.AppendMenuCheckItem( self, menu, title, description, initial_value, check_manager.Invert )
                 
+                
             elif item_type == 'separator':
                 
                 ClientGUIMenus.AppendSeparator( menu )
@@ -1443,6 +1794,52 @@ class MenuButton( BetterButton ):
     def SetMenuItems( self, menu_items ):
         
         self._menu_items = menu_items
+        
+    
+class NetworkContextButton( BetterButton ):
+    
+    def __init__( self, parent, network_context ):
+        
+        BetterButton.__init__( self, parent, network_context.ToUnicode(), self._Edit )
+        
+        self._network_context = network_context
+        
+    
+    def _Edit( self ):
+        
+        import ClientGUITopLevelWindows
+        import ClientGUIScrolledPanelsEdit
+        
+        with ClientGUITopLevelWindows.DialogEdit( self, 'edit network context' ) as dlg:
+            
+            panel = ClientGUIScrolledPanelsEdit.EditNetworkContextPanel( dlg, self._network_context )
+            
+            dlg.SetPanel( panel )
+            
+            if dlg.ShowModal() == wx.ID_OK:
+                
+                self._network_context = panel.GetValue()
+                
+                self._Update()
+                
+            
+        
+    
+    def _Update( self ):
+        
+        self.SetLabelText( self._network_context.ToUnicode() )
+        
+    
+    def GetValue( self ):
+        
+        return self._network_context
+        
+    
+    def SetValue( self, network_context ):
+        
+        self._network_context = network_context
+        
+        self._Update()
         
     
 class NoneableSpinCtrl( wx.Panel ):
@@ -1470,23 +1867,23 @@ class NoneableSpinCtrl( wx.Panel ):
         
         if len( message ) > 0:
             
-            hbox.AddF( BetterStaticText( self, message + ': ' ), CC.FLAGS_VCENTER )
+            hbox.Add( BetterStaticText( self, message + ': ' ), CC.FLAGS_VCENTER )
             
         
-        hbox.AddF( self._one, CC.FLAGS_VCENTER )
+        hbox.Add( self._one, CC.FLAGS_VCENTER )
         
         if self._num_dimensions == 2:
             
-            hbox.AddF( BetterStaticText( self, 'x' ), CC.FLAGS_VCENTER )
-            hbox.AddF( self._two, CC.FLAGS_VCENTER )
+            hbox.Add( BetterStaticText( self, 'x' ), CC.FLAGS_VCENTER )
+            hbox.Add( self._two, CC.FLAGS_VCENTER )
             
         
         if self._unit is not None:
             
-            hbox.AddF( BetterStaticText( self, self._unit ), CC.FLAGS_VCENTER )
+            hbox.Add( BetterStaticText( self, self._unit ), CC.FLAGS_VCENTER )
             
         
-        hbox.AddF( self._checkbox, CC.FLAGS_VCENTER )
+        hbox.Add( self._checkbox, CC.FLAGS_VCENTER )
         
         self.SetSizer( hbox )
         
@@ -1494,8 +1891,13 @@ class NoneableSpinCtrl( wx.Panel ):
     def Bind( self, event_type, callback ):
         
         self._checkbox.Bind( wx.EVT_CHECKBOX, callback )
+        
         self._one.Bind( wx.EVT_SPINCTRL, callback )
-        if self._num_dimensions == 2: self._two.Bind( wx.EVT_SPINCTRL, callback )
+        
+        if self._num_dimensions == 2:
+            
+            self._two.Bind( wx.EVT_SPINCTRL, callback )
+            
         
     
     def EventCheckBox( self, event ):
@@ -1514,21 +1916,30 @@ class NoneableSpinCtrl( wx.Panel ):
     
     def GetValue( self ):
         
-        if self._checkbox.GetValue(): return None
+        if self._checkbox.GetValue():
+            
+            return None
+            
         else:
             
-            if self._num_dimensions == 2: return ( self._one.GetValue() * self._multiplier, self._two.GetValue() * self._multiplier )
-            else: return self._one.GetValue() * self._multiplier
+            if self._num_dimensions == 2:
+                
+                return ( self._one.GetValue() * self._multiplier, self._two.GetValue() * self._multiplier )
+                
+            else:
+                
+                return self._one.GetValue() * self._multiplier
+                
             
         
     
-    def SetToolTipString( self, text ):
+    def SetToolTip( self, text ):
         
-        wx.Panel.SetToolTipString( self, text )
+        wx.Panel.SetToolTip( self, text )
         
         for c in self.GetChildren():
             
-            c.SetToolTipString( text )
+            c.SetToolTip( text )
             
         
     
@@ -1557,6 +1968,90 @@ class NoneableSpinCtrl( wx.Panel ):
             self._one.Enable()
             
             self._one.SetValue( value / self._multiplier )
+            
+        
+    
+class NoneableTextCtrl( wx.Panel ):
+    
+    def __init__( self, parent, message = '', none_phrase = 'no limit' ):
+        
+        wx.Panel.__init__( self, parent )
+        
+        self._checkbox = wx.CheckBox( self )
+        self._checkbox.Bind( wx.EVT_CHECKBOX, self.EventCheckBox )
+        self._checkbox.SetLabelText( none_phrase )
+        
+        self._text = wx.TextCtrl( self )
+        
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        if len( message ) > 0:
+            
+            hbox.Add( BetterStaticText( self, message + ': ' ), CC.FLAGS_VCENTER )
+            
+        
+        hbox.Add( self._text, CC.FLAGS_VCENTER )
+        hbox.Add( self._checkbox, CC.FLAGS_VCENTER )
+        
+        self.SetSizer( hbox )
+        
+    
+    def Bind( self, event_type, callback ):
+        
+        self._checkbox.Bind( wx.EVT_CHECKBOX, callback )
+        
+        self._text.Bind( wx.EVT_TEXT, callback )
+        
+    
+    def EventCheckBox( self, event ):
+        
+        if self._checkbox.GetValue():
+            
+            self._text.Disable()
+            
+        else:
+            
+            self._text.Enable()
+            
+        
+    
+    def GetValue( self ):
+        
+        if self._checkbox.GetValue():
+            
+            return None
+            
+        else:
+            
+            return self._text.GetValue()
+            
+        
+    
+    def SetToolTip( self, text ):
+        
+        wx.Panel.SetToolTip( self, text )
+        
+        for c in self.GetChildren():
+            
+            c.SetToolTip( text )
+            
+        
+    
+    def SetValue( self, value ):
+        
+        if value is None:
+            
+            self._checkbox.SetValue( True )
+            
+            self._text.Disable()
+            
+        else:
+            
+            self._checkbox.SetValue( False )
+            
+            self._text.Enable()
+            
+            self._text.SetValue( value )
             
         
     
@@ -1620,7 +2115,7 @@ class RatingLike( wx.Window ):
         
         self._service_key = service_key
         
-        self._canvas_bmp = wx.EmptyBitmap( 16, 16, 24 )
+        self._canvas_bmp = wx.Bitmap( 16, 16, 24 )
         
         self.Bind( wx.EVT_PAINT, self.EventPaint )
         self.Bind( wx.EVT_ERASE_BACKGROUND, self.EventEraseBackground )
@@ -1737,7 +2232,7 @@ class RatingLikeCanvas( RatingLike ):
         
         name = service.GetName()
         
-        self.SetToolTipString( name )
+        self.SetToolTip( name )
         
         HG.client_controller.sub( self, 'ProcessContentUpdates', 'content_updates_gui' )
         HG.client_controller.sub( self, 'SetDisplayMedia', 'canvas_new_display_media' )
@@ -1849,7 +2344,7 @@ class RatingNumerical( wx.Window ):
         
         my_width = ClientRatings.GetNumericalWidth( self._service_key )
         
-        self._canvas_bmp = wx.EmptyBitmap( my_width, 16, 24 )
+        self._canvas_bmp = wx.Bitmap( my_width, 16, 24 )
         
         self.Bind( wx.EVT_PAINT, self.EventPaint )
         self.Bind( wx.EVT_ERASE_BACKGROUND, self.EventEraseBackground )
@@ -2022,7 +2517,7 @@ class RatingNumericalCanvas( RatingNumerical ):
         
         name = self._service.GetName()
         
-        self.SetToolTipString( name )
+        self.SetToolTip( name )
         
         HG.client_controller.sub( self, 'ProcessContentUpdates', 'content_updates_gui' )
         HG.client_controller.sub( self, 'SetDisplayMedia', 'canvas_new_display_media' )
@@ -2120,155 +2615,96 @@ class RatingNumericalCanvas( RatingNumerical ):
             
         
     
-class RegexButton( wx.Button ):
-    
-    ID_REGEX_WHITESPACE = 0
-    ID_REGEX_NUMBER = 1
-    ID_REGEX_ALPHANUMERIC = 2
-    ID_REGEX_ANY = 3
-    ID_REGEX_BEGINNING = 4
-    ID_REGEX_END = 5
-    ID_REGEX_0_OR_MORE_GREEDY = 6
-    ID_REGEX_1_OR_MORE_GREEDY = 7
-    ID_REGEX_0_OR_1_GREEDY = 8
-    ID_REGEX_0_OR_MORE_MINIMAL = 9
-    ID_REGEX_1_OR_MORE_MINIMAL = 10
-    ID_REGEX_0_OR_1_MINIMAL = 11
-    ID_REGEX_EXACTLY_M = 12
-    ID_REGEX_M_TO_N_GREEDY = 13
-    ID_REGEX_M_TO_N_MINIMAL = 14
-    ID_REGEX_LOOKAHEAD = 15
-    ID_REGEX_NEGATIVE_LOOKAHEAD = 16
-    ID_REGEX_LOOKBEHIND = 17
-    ID_REGEX_NEGATIVE_LOOKBEHIND = 18
-    ID_REGEX_NUMBER_WITHOUT_ZEROES = 19
-    ID_REGEX_BACKSPACE = 22
-    ID_REGEX_SET = 23
-    ID_REGEX_NOT_SET = 24
-    ID_REGEX_FILENAME = 25
-    ID_REGEX_MANAGE_FAVOURITES = 26
-    ID_REGEX_FAVOURITES = range( 100, 200 )
+class RegexButton( BetterButton ):
     
     def __init__( self, parent ):
         
-        wx.Button.__init__( self, parent, label = 'regex shortcuts' )
-        
-        self.Bind( wx.EVT_BUTTON, self.EventButton )
-        self.Bind( wx.EVT_MENU, self.EventMenu )
+        BetterButton.__init__( self, parent, 'regex shortcuts', self._ShowMenu )
         
     
-    def EventButton( self, event ):
+    def _ShowMenu( self ):
         
         menu = wx.Menu()
         
-        menu.Append( -1, 'click on a phrase to copy to clipboard' )
+        ClientGUIMenus.AppendMenuLabel( menu, 'click on a phrase to copy it to the clipboard' )
         
         ClientGUIMenus.AppendSeparator( menu )
         
         submenu = wx.Menu()
         
-        submenu.Append( self.ID_REGEX_WHITESPACE, r'whitespace character - \s' )
-        submenu.Append( self.ID_REGEX_NUMBER, r'number character - \d' )
-        submenu.Append( self.ID_REGEX_ALPHANUMERIC, r'alphanumeric or backspace character - \w' )
-        submenu.Append( self.ID_REGEX_ANY, r'any character - .' )
-        submenu.Append( self.ID_REGEX_BACKSPACE, r'backspace character - \\' )
-        submenu.Append( self.ID_REGEX_BEGINNING, r'beginning of line - ^' )
-        submenu.Append( self.ID_REGEX_END, r'end of line - $' )
-        submenu.Append( self.ID_REGEX_SET, u'any of these - [\u2026]' )
-        submenu.Append( self.ID_REGEX_NOT_SET, u'anything other than these - [^\u2026]' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'whitespace character - \s', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'\s' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'number character - \d', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'\d' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'alphanumeric or backspace character - \w', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'\w' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'any character - .', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'.' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'backslash character - \\', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'\\' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'beginning of line - ^', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'^' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'end of line - $', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'$' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, u'any of these - [\u2026]', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', u'[\u2026]' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, u'anything other than these - [^\u2026]', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', u'[^\u2026]' )
         
         ClientGUIMenus.AppendSeparator( submenu )
         
-        submenu.Append( self.ID_REGEX_0_OR_MORE_GREEDY, r'0 or more matches, consuming as many as possible - *' )
-        submenu.Append( self.ID_REGEX_1_OR_MORE_GREEDY, r'1 or more matches, consuming as many as possible - +' )
-        submenu.Append( self.ID_REGEX_0_OR_1_GREEDY, r'0 or 1 matches, preferring 1 - ?' )
-        submenu.Append( self.ID_REGEX_0_OR_MORE_MINIMAL, r'0 or more matches, consuming as few as possible - *?' )
-        submenu.Append( self.ID_REGEX_1_OR_MORE_MINIMAL, r'1 or more matches, consuming as few as possible - +?' )
-        submenu.Append( self.ID_REGEX_0_OR_1_MINIMAL, r'0 or 1 matches, preferring 0 - *' )
-        submenu.Append( self.ID_REGEX_EXACTLY_M, r'exactly m matches - {m}' )
-        submenu.Append( self.ID_REGEX_M_TO_N_GREEDY, r'm to n matches, consuming as many as possible - {m,n}' )
-        submenu.Append( self.ID_REGEX_M_TO_N_MINIMAL, r'm to n matches, consuming as few as possible - {m,n}?' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'0 or more matches, consuming as many as possible - *', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'*' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'1 or more matches, consuming as many as possible - +', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'+' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'0 or 1 matches, preferring 1 - ?', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'?' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'0 or more matches, consuming as few as possible - *?', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'*?' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'1 or more matches, consuming as few as possible - +?', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'+?' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'0 or 1 matches, preferring 0 - ??', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'??' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'exactly m matches - {m}', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'{m}' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'm to n matches, consuming as many as possible - {m,n}', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'{m,n}' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'm to n matches, consuming as few as possible - {m,n}?', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'{m,n}?' )
         
         ClientGUIMenus.AppendSeparator( submenu )
         
-        submenu.Append( self.ID_REGEX_LOOKAHEAD, u'the next characters are: (non-consuming) - (?=\u2026)' )
-        submenu.Append( self.ID_REGEX_NEGATIVE_LOOKAHEAD, u'the next characters are not: (non-consuming) - (?!\u2026)' )
-        submenu.Append( self.ID_REGEX_LOOKBEHIND, u'the previous characters are: (non-consuming) - (?<=\u2026)' )
-        submenu.Append( self.ID_REGEX_NEGATIVE_LOOKBEHIND, u'the previous characters are not: (non-consuming) - (?<!\u2026)' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, u'the next characters are: (non-consuming) - (?=\u2026)', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', u'(?=\u2026)' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, u'the next characters are not: (non-consuming) - (?!\u2026)', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', u'(?!\u2026)' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, u'the previous characters are: (non-consuming) - (?<=\u2026)', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', u'(?<=\u2026)' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, u'the previous characters are not: (non-consuming) - (?<!\u2026)', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', u'(?<!\u2026)' )
         
         ClientGUIMenus.AppendSeparator( submenu )
         
-        submenu.Append( self.ID_REGEX_NUMBER_WITHOUT_ZEROES, r'0074 -> 74 - [1-9]+\d*' )
-        submenu.Append( self.ID_REGEX_FILENAME, r'filename - (?<=' + os.path.sep.encode( 'string_escape' ) + r')[^' + os.path.sep.encode( 'string_escape' ) + r']*?(?=\..*$)' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'0074 -> 74 - [1-9]+\d*', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', r'[1-9]+\d*' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, r'filename - (?<=' + os.path.sep.encode( 'string_escape' ) + r')[^' + os.path.sep.encode( 'string_escape' ) + r']*?(?=\..*$)', 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', '(?<=' + os.path.sep.encode( 'string_escape' ) + r')[^' + os.path.sep.encode( 'string_escape' ) + r']*?(?=\..*$)' )
         
-        menu.AppendMenu( -1, 'regex components', submenu )
+        ClientGUIMenus.AppendMenu( menu, submenu, 'regex components' )
         
         submenu = wx.Menu()
         
-        submenu.Append( self.ID_REGEX_MANAGE_FAVOURITES, 'manage favourites' )
+        ClientGUIMenus.AppendMenuItem( self, submenu, 'manage favourites', 'manage some custom favourite phrases', self._ManageFavourites )
         
         ClientGUIMenus.AppendSeparator( submenu )
         
-        for ( index, ( regex_phrase, description ) ) in enumerate( HC.options[ 'regex_favourites' ] ):
+        for ( regex_phrase, description ) in HC.options[ 'regex_favourites' ]:
             
-            menu_id = index + 100
-            
-            submenu.Append( menu_id, description )
+            ClientGUIMenus.AppendMenuItem( self, submenu, description, 'copy this phrase to the clipboard', HG.client_controller.pub, 'clipboard', 'text', regex_phrase )
             
         
-        menu.AppendMenu( -1, 'favourites', submenu )
+        ClientGUIMenus.AppendMenu( menu, submenu, 'favourites' )
         
         HG.client_controller.PopupMenu( self, menu )
         
     
-    def EventMenu( self, event ):
+    def _ManageFavourites( self ):
         
-        id = event.GetId()
+        regex_favourites = HC.options[ 'regex_favourites' ]
         
-        phrase = None
-        
-        if id == self.ID_REGEX_WHITESPACE: phrase = r'\s'
-        elif id == self.ID_REGEX_NUMBER: phrase = r'\d'
-        elif id == self.ID_REGEX_ALPHANUMERIC: phrase = r'\w'
-        elif id == self.ID_REGEX_ANY: phrase = r'.'
-        elif id == self.ID_REGEX_BACKSPACE: phrase = r'\\'
-        elif id == self.ID_REGEX_BEGINNING: phrase = r'^'
-        elif id == self.ID_REGEX_END: phrase = r'$'
-        elif id == self.ID_REGEX_SET: phrase = u'[\u2026]'
-        elif id == self.ID_REGEX_NOT_SET: phrase = u'[^\u2026]'
-        elif id == self.ID_REGEX_0_OR_MORE_GREEDY: phrase = r'*'
-        elif id == self.ID_REGEX_1_OR_MORE_GREEDY: phrase = r'+'
-        elif id == self.ID_REGEX_0_OR_1_GREEDY: phrase = r'?'
-        elif id == self.ID_REGEX_0_OR_MORE_MINIMAL: phrase = r'*?'
-        elif id == self.ID_REGEX_1_OR_MORE_MINIMAL: phrase = r'+?'
-        elif id == self.ID_REGEX_0_OR_1_MINIMAL: phrase = r'*'
-        elif id == self.ID_REGEX_EXACTLY_M: phrase = r'{m}'
-        elif id == self.ID_REGEX_M_TO_N_GREEDY: phrase = r'{m,n}'
-        elif id == self.ID_REGEX_M_TO_N_MINIMAL: phrase = r'{m,n}?'
-        elif id == self.ID_REGEX_LOOKAHEAD: phrase = u'(?=\u2026)'
-        elif id == self.ID_REGEX_NEGATIVE_LOOKAHEAD: phrase = u'(?!\u2026)'
-        elif id == self.ID_REGEX_LOOKBEHIND: phrase = u'(?<=\u2026)'
-        elif id == self.ID_REGEX_NEGATIVE_LOOKBEHIND: phrase = u'(?<!\u2026)'
-        elif id == self.ID_REGEX_NUMBER_WITHOUT_ZEROES: phrase = r'[1-9]+\d*'
-        elif id == self.ID_REGEX_FILENAME: phrase = '(?<=' + os.path.sep.encode( 'string_escape' ) + r')[^' + os.path.sep.encode( 'string_escape' ) + r']*?(?=\..*$)'
-        elif id == self.ID_REGEX_MANAGE_FAVOURITES:
+        with ClientGUITopLevelWindows.DialogEdit( self, 'manage regex favourites' ) as dlg:
             
-            import ClientGUIDialogsManage
+            import ClientGUIScrolledPanelsEdit
             
-            with ClientGUIDialogsManage.DialogManageRegexFavourites( self.GetTopLevelParent() ) as dlg:
+            panel = ClientGUIScrolledPanelsEdit.EditRegexFavourites( dlg, regex_favourites )
+            
+            dlg.SetPanel( panel )
+            
+            if dlg.ShowModal() == wx.ID_OK:
                 
-                dlg.ShowModal()
+                regex_favourites = panel.GetValue()
+                
+                HC.options[ 'regex_favourites' ] = regex_favourites
+                
+                HG.client_controller.Write( 'save_options', HC.options )
                 
             
-        elif id in self.ID_REGEX_FAVOURITES:
-            
-            index = id - 100
-            
-            ( phrase, description ) = HC.options[ 'regex_favourites' ][ index ]
-            
-        else: event.Skip()
-        
-        if phrase is not None: HG.client_controller.pub( 'clipboard', 'text', phrase )
         
     
 class SaneMultilineTextCtrl( wx.TextCtrl ):
@@ -2305,493 +2741,6 @@ class SaneMultilineTextCtrl( wx.TextCtrl ):
             
         
     
-class SaneListCtrl( wx.ListCtrl, ListCtrlAutoWidthMixin, ColumnSorterMixin ):
-    
-    def __init__( self, parent, height, columns, delete_key_callback = None, activation_callback = None ):
-        
-        num_columns = len( columns )
-        
-        wx.ListCtrl.__init__( self, parent, style = wx.LC_REPORT )
-        ListCtrlAutoWidthMixin.__init__( self )
-        ColumnSorterMixin.__init__( self, num_columns )
-        
-        self.itemDataMap = {}
-        self._data_indices_to_sort_indices = {}
-        self._data_indices_to_sort_indices_dirty = False
-        self._next_data_index = 0
-        
-        resize_column = 1
-        
-        for ( i, ( name, width ) ) in enumerate( columns ):
-            
-            self.InsertColumn( i, name, width = width )
-            
-            if width == -1:
-                
-                resize_column = i + 1
-                
-            
-        
-        self.setResizeColumn( resize_column )
-        
-        self.SetMinSize( ( -1, height ) )
-        
-        self._delete_key_callback = delete_key_callback
-        self._activation_callback = activation_callback
-        
-        self.Bind( wx.EVT_KEY_DOWN, self.EventKeyDown )
-        self.Bind( wx.EVT_LIST_ITEM_ACTIVATED, self.EventItemActivated )
-        
-        self.Bind( wx.EVT_LIST_COL_BEGIN_DRAG, self.EventBeginColDrag )
-        
-    
-    _GetDataIndex = wx.ListCtrl.GetItemData
-    
-    def _GetIndexFromDataIndex( self, data_index ):
-        
-        if self._data_indices_to_sort_indices_dirty:
-            
-            self._data_indices_to_sort_indices = { self._GetDataIndex( index ) : index for index in range( self.GetItemCount() ) }
-            
-            self._data_indices_to_sort_indices_dirty = False
-            
-        
-        try:
-            
-            return self._data_indices_to_sort_indices[ data_index ]
-            
-        except KeyError:
-            
-            raise HydrusExceptions.DataMissing( 'Data not found!' )
-            
-        
-    
-    def Append( self, display_tuple, sort_tuple ):
-        
-        index = wx.ListCtrl.Append( self, display_tuple )
-        
-        data_index = self._next_data_index
-        
-        self.SetItemData( index, data_index )
-        
-        self.itemDataMap[ data_index ] = list( sort_tuple )
-        self._data_indices_to_sort_indices[ data_index ] = index
-        
-        self._next_data_index += 1
-        
-    
-    def DeleteItem( self, *args, **kwargs ):
-        
-        wx.ListCtrl.DeleteItem( self, *args, **kwargs )
-        
-        self._data_indices_to_sort_indices_dirty = True
-        
-    
-    def EventBeginColDrag( self, event ):
-        
-        # resizeCol is not zero-indexed
-        
-        if event.GetColumn() == self._resizeCol - 1:
-            
-            last_column = self.GetColumnCount()
-            
-            if self._resizeCol != last_column:
-                
-                self.setResizeColumn( last_column )
-                
-            else:
-                
-                event.Veto()
-                
-                return
-                
-            
-        
-        event.Skip()
-        
-    
-    def EventItemActivated( self, event ):
-        
-        if self._activation_callback is not None:
-            
-            self._activation_callback()
-            
-        else:
-            
-            event.Skip()
-            
-        
-    
-    def EventKeyDown( self, event ):
-        
-        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
-        
-        if key in CC.DELETE_KEYS:
-            
-            if self._delete_key_callback is not None:
-                
-                self._delete_key_callback()
-                
-            
-        elif key in ( ord( 'A' ), ord( 'a' ) ) and modifier == wx.ACCEL_CTRL:
-            
-            self.SelectAll()
-            
-        else:
-            
-            event.Skip()
-            
-        
-    
-    def GetAllSelected( self ):
-        
-        indices = []
-        
-        i = self.GetFirstSelected()
-        
-        while i != -1:
-            
-            indices.append( i )
-            
-            i = self.GetNextSelected( i )
-            
-        
-        return indices
-        
-    
-    def GetClientData( self, index = None ):
-        
-        if index is None:
-            
-            data_indicies = [ self._GetDataIndex( index ) for index in range( self.GetItemCount() ) ]
-            
-            datas = [ tuple( self.itemDataMap[ data_index ] ) for data_index in data_indicies ]
-            
-            return datas
-            
-        else:
-            
-            data_index = self._GetDataIndex( index )
-            
-            return tuple( self.itemDataMap[ data_index ] )
-            
-        
-    
-    def GetIndexFromClientData( self, data, column_index = None ):
-        
-        for index in range( self.GetItemCount() ):
-            
-            client_data = self.GetClientData( index )
-            
-            if column_index is None:
-                
-                comparison_data = client_data
-                
-            else:
-                
-                comparison_data = client_data[ column_index ]
-                
-            
-            if comparison_data == data:
-                
-                return index
-                
-            
-        
-        raise HydrusExceptions.DataMissing( 'Data not found!' )
-        
-    
-    def GetSecondarySortValues( self, col, key1, key2 ):
-        
-        # This overrides the ColumnSortedMixin. Just spam the whole tuple back.
-        
-        return ( self.itemDataMap[ key1 ], self.itemDataMap[ key2 ] )
-        
-    
-    def GetListCtrl( self ):
-        
-        return self
-        
-    
-    def GetSelectedClientData( self ):
-        
-        indices = self.GetAllSelected()
-        
-        results = []
-        
-        for index in indices:
-            
-            results.append( self.GetClientData( index ) )
-            
-        
-        return results
-        
-    
-    def HasClientData( self, data, column_index = None ):
-        
-        try:
-            
-            index = self.GetIndexFromClientData( data, column_index )
-            
-            return True
-            
-        except HydrusExceptions.DataMissing:
-            
-            return False
-            
-        
-    
-    def OnSortOrderChanged( self ):
-        
-        self._data_indices_to_sort_indices_dirty = True
-        
-    
-    def RemoveAllSelected( self ):
-        
-        indices = self.GetAllSelected()
-        
-        self.RemoveIndices( indices )
-        
-    
-    def RemoveIndices( self, indices ):
-        
-        indices.sort()
-        
-        indices.reverse() # so we don't screw with the indices of deletees below
-        
-        for index in indices:
-            
-            self.DeleteItem( index )
-            
-        
-    
-    def SelectAll( self ):
-        
-        currently_selected = set( self.GetAllSelected() )
-        
-        currently_not_selected = [ index for index in range( self.GetItemCount() ) if index not in currently_selected ]
-        
-        for index in currently_not_selected:
-            
-            self.Select( index )
-            
-        
-    
-    def UpdateRow( self, index, display_tuple, sort_tuple ):
-        
-        column = 0
-        
-        for value in display_tuple:
-            
-            self.SetStringItem( index, column, value )
-            
-            column += 1
-            
-        
-        data_index = self._GetDataIndex( index )
-        
-        self.itemDataMap[ data_index ] = list( sort_tuple )
-        
-    
-class SaneListCtrlForSingleObject( SaneListCtrl ):
-    
-    def __init__( self, *args, **kwargs ):
-        
-        # this could one day just take column parameters that the user can pick
-        # it could just take obj in append or whatever and generate column tuples off that
-        
-        self._data_indices_to_objects = {}
-        self._objects_to_data_indices = {}
-        
-        SaneListCtrl.__init__( self, *args, **kwargs )
-        
-    
-    def Append( self, display_tuple, sort_tuple, obj ):
-        
-        self._data_indices_to_objects[ self._next_data_index ] = obj
-        self._objects_to_data_indices[ obj ] = self._next_data_index
-        
-        SaneListCtrl.Append( self, display_tuple, sort_tuple )
-        
-    
-    def GetIndexFromObject( self, obj ):
-        
-        try:
-            
-            data_index = self._objects_to_data_indices[ obj ]
-            
-            index = self._GetIndexFromDataIndex( data_index )
-            
-            return index
-            
-        except KeyError:
-            
-            raise HydrusExceptions.DataMissing( 'Data not found!' )
-            
-        
-    
-    def GetObject( self, index ):
-        
-        data_index = self._GetDataIndex( index )
-        
-        return self._data_indices_to_objects[ data_index ]
-        
-    
-    def GetObjects( self, only_selected = False ):
-        
-        if only_selected:
-            
-            indicies = self.GetAllSelected()
-            
-        else:
-            
-            indicies = range( self.GetItemCount() )
-            
-        
-        data_indicies = [ self._GetDataIndex( index ) for index in indicies ]
-        
-        datas = [ self._data_indices_to_objects[ data_index ] for data_index in data_indicies ]
-        
-        return datas
-        
-    
-    def HasObject( self, obj ):
-        
-        try:
-            
-            index = self.GetIndexFromObject( obj )
-            
-            return True
-            
-        except HydrusExceptions.DataMissing:
-            
-            return False
-            
-        
-    
-    def SetNonDupeName( self, obj ):
-        
-        # when column population is handled here, we can tuck this into normal append/update calls internally
-        
-        name = obj.GetName()
-        
-        current_names = { obj.GetName() for obj in self.GetObjects() }
-        
-        if name in current_names:
-            
-            i = 1
-            
-            original_name = name
-            
-            while name in current_names:
-                
-                name = original_name + ' (' + str( i ) + ')'
-                
-                i += 1
-                
-            
-            obj.SetName( name )
-            
-        
-    
-    def UpdateRow( self, index, display_tuple, sort_tuple, obj ):
-        
-        SaneListCtrl.UpdateRow( self, index, display_tuple, sort_tuple )
-        
-        data_index = self._GetDataIndex( index )
-        
-        self._data_indices_to_objects[ data_index ] = obj
-        self._objects_to_data_indices[ obj ] = data_index
-        
-    
-class SaneListCtrlPanel( wx.Panel ):
-    
-    def __init__( self, parent ):
-        
-        wx.Panel.__init__( self, parent )
-        
-        self._vbox = wx.BoxSizer( wx.VERTICAL )
-        
-        self._buttonbox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        self._listctrl = None
-        
-        self._button_infos = []
-        
-    
-    def _SomeSelected( self ):
-        
-        return self._listctrl.GetSelectedItemCount() > 0
-        
-    
-    def _UpdateButtons( self ):
-        
-        for ( button, enabled_check_func ) in self._button_infos:
-            
-            if enabled_check_func():
-                
-                button.Enable()
-                
-            else:
-                
-                button.Disable()
-                
-            
-        
-    
-    def AddButton( self, label, clicked_func, enabled_only_on_selection = False, enabled_check_func = None ):
-        
-        button = BetterButton( self, label, clicked_func )
-        
-        self._buttonbox.AddF( button, CC.FLAGS_VCENTER )
-        
-        if enabled_only_on_selection:
-            
-            enabled_check_func = self._SomeSelected
-            
-        
-        if enabled_check_func is not None:
-            
-            self._button_infos.append( ( button, enabled_check_func ) )
-            
-        
-    
-    def AddWindow( self, window ):
-        
-        self._buttonbox.AddF( window, CC.FLAGS_VCENTER )
-        
-    
-    def EventContentChanged( self, event ):
-        
-        self._UpdateButtons()
-        
-        event.Skip()
-        
-    
-    def EventSelectionChanged( self, event ):
-        
-        self._UpdateButtons()
-        
-        event.Skip()
-        
-    
-    def SetListCtrl( self, listctrl ):
-        
-        self._listctrl = listctrl
-        
-        self._vbox.AddF( self._listctrl, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        self._vbox.AddF( self._buttonbox, CC.FLAGS_BUTTON_SIZER )
-        
-        self.SetSizer( self._vbox )
-        
-        self._listctrl.Bind( wx.EVT_LIST_ITEM_SELECTED, self.EventSelectionChanged )
-        self._listctrl.Bind( wx.EVT_LIST_ITEM_DESELECTED, self.EventSelectionChanged )
-        
-        self._listctrl.Bind( wx.EVT_LIST_INSERT_ITEM, self.EventContentChanged )
-        self._listctrl.Bind( wx.EVT_LIST_DELETE_ITEM, self.EventContentChanged )
-        self._listctrl.Bind( wx.EVT_LIST_DELETE_ALL_ITEMS, self.EventContentChanged )
-        
-    
 class Shortcut( wx.Panel ):
     
     def __init__( self, parent ):
@@ -2808,18 +2757,18 @@ class Shortcut( wx.Panel ):
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( BetterStaticText( self, 'Mouse events only work for the duplicate and archive/delete filters atm!' ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( BetterStaticText( self, 'Mouse events only work for the duplicate and archive/delete filters atm!' ), CC.FLAGS_EXPAND_PERPENDICULAR )
         
-        gridbox = wx.FlexGridSizer( 0, 2 )
+        gridbox = wx.FlexGridSizer( 2 )
         
         gridbox.AddGrowableCol( 1, 1 )
         
-        gridbox.AddF( self._mouse_radio, CC.FLAGS_VCENTER )
-        gridbox.AddF( self._mouse_shortcut, CC.FLAGS_EXPAND_BOTH_WAYS )
-        gridbox.AddF( self._keyboard_radio, CC.FLAGS_VCENTER )
-        gridbox.AddF( self._keyboard_shortcut, CC.FLAGS_EXPAND_BOTH_WAYS )
+        gridbox.Add( self._mouse_radio, CC.FLAGS_VCENTER )
+        gridbox.Add( self._mouse_shortcut, CC.FLAGS_EXPAND_BOTH_WAYS )
+        gridbox.Add( self._keyboard_radio, CC.FLAGS_VCENTER )
+        gridbox.Add( self._keyboard_shortcut, CC.FLAGS_EXPAND_BOTH_WAYS )
         
-        vbox.AddF( gridbox, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( gridbox, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
@@ -2925,6 +2874,8 @@ class ShortcutMouse( wx.Button ):
     
     def EventMouse( self, event ):
         
+        self.SetFocus()
+        
         shortcut = ClientData.ConvertMouseEventToShortcut( event )
         
         if shortcut is not None:
@@ -2972,12 +2923,15 @@ class StaticBox( wx.Panel ):
         title_text = wx.StaticText( self, label = title, style = wx.ALIGN_CENTER )
         title_text.SetFont( title_font )
         
-        self._sizer.AddF( title_text, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._sizer.Add( title_text, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         self.SetSizer( self._sizer )
         
     
-    def AddF( self, widget, flags ): self._sizer.AddF( widget, flags )
+    def Add( self, widget, flags ):
+        
+        self._sizer.Add( widget, flags )
+        
     
 class StaticBoxSorterForListBoxTags( StaticBox ):
     
@@ -3007,7 +2961,7 @@ class StaticBoxSorterForListBoxTags( StaticBox ):
         
         self._sorter.Bind( wx.EVT_CHOICE, self.EventSort )
         
-        self.AddF( self._sorter, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self.Add( self._sorter, CC.FLAGS_EXPAND_PERPENDICULAR )
         
     
     def ChangeTagService( self, service_key ): self._tags_box.ChangeTagService( service_key )
@@ -3028,410 +2982,12 @@ class StaticBoxSorterForListBoxTags( StaticBox ):
         
         self._tags_box = tags_box
         
-        self.AddF( self._tags_box, CC.FLAGS_EXPAND_BOTH_WAYS )
+        self.Add( self._tags_box, CC.FLAGS_EXPAND_BOTH_WAYS )
         
     
     def SetTagsByMedia( self, media, force_reload = False ):
         
         self._tags_box.SetTagsByMedia( media, force_reload = force_reload )
-        
-    
-class TextAndGauge( wx.Panel ):
-    
-    def __init__( self, parent ):
-        
-        wx.Panel.__init__( self, parent )
-        
-        self._st = BetterStaticText( self )
-        self._gauge = Gauge( self )
-        
-        vbox = wx.BoxSizer( wx.VERTICAL )
-        
-        vbox.AddF( self._st, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._gauge, CC.FLAGS_EXPAND_PERPENDICULAR )
-        
-        self.SetSizer( vbox )
-        
-    
-    def SetValue( self, text, value, range ):
-        
-        if text != self._st.GetLabelText():
-            
-            self._st.SetLabelText( text )
-            
-        
-        self._gauge.SetRange( range )
-        self._gauge.SetValue( value )
-        
-    
-( DirtyEvent, EVT_DIRTY ) = wx.lib.newevent.NewEvent()
-
-class ThreadToGUIUpdater( object ):
-    
-    def __init__( self, event_handler, func ):
-        
-        self._event_handler = event_handler
-        self._func = func
-        
-        self._lock = threading.Lock()
-        self._dirty_count = 0
-        self._args = None
-        self._kwargs = None
-        
-        self._my_object_alive = True
-        
-        event_handler.Bind( EVT_DIRTY, self.EventDirty )
-        
-    
-    def EventDirty( self, event ):
-        
-        with self._lock:
-            
-            try:
-                
-                self._func( *self._args, **self._kwargs )
-                
-            except HydrusExceptions.ShutdownException:
-                
-                pass
-                
-            
-            self._dirty_count = 0
-            
-        
-    
-    # the point here is that we can spam this a hundred times a second and wx will catch up to it when the single event gets processed
-    # if wx feels like running fast, it'll update at 60fps
-    # if not, we won't get bungled up with 10,000+ pubsub events in the event queue
-    def Update( self, *args, **kwargs ):
-        
-        with self._lock:
-            
-            self._args = args
-            self._kwargs = kwargs
-            
-            if self._dirty_count == 0 and self._my_object_alive:
-                
-                def wx_code():
-                    
-                    try:
-                        
-                        wx.PostEvent( self._event_handler, DirtyEvent() )
-                        
-                    except TypeError:
-                        
-                        if not bool( self._event_handler ):
-                            
-                            # Event Handler is dead (would give PyDeadObjectError if accessed--PostEvent throws TypeError)
-                            
-                            self._my_object_alive = False
-                            
-                        else:
-                            
-                            raise
-                            
-                        
-                    
-                    
-                
-                wx.CallAfter( wx_code )
-                
-            
-            self._dirty_count += 1
-            
-            take_a_break = self._dirty_count % 1000 == 0
-            
-        
-        # just in case we are choking the wx thread, let's give it a break every now and then
-        if take_a_break:
-            
-            time.sleep( 0.25 )
-            
-        
-    
-( TimeDeltaEvent, EVT_TIME_DELTA ) = wx.lib.newevent.NewCommandEvent()
-
-class TimeDeltaButton( wx.Button ):
-    
-    def __init__( self, parent, min = 1, days = False, hours = False, minutes = False, seconds = False, monthly_allowed = False ):
-        
-        wx.Button.__init__( self, parent )
-        
-        self._min = min
-        self._show_days = days
-        self._show_hours = hours
-        self._show_minutes = minutes
-        self._show_seconds = seconds
-        self._monthly_allowed = monthly_allowed
-        
-        self._value = self._min
-        
-        self.SetLabelText( 'initialising' )
-        
-        self.Bind( wx.EVT_BUTTON, self.EventButton )
-        
-    
-    def _RefreshLabel( self ):
-        
-        text_components = []
-        
-        value = self._value
-        
-        if value is None:
-            
-            text = 'monthly'
-            
-        else:
-            
-            text = HydrusData.ConvertTimeDeltaToPrettyString( value )
-            
-        
-        self.SetLabelText( text )
-        
-    
-    def EventButton( self, event ):
-        
-        import ClientGUIDialogs
-        
-        with ClientGUIDialogs.DialogInputTimeDelta( self, self._value, min = self._min, days = self._show_days, hours = self._show_hours, minutes = self._show_minutes, seconds = self._show_seconds, monthly_allowed = self._monthly_allowed ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_OK:
-                
-                value = dlg.GetValue()
-                
-                self.SetValue( value )
-                
-                new_event = TimeDeltaEvent( 0 )
-                
-                wx.PostEvent( self, new_event )
-                
-            
-        
-    
-    def GetValue( self ):
-        
-        return self._value
-        
-    
-    def SetValue( self, value ):
-        
-        self._value = value
-        
-        self._RefreshLabel()
-        
-        self.GetParent().Layout()
-        
-    
-class TimeDeltaCtrl( wx.Panel ):
-    
-    def __init__( self, parent, min = 1, days = False, hours = False, minutes = False, seconds = False, monthly_allowed = False ):
-        
-        wx.Panel.__init__( self, parent )
-        
-        self._min = min
-        self._show_days = days
-        self._show_hours = hours
-        self._show_minutes = minutes
-        self._show_seconds = seconds
-        self._monthly_allowed = monthly_allowed
-        
-        hbox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        if self._show_days:
-            
-            self._days = wx.SpinCtrl( self, min = 0, max = 360, size = ( 50, -1 ) )
-            self._days.Bind( wx.EVT_SPINCTRL, self.EventChange )
-            
-            hbox.AddF( self._days, CC.FLAGS_VCENTER )
-            hbox.AddF( BetterStaticText( self, 'days' ), CC.FLAGS_VCENTER )
-            
-        
-        if self._show_hours:
-            
-            self._hours = wx.SpinCtrl( self, min = 0, max = 23, size = ( 45, -1 ) )
-            self._hours.Bind( wx.EVT_SPINCTRL, self.EventChange )
-            
-            hbox.AddF( self._hours, CC.FLAGS_VCENTER )
-            hbox.AddF( BetterStaticText( self, 'hours' ), CC.FLAGS_VCENTER )
-            
-        
-        if self._show_minutes:
-            
-            self._minutes = wx.SpinCtrl( self, min = 0, max = 59, size = ( 45, -1 ) )
-            self._minutes.Bind( wx.EVT_SPINCTRL, self.EventChange )
-            
-            hbox.AddF( self._minutes, CC.FLAGS_VCENTER )
-            hbox.AddF( BetterStaticText( self, 'minutes' ), CC.FLAGS_VCENTER )
-            
-        
-        if self._show_seconds:
-            
-            self._seconds = wx.SpinCtrl( self, min = 0, max = 59, size = ( 45, -1 ) )
-            self._seconds.Bind( wx.EVT_SPINCTRL, self.EventChange )
-            
-            hbox.AddF( self._seconds, CC.FLAGS_VCENTER )
-            hbox.AddF( BetterStaticText( self, 'seconds' ), CC.FLAGS_VCENTER )
-            
-        
-        if self._monthly_allowed:
-            
-            self._monthly = wx.CheckBox( self )
-            self._monthly.Bind( wx.EVT_CHECKBOX, self.EventChange )
-            
-            hbox.AddF( self._monthly, CC.FLAGS_VCENTER )
-            hbox.AddF( BetterStaticText( self, 'monthly' ), CC.FLAGS_VCENTER )
-            
-        
-        self.SetSizer( hbox )
-        
-    
-    def _UpdateEnables( self ):
-        
-        value = self.GetValue()
-        
-        if value is None:
-            
-            if self._show_days:
-                
-                self._days.Disable()
-                
-            
-            if self._show_hours:
-                
-                self._hours.Disable()
-                
-            
-            if self._show_minutes:
-                
-                self._minutes.Disable()
-                
-            
-            if self._show_seconds:
-                
-                self._seconds.Disable()
-                
-            
-        else:
-            
-            if self._show_days:
-                
-                self._days.Enable()
-                
-            
-            if self._show_hours:
-                
-                self._hours.Enable()
-                
-            
-            if self._show_minutes:
-                
-                self._minutes.Enable()
-                
-            
-            if self._show_seconds:
-                
-                self._seconds.Enable()
-                
-            
-        
-    
-    def EventChange( self, event ):
-        
-        value = self.GetValue()
-        
-        if value is not None and value < self._min:
-            
-            self.SetValue( self._min )
-            
-        
-        self._UpdateEnables()
-        
-        new_event = TimeDeltaEvent( 0 )
-        
-        wx.PostEvent( self, new_event )
-        
-    
-    def GetValue( self ):
-        
-        if self._monthly_allowed and self._monthly.GetValue():
-            
-            return None
-            
-        
-        value = 0
-        
-        if self._show_days:
-            
-            value += self._days.GetValue() * 86400
-            
-        
-        if self._show_hours:
-            
-            value += self._hours.GetValue() * 3600
-            
-        
-        if self._show_minutes:
-            
-            value += self._minutes.GetValue() * 60
-            
-        
-        if self._show_seconds:
-            
-            value += self._seconds.GetValue()
-            
-        
-        return value
-        
-    
-    def SetValue( self, value ):
-        
-        if self._monthly_allowed:
-            
-            if value is None:
-                
-                self._monthly.SetValue( True )
-                
-            else:
-                
-                self._monthly.SetValue( False )
-                
-            
-        
-        if value is not None:
-            
-            if value < self._min:
-                
-                value = self._min
-                
-            
-            if self._show_days:
-                
-                self._days.SetValue( value / 86400 )
-                
-                value %= 86400
-                
-            
-            if self._show_hours:
-                
-                self._hours.SetValue( value / 3600 )
-                
-                value %= 3600
-                
-            
-            if self._show_minutes:
-                
-                self._minutes.SetValue( value / 60 )
-                
-                value %= 60
-                
-            
-            if self._show_seconds:
-                
-                self._seconds.SetValue( value )
-                
-            
-        
-        self._UpdateEnables()
         
     
 class RadioBox( StaticBox ):
@@ -3457,7 +3013,7 @@ class RadioBox( StaticBox ):
             
             radio_button = wx.RadioButton( self, label = text, style = style )
             
-            self.AddF( radio_button, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self.Add( radio_button, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             self._indices_to_radio_buttons[ index ] = radio_button
             self._radio_buttons_to_data[ radio_button ] = data
@@ -3474,108 +3030,190 @@ class RadioBox( StaticBox ):
             
         
     
-    def SetSelection( self, index ): self._indices_to_radio_buttons[ index ].SetValue( True )
-    
-    def SetString( self, index, text ): self._indices_to_radio_buttons[ index ].SetLabelText( text )
-    
-class WaitingPolitelyStaticText( wx.StaticText ):
-    
-    def __init__( self, parent, page_key ):
+    def SetSelection( self, index ):
         
-        wx.StaticText.__init__( self, parent, label = 'ready  ' )
-        
-        self._page_key = page_key
-        self._waiting = False
-        
-        HG.client_controller.sub( self, 'SetWaitingPolitely', 'waiting_politely' )
-        
-        self.SetWaitingPolitely( self._page_key, False )
+        self._indices_to_radio_buttons[ index ].SetValue( True )
         
     
-    def SetWaitingPolitely( self, page_key, value ):
+    def SetString( self, index, text ):
         
-        if page_key == self._page_key:
+        self._indices_to_radio_buttons[ index ].SetLabelText( text )
+        
+    
+class TextAndGauge( wx.Panel ):
+    
+    def __init__( self, parent ):
+        
+        wx.Panel.__init__( self, parent )
+        
+        self._st = BetterStaticText( self )
+        self._gauge = Gauge( self )
+        
+        vbox = wx.BoxSizer( wx.VERTICAL )
+        
+        vbox.Add( self._st, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._gauge, CC.FLAGS_EXPAND_PERPENDICULAR )
+        
+        self.SetSizer( vbox )
+        
+    
+    def SetValue( self, text, value, range ):
+        
+        if not self:
             
-            self._waiting = value
-            
-            if self._waiting:
-                
-                self.SetLabelText( 'waiting' )
-                self.SetToolTipString( 'waiting before attempting another download' )
-                
-            else:
-                
-                self.SetLabelText( 'ready  ' )
-                self.SetToolTipString( 'ready to download' )
-                
+            return
             
         
-    
-class WaitingPolitelyTrafficLight( BufferedWindow ):
-    
-    def __init__( self, parent, page_key ):
-        
-        BufferedWindow.__init__( self, parent, size = ( 19, 19 ) )
-        
-        self._page_key = page_key
-        self._waiting = False
-        
-        HG.client_controller.sub( self, 'SetWaitingPolitely', 'waiting_politely' )
-        
-        self.SetWaitingPolitely( self._page_key, False )
-        
-    
-    def _Draw( self, dc ):
-        
-        dc.SetBackground( wx.Brush( wx.SystemSettings.GetColour( wx.SYS_COLOUR_FRAMEBK ) ) )
-        
-        dc.Clear()
-        
-        if self._waiting:
+        if text != self._st.GetLabelText():
             
-            dc.SetBrush( wx.Brush( wx.Colour( 250, 190, 77 ) ) )
+            self._st.SetLabelText( text )
+            
+        
+        self._gauge.SetRange( range )
+        self._gauge.SetValue( value )
+        
+    
+class TextAndPasteCtrl( wx.Panel ):
+    
+    def __init__( self, parent, add_callable ):
+        
+        self._add_callable = add_callable
+        
+        wx.Panel.__init__( self, parent )
+        
+        self._text_input = wx.TextCtrl( self, style = wx.TE_PROCESS_ENTER )
+        self._text_input.Bind( wx.EVT_KEY_DOWN, self.EventKeyDown )
+        
+        self._paste_button = BetterBitmapButton( self, CC.GlobalBMPs.paste, self._Paste )
+        self._paste_button.SetToolTip( 'Paste multiple inputs from the clipboard. Assumes the texts are newline-separated.' )
+        
+        #
+        
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        hbox.Add( self._text_input, CC.FLAGS_EXPAND_BOTH_WAYS )
+        hbox.Add( self._paste_button, CC.FLAGS_VCENTER )
+        
+        self.SetSizer( hbox )
+        
+    
+    def _Paste( self ):
+        
+        raw_text = HG.client_controller.GetClipboardText()
+        
+        try:
+            
+            texts = [ text for text in HydrusText.DeserialiseNewlinedTexts( raw_text ) if text != '' ]
+            
+            if len( texts ) > 0:
+                
+                self._add_callable( texts )
+                
+            
+        except:
+            
+            wx.MessageBox( 'I could not understand what was in the clipboard' )
+            
+        
+    
+    def EventKeyDown( self, event ):
+        
+        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+        
+        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
+            
+            text = self._text_input.GetValue()
+            
+            if text != '':
+                
+                self._add_callable( ( text, ) )
+                
+            
+            self._text_input.SetValue( '' )
             
         else:
             
-            dc.SetBrush( wx.Brush( wx.Colour( 77, 250, 144 ) ) )
-            
-        
-        dc.SetPen( wx.Pen( wx.SystemSettings.GetColour( wx.SYS_COLOUR_BTNSHADOW ) ) )
-        
-        dc.DrawCircle( 9, 9, 7 )
-        
-    
-    def SetWaitingPolitely( self, page_key, value ):
-        
-        if page_key == self._page_key:
-            
-            self._waiting = value
-            
-            if self._waiting:
-                
-                self.SetToolTipString( 'waiting before attempting another download' )
-                
-            else:
-                
-                self.SetToolTipString( 'ready to download' )
-                
-            
-            self._dirty = True
-            
-            self.Refresh()
+            event.Skip()
             
         
     
-def GetWaitingPolitelyControl( parent, page_key ):
+    def GetValue( self ):
+        
+        return self._text_input.GetValue()
+        
     
-    new_options = HG.client_controller.GetNewOptions()
+    def SetValue( self, text ):
+        
+        self._text_input.SetValue( text )
+        
     
-    if new_options.GetBoolean( 'waiting_politely_text' ):
+class ThreadToGUIUpdater( object ):
+    
+    def __init__( self, win, func ):
         
-        return WaitingPolitelyStaticText( parent, page_key )
+        self._win = win
+        self._func = func
         
-    else:
+        self._lock = threading.Lock()
+        self._dirty_count = 0
         
-        return WaitingPolitelyTrafficLight( parent, page_key )
+        self._args = None
+        self._kwargs = None
+        
+        self._doing_it = False
+        
+    
+    def WXDoIt( self ):
+        
+        with self._lock:
+            
+            if not self._win:
+                
+                self._win = None
+                
+                return
+                
+            
+            try:
+                
+                self._func( *self._args, **self._kwargs )
+                
+            except HydrusExceptions.ShutdownException:
+                
+                pass
+                
+            
+            self._dirty_count = 0
+            self._doing_it = False
+            
+        
+    
+    # the point here is that we can spam this a hundred times a second, updating the args and kwargs, and wx will catch up to it when it can
+    # if wx feels like running fast, it'll update at 60fps
+    # if not, we won't get bungled up with 10,000+ pubsub events in the event queue
+    def Update( self, *args, **kwargs ):
+        
+        with self._lock:
+            
+            self._args = args
+            self._kwargs = kwargs
+            
+            if not self._doing_it and not HG.view_shutdown:
+                
+                wx.CallAfter( self.WXDoIt )
+                
+                self._doing_it = True
+                
+            
+            self._dirty_count += 1
+            
+            take_a_break = self._dirty_count % 1000 == 0
+            
+        
+        # just in case we are choking the wx thread, let's give it a break every now and then
+        if take_a_break:
+            
+            time.sleep( 0.25 )
+            
         
     

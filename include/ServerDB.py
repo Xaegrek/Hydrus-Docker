@@ -1,6 +1,5 @@
 import collections
 import hashlib
-import httplib
 import HydrusConstants as HC
 import HydrusDB
 import HydrusEncryption
@@ -89,6 +88,8 @@ def GenerateRepositoryUpdateTableName( service_id ):
 class DB( HydrusDB.HydrusDB ):
     
     READ_WRITE_ACTIONS = [ 'access_key', 'immediate_content_update', 'registration_keys' ]
+    
+    TRANSACTION_COMMIT_TIME = 120
     
     def __init__( self, controller, db_dir, db_name, no_wal = False ):
         
@@ -369,7 +370,7 @@ class DB( HydrusDB.HydrusDB ):
         
         # inserts
         
-        current_time_struct = time.gmtime()
+        current_time_struct = time.localtime()
         
         ( current_year, current_month ) = ( current_time_struct.tm_year, current_time_struct.tm_mon )
         
@@ -1535,7 +1536,7 @@ class DB( HydrusDB.HydrusDB ):
         
         ( name, ) = self._c.execute( 'SELECT name FROM services WHERE service_id = ?;', ( service_id, ) ).fetchone()
         
-        HydrusData.Print( 'Creating update for ' + repr( name ) + ' from ' + HydrusData.ConvertTimestampToPrettyTime( begin ) + ' to ' + HydrusData.ConvertTimestampToPrettyTime( end ) )
+        HydrusData.Print( 'Creating update for ' + repr( name ) + ' from ' + HydrusData.ConvertTimestampToPrettyTime( begin, in_gmt = True ) + ' to ' + HydrusData.ConvertTimestampToPrettyTime( end, in_gmt = True ) )
         
         updates = self._RepositoryGenerateUpdates( service_id, begin, end )
         
@@ -3168,14 +3169,16 @@ class DB( HydrusDB.HydrusDB ):
                             file_path = os.path.join( dir, filename )
                             thumbnail_path = file_path + '.thumbnail'
                             
-                            if HydrusFileHandling.GetMime( file_path ) in ( HC.IMAGE_PNG, HC.IMAGE_GIF ):
+                            mime = HydrusFileHandling.GetMime( file_path )
+                            
+                            if mime in ( HC.IMAGE_PNG, HC.IMAGE_GIF ):
                                 
                                 if os.path.exists( thumbnail_path ):
                                     
                                     os.remove( thumbnail_path )
                                     
                                 
-                                thumbnail = HydrusFileHandling.GenerateThumbnail( file_path )
+                                thumbnail = HydrusFileHandling.GenerateThumbnail( file_path, mime )
                                 
                                 with open( thumbnail_path, 'wb' ) as f:
                                     

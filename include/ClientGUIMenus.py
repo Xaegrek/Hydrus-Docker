@@ -1,6 +1,7 @@
-import ClientConstants as CC
 import collections
+import HydrusData
 import HydrusGlobals as HG
+import os
 import wx
 
 menus_to_submenus = collections.defaultdict( set )
@@ -10,7 +11,7 @@ def AppendMenu( menu, submenu, label ):
     
     label = SanitiseLabel( label )
     
-    menu.AppendMenu( CC.ID_NULL, label, submenu )
+    menu.AppendSubMenu( submenu, label )
     
     menus_to_submenus[ menu ].add( submenu )
     
@@ -24,7 +25,7 @@ def AppendMenuBitmapItem( event_handler, menu, label, description, bitmap, calla
     
     menu_item.SetBitmap( bitmap )
     
-    menu.AppendItem( menu_item )
+    menu.Append( menu_item )
     
     BindMenuItem( event_handler, menu, menu_item, callable, *args, **kwargs )
     
@@ -85,9 +86,13 @@ def BindMenuItem( event_handler, menu, menu_item, callable, *args, **kwargs ):
     
     menus_to_menu_item_data[ menu ].add( ( menu_item, event_handler ) )
     
-def DestroyMenuItems( menu ):
+def CreateMenu():
     
-    handler = HG.client_controller.GetApp()
+    menu = wx.Menu()
+    
+    return menu
+    
+def UnbindMenuItems( menu ):
     
     menu_item_data = menus_to_menu_item_data[ menu ]
     
@@ -95,23 +100,42 @@ def DestroyMenuItems( menu ):
     
     for ( menu_item, event_handler ) in menu_item_data:
         
+        if not event_handler: # under some circumstances, this has been deleted before the menu was
+            
+            continue
+            
+        
         event_handler.Unbind( wx.EVT_MENU, source = menu_item )
         
-        menu_item.Destroy()
+    
+    if menu in menus_to_submenus:
+        
+        submenus = menus_to_submenus[ menu ]
+        
+        for submenu in submenus:
+            
+            UnbindMenuItems( submenu )
+            
+            submenu.is_dead = True
+            
+        
+        del menus_to_submenus[ menu ]
         
     
-    submenus = menus_to_submenus[ menu ]
+def DestroyMenu( window, menu ):
     
-    del menus_to_submenus[ menu ]
+    UnbindMenuItems( menu )
     
-    for submenu in submenus:
+    menu.is_dead = True
+    
+    # if the window we just popupmenu'd on is dead now (i.e. it died while the menu was open), destroying the menu will cause a crash and letting the event continue will cause a crash
+    
+    if not window:
         
-        DestroyMenuItems( submenu )
+        message = 'A window just died before its menu could be safely destroyed! If an exception were not raised here, the program would crash! If you know you did something tricky, please avoid this in future. If you think you did something normal, please let hydrus dev know.'
         
-    
-def DestroyMenu( menu ):
-    
-    DestroyMenuItems( menu )
+        raise Exception( message )
+        
     
     menu.Destroy()
     
@@ -119,12 +143,34 @@ def GetEventCallable( callable, *args, **kwargs ):
     
     def event_callable( event ):
         
-        callable( *args, **kwargs )
+        if HG.menu_profile_mode:
+            
+            summary = 'Profiling menu: ' + repr( callable )
+            
+            HydrusData.ShowText( summary )
+            
+            HydrusData.Profile( summary, 'callable( *args, **kwargs )', globals(), locals() )
+            
+        else:
+            
+            callable( *args, **kwargs )
+            
         
     
     return event_callable
     
+def MenuIsDead( menu ):
+    
+    # doing 'if menu' doesn't work for the deadobject test, wew
+    
+    return hasattr( menu, 'is_dead' )
+    
 def SanitiseLabel( label ):
+    
+    if label == '':
+        
+        label = '-invalid label-'
+        
     
     return label.replace( '&', '&&' )
     

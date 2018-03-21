@@ -9,12 +9,7 @@ import HydrusData
 import HydrusExceptions
 import re
 import HydrusGlobals as HG
-
-re_newlines = re.compile( '[\r\n]', re.UNICODE )
-re_multiple_spaces = re.compile( '\\s+', re.UNICODE )
-re_trailing_space = re.compile( '\\s$', re.UNICODE )
-re_leading_space_or_garbage = re.compile( '^(\\s|-|system:)', re.UNICODE )
-re_leading_single_colon = re.compile( '^:(?!:)', re.UNICODE )
+import HydrusText
 
 def CensorshipMatch( tag, censorships ):
     
@@ -72,6 +67,34 @@ def CensorshipMatch( tag, censorships ):
     
     return False
     
+def CollapseMultipleSortedNumericTagsToMinMax( tags ):
+    
+    if len( tags ) <= 2:
+        
+        return tags
+        
+    else:
+        
+        includes_non_numeric_tag = True in ( not isinstance( ConvertTagToSortable( tag ), tuple ) for tag in tags )
+        
+        if includes_non_numeric_tag:
+            
+            return tags
+            
+        else:
+            
+            # this list of tags is entirely numeric and may well be something like 1, 2, 3, 4, 5
+            # the caller wants to present 1-5 instead, so lets cut out the first and last
+            
+            if not isinstance( tags, list ):
+                
+                tags = list( tags )
+                
+            
+            return [ tags[0], tags[-1] ]
+            
+        
+    
 def ConvertTagToSortable( t ):
     
     if len( t ) > 0 and t[0].isdecimal():
@@ -88,8 +111,14 @@ def ConvertTagToSortable( t ):
         
         for character in t:
             
-            if character.isdecimal(): int_component += character
-            else: break
+            if character.isdecimal():
+                
+                int_component += character
+                
+            else:
+                
+                break
+                
             
             i += 1
             
@@ -97,7 +126,6 @@ def ConvertTagToSortable( t ):
         str_component = t[i:]
         
         number = int( int_component )
-        
         
         return ( number, str_component )
         
@@ -162,7 +190,7 @@ def CleanTag( tag ):
         
         if tag.startswith( ':' ):
             
-            tag = re_leading_single_colon.sub( '::', tag ) # Convert anything starting with one colon to start with two i.e. :D -> ::D
+            tag = HydrusText.re_leading_single_colon.sub( '::', tag ) # Convert anything starting with one colon to start with two i.e. :D -> ::D
             
             tag = StripTextOfGumpf( tag )
             
@@ -246,16 +274,13 @@ def SplitTag( tag ):
     
 def StripTextOfGumpf( t ):
     
-    t = re_newlines.sub( '', t )
+    t = HydrusText.re_newlines.sub( '', t )
     
-    t = re_multiple_spaces.sub( ' ', t )
+    t = HydrusText.re_multiple_spaces.sub( ' ', t )
     
-    t = re_trailing_space.sub( '', t )
+    t = HydrusText.re_trailing_space.sub( '', t )
     
-    while re_leading_space_or_garbage.search( t ) is not None:
-        
-        t = re_leading_space_or_garbage.sub( '', t )
-        
+    t = HydrusText.re_leading_space_or_garbage.sub( '', t )
     
     return t
     

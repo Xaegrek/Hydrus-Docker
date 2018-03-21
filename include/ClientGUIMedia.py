@@ -8,11 +8,13 @@ import ClientGUICommon
 import ClientGUIDialogs
 import ClientGUIDialogsManage
 import ClientGUIMenus
+import ClientGUIScrolledPanels
 import ClientGUIScrolledPanelsEdit
 import ClientGUIScrolledPanelsManagement
 import ClientGUIShortcuts
 import ClientGUITopLevelWindows
 import ClientMedia
+import ClientSearch
 import ClientTags
 import collections
 import HydrusExceptions
@@ -33,10 +35,6 @@ import yaml
 import HydrusData
 import HydrusGlobals as HG
 import webbrowser
-
-# Option Enums
-
-ID_TIMER_ANIMATION = wx.NewId()
 
 def AddServiceKeyLabelsToMenu( menu, service_keys, phrase ):
     
@@ -101,9 +99,7 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
         wx.ScrolledWindow.__init__( self, parent, size = ( 0, 0 ), style = wx.BORDER_SUNKEN )
         ClientMedia.ListeningMediaList.__init__( self, file_service_key, media_results )
         
-        self.SetDoubleBuffered( True ) # This seems to stop some bad scroll draw logic, where top/bottom row is auto-drawn undrawn and then paint event called
-        
-        self.SetBackgroundColour( wx.Colour( *HC.options[ 'gui_colours' ][ 'thumbgrid_background' ] ) )
+        self._UpdateBackgroundColour()
         
         self.SetScrollRate( 0, 50 )
         
@@ -117,16 +113,17 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
         
         HG.client_controller.sub( self, 'AddMediaResults', 'add_media_results' )
         HG.client_controller.sub( self, 'SetFocussedMedia', 'set_focus' )
-        HG.client_controller.sub( self, 'PageHidden', 'page_hidden' )
-        HG.client_controller.sub( self, 'PageShown', 'page_shown' )
         HG.client_controller.sub( self, 'Collect', 'collect_media' )
         HG.client_controller.sub( self, 'Sort', 'sort_media' )
         HG.client_controller.sub( self, 'FileDumped', 'file_dumped' )
         HG.client_controller.sub( self, 'RemoveMedia', 'remove_media' )
+        HG.client_controller.sub( self, '_UpdateBackgroundColour', 'notify_new_colourset' )
+        
+        self._due_a_forced_selection_pub = False
         
         self._PublishSelectionChange()
         
-        self.Bind( wx.EVT_CHAR_HOOK, self.EventCharHook )
+        self._my_shortcut_handler = ClientGUIShortcuts.ShortcutsHandler( self, [ 'media' ] )
         
     
     def _Archive( self ):
@@ -155,20 +152,54 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
         
     
+    def _ArchiveDeleteFilter( self ):
+        
+        media_results = self.GenerateMediaResults( discriminant = CC.DISCRIMINANT_LOCAL_BUT_NOT_IN_TRASH, selected_media = set( self._selected_media ), for_media_viewer = True )
+        
+        if len( media_results ) > 0:
+            
+            canvas_frame = ClientGUICanvas.CanvasFrame( self.GetTopLevelParent() )
+            
+            canvas_window = ClientGUICanvas.CanvasMediaListFilterArchiveDelete( canvas_frame, self._page_key, media_results )
+            
+            canvas_frame.SetCanvas( canvas_window )
+            
+        
+    
     def _CopyBMPToClipboard( self ):
         
-        media = self._focussed_media.GetDisplayMedia()
-        
-        HG.client_controller.pub( 'clipboard', 'bmp', media )
+        if self._focussed_media is not None:
+            
+            media = self._focussed_media.GetDisplayMedia()
+            
+            if media.GetMime() in HC.IMAGES and media.GetDuration() is None:
+                
+                HG.client_controller.pub( 'clipboard', 'bmp', media )
+                
+            else:
+                
+                wx.MessageBox( 'Sorry, cannot take bmps of anything but static images right now!' )
+                
+            
         
     
     def _CopyFilesToClipboard( self ):
         
         client_files_manager = HG.client_controller.client_files_manager
         
-        hashes = self._GetSelectedHashes( discriminant = CC.DISCRIMINANT_LOCAL, ordered = True )
+        media = self._GetSelectedFlatMedia( discriminant = CC.DISCRIMINANT_LOCAL )
         
-        paths = [ client_files_manager.GetFilePath( hash ) for hash in hashes ]
+        paths = []
+        
+        for m in media:
+            
+            hash = m.GetHash()
+            mime = m.GetMime()
+            
+            path = client_files_manager.GetFilePath( hash, mime )
+            
+            paths.append( path )
+            
         
         HG.client_controller.pub( 'clipboard', 'paths', paths )
         
@@ -448,7 +479,7 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
     
     def _EditDuplicateActionOptions( self, duplicate_type ):
         
-        new_options = HG.client_controller.GetNewOptions()
+        new_options = HG.client_controller.new_options
         
         duplicate_action_options = new_options.GetDuplicateActionOptions( duplicate_type )
         
@@ -474,7 +505,7 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
             display_media = self._focussed_media.GetDisplayMedia()
             
-            new_options = HG.client_controller.GetNewOptions()
+            new_options = HG.client_controller.new_options
             
             media_show_action = new_options.GetMediaShowAction( display_media.GetMime() )
             
@@ -487,7 +518,11 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
                 
                 path = client_files_manager.GetFilePath( hash, mime )
                 
-                HydrusPaths.LaunchFile( path )
+                new_options = HG.client_controller.new_options
+                
+                launch_path = new_options.GetMimeLaunch( mime )
+                
+                HydrusPaths.LaunchFile( path, launch_path )
                 
                 return
                 
@@ -514,20 +549,6 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
         
     
-    def _ArchiveDeleteFilter( self ):
-        
-        media_results = self.GenerateMediaResults( discriminant = CC.DISCRIMINANT_LOCAL_BUT_NOT_IN_TRASH, selected_media = set( self._selected_media ), for_media_viewer = True )
-        
-        if len( media_results ) > 0:
-            
-            canvas_frame = ClientGUICanvas.CanvasFrame( self.GetTopLevelParent() )
-            
-            canvas_window = ClientGUICanvas.CanvasMediaListFilterArchiveDelete( canvas_frame, self._page_key, media_results )
-            
-            canvas_frame.SetCanvas( canvas_window )
-            
-        
-    
     def _GetNumSelected( self ):
         
         return sum( [ media.GetNumFiles() for media in self._selected_media ] )
@@ -539,34 +560,7 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
         
         num_selected = self._GetNumSelected()
         
-        ( sorted_mime_classes, selected_mime_classes ) = self._GetSortedSelectedMimeClasses()
-        
-        if sorted_mime_classes == set( [ 'image' ] ):
-            
-            num_files_descriptor = 'image'
-            
-        elif sorted_mime_classes == set( [ 'video' ] ):
-            
-            num_files_descriptor = 'video'
-            
-        else:
-            
-            num_files_descriptor = 'file'
-            
-        
-        if selected_mime_classes == set( [ 'image' ] ):
-            
-            selected_files_descriptor = 'image'
-            
-        elif selected_mime_classes == set( [ 'video' ] ):
-            
-            selected_files_descriptor = 'video'
-            
-        else:
-            
-            selected_files_descriptor = 'file'
-            
-        
+        ( num_files_descriptor, selected_files_descriptor ) = self._GetSortedSelectedMimeDescriptors()
         
         if num_files == 1:
             
@@ -577,27 +571,29 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             num_files_string = HydrusData.ConvertIntToPrettyString( num_files ) + ' ' + num_files_descriptor + 's'
             
         
-        if selected_files_descriptor == num_files_descriptor:
+        s = num_files_string # 23 files
+        
+        if num_selected == 0:
             
-            selected_files_string = HydrusData.ConvertIntToPrettyString( num_selected )
+            if num_files > 0:
+                
+                pretty_total_size = self._GetPrettyTotalSize()
+                
+                s += ' - totalling ' + pretty_total_size
+                
             
         else:
             
-            if num_selected == 1:
+            s += ' - '
+            
+            if num_selected == 1 or selected_files_descriptor == num_files_descriptor:
                 
-                selected_files_string = '1 ' + selected_files_descriptor
+                selected_files_string = HydrusData.ConvertIntToPrettyString( num_selected )
                 
             else:
                 
                 selected_files_string = HydrusData.ConvertIntToPrettyString( num_selected ) + ' ' + selected_files_descriptor + 's'
                 
-            
-        
-        s = num_files_string # 23 files
-        
-        if num_selected > 0:
-            
-            s += ' - '
             
             if num_selected == 1: # 23 files - 1 video selected, file_info
                 
@@ -609,11 +605,20 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
                 
                 num_inbox = sum( ( media.GetNumInbox() for media in self._selected_media ) )
                 
-                if num_inbox == num_selected: inbox_phrase = 'all in inbox, '
-                elif num_inbox == 0: inbox_phrase = 'all archived, '
-                else: inbox_phrase = HydrusData.ConvertIntToPrettyString( num_inbox ) + ' in inbox and ' + HydrusData.ConvertIntToPrettyString( num_selected - num_inbox ) + ' archived, '
+                if num_inbox == num_selected:
+                    
+                    inbox_phrase = 'all in inbox, '
+                    
+                elif num_inbox == 0:
+                    
+                    inbox_phrase = 'all archived, '
+                    
+                else:
+                    
+                    inbox_phrase = HydrusData.ConvertIntToPrettyString( num_inbox ) + ' in inbox and ' + HydrusData.ConvertIntToPrettyString( num_selected - num_inbox ) + ' archived, '
+                    
                 
-                pretty_total_size = self._GetPrettyTotalSelectedSize()
+                pretty_total_size = self._GetPrettyTotalSize( only_selected = True )
                 
                 s += selected_files_string + ' selected, ' + inbox_phrase + 'totalling ' + pretty_total_size
                 
@@ -622,21 +627,42 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
         return s
         
     
-    def _GetPrettyTotalSelectedSize( self ):
+    def _GetPrettyTotalSize( self, only_selected = False ):
         
-        total_size = sum( [ media.GetSize() for media in self._selected_media ] )
-        
-        unknown_size = False in ( media.IsSizeDefinite() for media in self._selected_media )
-        
-        if total_size == 0:
+        if only_selected:
             
-            if unknown_size: return 'unknown size'
-            else: return HydrusData.ConvertIntToBytes( 0 )
+            media_source = self._selected_media
             
         else:
             
-            if unknown_size: return HydrusData.ConvertIntToBytes( total_size ) + ' + some unknown size'
-            else: return HydrusData.ConvertIntToBytes( total_size )
+            media_source = self._sorted_media
+            
+        
+        total_size = sum( [ media.GetSize() for media in media_source ] )
+        
+        unknown_size = False in ( media.IsSizeDefinite() for media in media_source )
+        
+        if total_size == 0:
+            
+            if unknown_size:
+                
+                return 'unknown size'
+                
+            else:
+                
+                return HydrusData.ConvertIntToBytes( 0 )
+                
+            
+        else:
+            
+            if unknown_size:
+                
+                return HydrusData.ConvertIntToBytes( total_size ) + ' + some unknown size'
+                
+            else:
+                
+                return HydrusData.ConvertIntToBytes( total_size )
+                
             
         
     
@@ -667,21 +693,28 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
         return result
         
     
-    def _GetSelectedFlatMedia( self ):
+    def _GetSelectedFlatMedia( self, has_location = None, discriminant = None, not_uploaded_to = None ):
+        
+        # this now always delivers sorted results
         
         flat_media = []
         
-        for media in self._selected_media:
+        for media in self._sorted_media:
             
-            if media.IsCollection():
+            if media in self._selected_media:
                 
-                flat_media.extend( media.GetFlatMedia() )
-                
-            else:
-                
-                flat_media.append( media )
+                if media.IsCollection():
+                    
+                    flat_media.extend( media.GetFlatMedia() )
+                    
+                else:
+                    
+                    flat_media.append( media )
+                    
                 
             
+        
+        flat_media = [ media for media in flat_media if media.MatchesDiscriminant( has_location = has_location, discriminant = discriminant, not_uploaded_to = not_uploaded_to ) ]
         
         return flat_media
         
@@ -692,61 +725,69 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
             hash = self._focussed_media.GetDisplayMedia().GetHash()
             
-            HG.client_controller.pub( 'new_similar_to', CC.LOCAL_FILE_SERVICE_KEY, hash, max_hamming )
+            initial_predicates = [ ClientSearch.Predicate( HC.PREDICATE_TYPE_SYSTEM_SIMILAR_TO, ( hash, max_hamming ) ) ]
+            
+            HG.client_controller.pub( 'new_page_query', CC.LOCAL_FILE_SERVICE_KEY, initial_predicates = initial_predicates )
             
         
     
-    def _GetSortedSelectedMimeClasses( self ):
+    def _GetSortedSelectedMimeDescriptors( self ):
         
-        sorted_mimes = set()
-        
-        for media in self._sorted_media:
+        def GetDescriptor( classes ):
             
-            mime = media.GetMime()
+            if len( classes ) == 0:
+                
+                return 'file'
+                
             
-            if mime in HC.IMAGES:
+            if len( classes ) == 1:
                 
-                sorted_mimes.add( 'image' )
+                ( mime, ) = classes
                 
-            elif mime in HC.VIDEO:
+                return HC.mime_string_lookup[ mime ]
                 
-                sorted_mimes.add( 'video' )
+            
+            if len( classes.difference( HC.IMAGES ) ) == 0:
                 
-            elif mime in HC.AUDIO:
+                return 'image'
                 
-                sorted_mimes.add( 'audio' )
+            elif len( classes.difference( HC.VIDEO ) ) == 0:
+                
+                return 'video'
+                
+            elif len( classes.difference( HC.AUDIO ) ) == 0:
+                
+                return 'audio file'
                 
             else:
                 
-                sorted_mimes.add( 'misc' )
+                return 'file'
                 
             
         
-        selected_mimes = set()
-        
-        for media in self._selected_media:
+        if len( self._sorted_media ) > 1000:
             
-            mime = media.GetMime()
+            sorted_mime_descriptor = 'file'
             
-            if mime in HC.IMAGES:
-                
-                selected_mimes.add( 'image' )
-                
-            elif mime in HC.VIDEO:
-                
-                selected_mimes.add( 'video' )
-                
-            elif mime in HC.AUDIO:
-                
-                selected_mimes.add( 'audio' )
-                
-            else:
-                
-                selected_mimes.add( 'misc' )
-                
+        else:
+            
+            sorted_mimes = { media.GetMime() for media in self._sorted_media }
+            
+            sorted_mime_descriptor = GetDescriptor( sorted_mimes )
             
         
-        return ( sorted_mimes, selected_mimes )
+        if len( self._selected_media ) > 1000:
+            
+            selected_mime_descriptor = 'file'
+            
+        else:
+            
+            selected_mimes = { media.GetMime() for media in self._selected_media }
+            
+            selected_mime_descriptor = GetDescriptor( selected_mimes )
+            
+        
+        return ( sorted_mime_descriptor, selected_mime_descriptor )
         
     
     def _HitMedia( self, media, ctrl, shift ):
@@ -839,6 +880,70 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
         
     
+    def _ManageNotes( self ):
+        
+        def wx_do_it( media, notes ):
+            
+            if not self:
+                
+                return
+                
+            
+            title = 'manage notes'
+            
+            with ClientGUITopLevelWindows.DialogEdit( self, title ) as dlg:
+                
+                panel = ClientGUIScrolledPanels.EditSingleCtrlPanel( dlg, [ 'manage_file_notes' ] )
+                
+                control = wx.TextCtrl( panel, style = wx.TE_MULTILINE )
+                
+                size = ClientData.ConvertTextToPixels( control, ( 80, 14 ) )
+                
+                control.SetInitialSize( size )
+                
+                control.SetValue( notes )
+                
+                panel.SetControl( control )
+                
+                dlg.SetPanel( panel )
+                
+                wx.CallAfter( control.SetFocus )
+                wx.CallAfter( control.SetInsertionPointEnd )
+                
+                if dlg.ShowModal() == wx.ID_OK:
+                    
+                    notes = control.GetValue()
+                    
+                    hash = media.GetHash()
+                    
+                    content_updates = [ HydrusData.ContentUpdate( HC.CONTENT_TYPE_NOTES, HC.CONTENT_UPDATE_SET, ( notes, hash ) ) ]
+                    
+                    service_keys_to_content_updates = { CC.LOCAL_NOTES_SERVICE_KEY : content_updates }
+                    
+                    HG.client_controller.Write( 'content_updates', service_keys_to_content_updates )
+                    
+                
+            
+            self.SetFocus()
+            
+        
+        def thread_wait( media ):
+            
+            # if it ultimately makes sense, I can load/cache notes in the media result
+            
+            notes = HG.client_controller.Read( 'file_notes', media.GetHash() )
+            
+            wx.CallAfter( wx_do_it, media, notes )
+            
+        
+        if self._focussed_media is None:
+            
+            return
+            
+        
+        HG.client_controller.CallToThread( thread_wait, self._focussed_media.GetDisplayMedia() )
+        
+    
     def _ManageRatings( self ):
         
         if len( self._selected_media ) > 0:
@@ -924,18 +1029,24 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
         
         if self._focussed_media is not None:
             
-            if self._focussed_media.GetLocationsManager().IsLocal():
+            open_externally_media = self._focussed_media.GetDisplayMedia()
+            
+            if open_externally_media.GetLocationsManager().IsLocal():
                 
-                hash = self._focussed_media.GetHash()
-                mime = self._focussed_media.GetMime()
+                hash = open_externally_media.GetHash()
+                mime = open_externally_media.GetMime()
                 
                 client_files_manager = HG.client_controller.client_files_manager
                 
                 path = client_files_manager.GetFilePath( hash, mime )
                 
-                self._SetFocussedMedia( None )
+                new_options = HG.client_controller.new_options
                 
-                HydrusPaths.LaunchFile( path )
+                launch_path = new_options.GetMimeLaunch( mime )
+                
+                HydrusPaths.LaunchFile( path, launch_path )
+                
+                HG.client_controller.pub( 'media_focus_went_to_external_program', self._page_key )
                 
             
         
@@ -1006,120 +1117,52 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
         
     
-    def _ProcessApplicationCommand( self, command ):
+    def _PublishSelectionChange( self, force_reload = False ):
         
-        command_processed = True
-        
-        command_type = command.GetCommandType()
-        data = command.GetData()
-        
-        if command_type == CC.APPLICATION_COMMAND_TYPE_SIMPLE:
+        if HG.client_controller.gui.IsCurrentPage( self._page_key ):
             
-            action = data
-            
-            if action == 'manage_file_ratings':
+            if len( self._selected_media ) == 0:
                 
-                self._ManageRatings()
-                
-            elif action == 'manage_file_tags':
-                
-                self._ManageTags()
-                
-            elif action == 'archive_file':
-                
-                self._Archive()
-                
-            elif action == 'inbox_file':
-                
-                self._Inbox()
-                
-            elif action == 'remove_file_from_view':
-                
-                self._Remove()
-                
-            elif action == 'open_file_in_external_program':
-                
-                self._OpenExternally()
-                
-            elif action == 'launch_the_archive_delete_filter':
-                
-                self._ArchiveDeleteFilter()
+                tags_media = self._sorted_media
                 
             else:
                 
-                command_processed = False
+                tags_media = self._selected_media
+                
+            
+            force_reload = force_reload or self._due_a_forced_selection_pub
+            
+            HG.client_controller.pub( 'new_tags_selection', self._page_key, tags_media, force_reload = force_reload )
+            HG.client_controller.pub( 'new_page_status', self._page_key, self._GetPrettyStatus() )
+            
+            if force_reload:
+                
+                self._due_a_forced_selection_pub = False
                 
             
         else:
             
-            command_processed = False
+            if force_reload:
+                
+                self._due_a_forced_selection_pub = True
+                
             
-        
-        return command_processed
-        
-    
-    def _ProcessShortcut( self, shortcut ):
-        
-        shortcut_processed = False
-        
-        command = HG.client_controller.GetCommandFromShortcut( [ 'media' ], shortcut )
-        
-        if command is not None:
-            
-            command_processed = self._ProcessApplicationCommand( command )
-            
-            shortcut_processed = command_processed
-            
-        
-        return shortcut_processed
-        
-    
-    def _PublishSelectionChange( self, force_reload = False ):
-        
-        if len( self._selected_media ) == 0:
-            
-            tags_media = self._sorted_media
-            
-        else:
-            
-            tags_media = self._selected_media
-            
-        
-        HG.client_controller.pub( 'new_tags_selection', self._page_key, tags_media, force_reload = force_reload )
-        HG.client_controller.pub( 'new_page_status', self._page_key, self._GetPrettyStatus() )
         
     
     def _PublishSelectionIncrement( self, medias ):
         
-        HG.client_controller.pub( 'increment_tags_selection', self._page_key, medias )
-        HG.client_controller.pub( 'new_page_status', self._page_key, self._GetPrettyStatus() )
+        if HG.client_controller.gui.IsCurrentPage( self._page_key ):
+            
+            HG.client_controller.pub( 'increment_tags_selection', self._page_key, medias )
+            HG.client_controller.pub( 'new_page_status', self._page_key, self._GetPrettyStatus() )
+            
+        else:
+            
+            self._due_a_forced_selection_pub = True
+            
         
     
     def _RecalculateVirtualSize( self ): pass
-    
-    def _RecheckVideoMetadata( self ):
-        
-        flat_media = self._GetSelectedFlatMedia()
-        
-        hashes = { media.GetHash() for media in flat_media if media.GetMime() in HC.VIDEO }
-        
-        if len( hashes ) > 0:
-            
-            text = 'This will reparse the ' + HydrusData.ConvertIntToPrettyString( len( hashes ) ) + ' selected videos using a slower but more accurate routine.'
-            text += os.linesep * 2
-            text += 'If you see videos that seem to render too fast or cut short of frames half way through, this may fix it.'
-            text += os.linesep * 2
-            text += 'It may take some time to reparse the files, and you will need to refresh your search to see the updated videos.'
-            
-            with ClientGUIDialogs.DialogYesNo( self, text ) as dlg:
-                
-                if dlg.ShowModal() == wx.ID_YES:
-                    
-                    HG.client_controller.Write( 'recheck_video_metadata', hashes )
-                    
-                
-            
-        
     
     def _RedrawMedia( self, media ): pass
     
@@ -1130,6 +1173,30 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
         collections = [ media for media in self._selected_media if media.IsCollection() ]
         
         self._RemoveMediaDirectly( singletons, collections )
+        
+    
+    def _ReparseFile( self ):
+        
+        flat_media = self._GetSelectedFlatMedia()
+        
+        hashes = { media.GetHash() for media in flat_media }
+        
+        if len( hashes ) > 0:
+            
+            text = 'This will reparse the ' + HydrusData.ConvertIntToPrettyString( len( hashes ) ) + ' selected files\' metadata and regenerate their thumbnails.'
+            text += os.linesep * 2
+            text += 'If the files were imported before some recent improvement in the parsing code (such as EXIF rotation or bad video resolution or duration or frame count calculation), this will update them.'
+            text += os.linesep * 2
+            text += 'It may take some time to reparse the files.'
+            
+            with ClientGUIDialogs.DialogYesNo( self, text ) as dlg:
+                
+                if dlg.ShowModal() == wx.ID_YES:
+                    
+                    HG.client_controller.Write( 'reparse_files', hashes )
+                    
+                
+            
         
     
     def _RescindDownloadSelected( self ):
@@ -1177,8 +1244,8 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
                 
             elif select_type in ( 'inbox', 'archive' ):
                 
-                inbox_media = { m for m in self._sorted_media if m.HasInbox() }
-                archive_media = { m for m in self._sorted_media if m not in inbox_media }
+                inbox_media = [ m for m in self._sorted_media if m.HasInbox() ]
+                archive_media = [ m for m in self._sorted_media if not m.HasInbox() ]
                 
                 if select_type == 'inbox':
                     
@@ -1198,8 +1265,27 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
                 media_to_deselect = [ m for m in self._selected_media if file_service_key not in m.GetLocationsManager().GetCurrent() ]
                 media_to_select = [ m for m in self._sorted_media if m not in self._selected_media and file_service_key in m.GetLocationsManager().GetCurrent() ]
                 
+            elif select_type in ( 'local', 'remote' ):
+                
+                local_media = [ m for m in self._sorted_media if m.GetLocationsManager().IsLocal() ]
+                remote_media = [ m for m in self._sorted_media if m.GetLocationsManager().IsRemote() ]
+                
+                if select_type == 'local':
+                    
+                    media_to_deselect = [ m for m in remote_media if m in self._selected_media ]
+                    media_to_select = [ m for m in local_media if m not in self._selected_media ]
+                    
+                elif select_type == 'remote':
+                    
+                    media_to_deselect = [ m for m in local_media if m in self._selected_media ]
+                    media_to_select = [ m for m in remote_media if m not in self._selected_media ]
+                    
+                
             
-            if self._focussed_media in media_to_deselect: self._SetFocussedMedia( None )
+            if self._focussed_media in media_to_deselect:
+                
+                self._SetFocussedMedia( None )
+                
             
             self._DeselectSelect( media_to_deselect, media_to_select )
             
@@ -1226,7 +1312,7 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
             yes_no_text = 'set all pair relationships to ' + HC.duplicate_type_string_lookup[ duplicate_type ] + ' (with default duplicate action/merge options)'
             
-            new_options = HG.client_controller.GetNewOptions()
+            new_options = HG.client_controller.new_options
             
             duplicate_action_options = new_options.GetDuplicateActionOptions( duplicate_type )
             
@@ -1240,6 +1326,21 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             flat_media = self._GetSelectedFlatMedia()
             
             media_pairs = list( itertools.combinations( flat_media, 2 ) )
+            
+        
+        if len( media_pairs ) > 100:
+            
+            message = 'The duplicate system does not yet work well for large groups of duplicates. This is about to ask if you want to apply a dupe status for more than 100 pairs.'
+            message += os.linesep * 2
+            message += 'Unless you are testing the system or have another good reason to try this, I recommend you step back for now.'
+            
+            with ClientGUIDialogs.DialogYesNo( self, message, yes_label = 'I know what I am doing', no_label = 'step back for now' ) as dlg:
+                
+                if dlg.ShowModal() != wx.ID_YES:
+                    
+                    return
+                    
+                
             
         
         message = 'Are you sure you want to ' + yes_no_text + ' for the ' + HydrusData.ConvertIntToPrettyString( len( media_pairs ) ) + ' pairs?'
@@ -1287,7 +1388,7 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
                 
                 duplicate_type = dlg_1.GetChoice()
                 
-                new_options = HG.client_controller.GetNewOptions()
+                new_options = HG.client_controller.new_options
                 
                 duplicate_action_options = new_options.GetDuplicateActionOptions( duplicate_type )
                 
@@ -1395,13 +1496,13 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
         
         if hashes is not None and len( hashes ) > 0:
             
-            HG.client_controller.pub( 'new_page_query', self._file_service_key, initial_hashes = hashes )
+            HG.client_controller.pub( 'new_page_query', self._file_service_key, initial_hashes = hashes, do_sort = True )
             
         
     
     def _ShowSelectionInNewPage( self ):
         
-        hashes = self._GetSelectedHashes()
+        hashes = self._GetSelectedHashes( ordered = True )
         
         if hashes is not None and len( hashes ) > 0:
             
@@ -1444,6 +1545,15 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
         
     
+    def _UpdateBackgroundColour( self ):
+        
+        new_options = HG.client_controller.new_options
+        
+        self.SetBackgroundColour( new_options.GetColour( CC.COLOUR_THUMBGRID_BACKGROUND ) )
+        
+        self.Refresh()
+        
+    
     def _UploadDirectory( self, file_service_key ):
         
         hashes = self._GetSelectedHashes()
@@ -1478,19 +1588,10 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
         
         if page_key == self._page_key:
             
+            HG.client_controller.pub( 'refresh_page_name', self._page_key )
+            
             return ClientMedia.ListeningMediaList.AddMediaResults( self, media_results, append = append )
             
-        
-    
-    def Archive( self, hashes ):
-        
-        affected_media = self._GetMedia( hashes )
-        
-        if len( affected_media ) > 0: self._RedrawMedia( affected_media )
-        
-        self._PublishSelectionChange()
-        
-        if self._focussed_media is not None: self._HitMedia( self._focussed_media, False, False )
         
     
     def ClearPageKey( self ):
@@ -1512,26 +1613,6 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
         
     
-    def EventCharHook( self, event ):
-        
-        if ClientGUIShortcuts.IShouldCatchCharHook( self ):
-            
-            shortcut = ClientData.ConvertKeyEventToShortcut( event )
-            
-            if shortcut is not None:
-                
-                shortcut_processed = self._ProcessShortcut( shortcut )
-                
-                if shortcut_processed:
-                    
-                    return
-                    
-                
-            
-        
-        event.Skip()
-        
-    
     def FileDumped( self, page_key, hash, status ):
         
         if page_key == self._page_key:
@@ -1544,50 +1625,145 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
         
     
-    def PageHidden( self, page_key ):
+    def PageHidden( self ):
         
-        if page_key == self._page_key:
-            
-            HG.client_controller.pub( 'preview_changed', self._page_key, None )
-            
+        HG.client_controller.pub( 'preview_changed', self._page_key, None )
         
     
-    def PageShown( self, page_key ):
+    def PageShown( self ):
         
-        if page_key == self._page_key:
+        HG.client_controller.pub( 'preview_changed', self._page_key, self._focussed_media )
+        
+        self._PublishSelectionChange()
+        
+    
+    def ProcessApplicationCommand( self, command ):
+        
+        command_processed = True
+        
+        command_type = command.GetCommandType()
+        data = command.GetData()
+        
+        if command_type == CC.APPLICATION_COMMAND_TYPE_SIMPLE:
             
-            HG.client_controller.pub( 'preview_changed', self._page_key, self._focussed_media )
+            action = data
             
-            self._PublishSelectionChange()
+            if action == 'copy_bmp':
+                
+                self._CopyBMPToClipboard()
+                
+            elif action == 'copy_file':
+                
+                self._CopyFilesToClipboard()
+                
+            elif action == 'copy_path':
+                
+                self._CopyPathsToClipboard()
+                
+            elif action == 'copy_sha256_hash':
+                
+                self._CopyHashesToClipboard( 'sha256' )
+                
+            elif action == 'manage_file_ratings':
+                
+                self._ManageRatings()
+                
+            elif action == 'manage_file_tags':
+                
+                self._ManageTags()
+                
+            elif action == 'manage_file_urls':
+                
+                self._ManageURLs()
+                
+            elif action == 'manage_file_notes':
+                
+                self._ManageNotes()
+                
+            elif action == 'archive_file':
+                
+                self._Archive()
+                
+            elif action == 'delete_file':
+                
+                self._Delete()
+                
+            elif action == 'inbox_file':
+                
+                self._Inbox()
+                
+            elif action == 'remove_file_from_view':
+                
+                self._Remove()
+                
+            elif action == 'get_similar_to_exact':
+                
+                self._GetSimilarTo( HC.HAMMING_EXACT_MATCH )
+                
+            elif action == 'get_similar_to_very_similar':
+                
+                self._GetSimilarTo( HC.HAMMING_VERY_SIMILAR )
+                
+            elif action == 'get_similar_to_similar':
+                
+                self._GetSimilarTo( HC.HAMMING_SIMILAR )
+                
+            elif action == 'get_similar_to_speculative':
+                
+                self._GetSimilarTo( HC.HAMMING_SPECULATIVE )
+                
+            elif action == 'open_file_in_external_program':
+                
+                self._OpenExternally()
+                
+            elif action == 'launch_the_archive_delete_filter':
+                
+                self._ArchiveDeleteFilter()
+                
+            else:
+                
+                command_processed = False
+                
             
+        elif command_type == CC.APPLICATION_COMMAND_TYPE_CONTENT:
+            
+            command_processed = ClientGUICommon.ApplyContentApplicationCommandToMedia( self, command, self._GetSelectedFlatMedia() )
+            
+        else:
+            
+            command_processed = False
+            
+        
+        return command_processed
         
     
     def ProcessContentUpdates( self, service_keys_to_content_updates ):
         
         ClientMedia.ListeningMediaList.ProcessContentUpdates( self, service_keys_to_content_updates )
         
-        we_were_affected = False
+        we_were_file_or_tag_affected = False
         
         for ( service_key, content_updates ) in service_keys_to_content_updates.items():
             
             for content_update in content_updates:
                 
-                ( data_type, action, row ) = content_update.ToTuple()
-                
                 hashes = content_update.GetHashes()
                 
-                affected_media = self._GetMedia( hashes )
-                
-                if len( affected_media ) > 0:
+                if self._HasHashes( hashes ):
+                    
+                    affected_media = self._GetMedia( hashes )
                     
                     self._RedrawMedia( affected_media )
                     
-                    we_were_affected = True
+                    if content_update.GetDataType() in ( HC.CONTENT_TYPE_FILES, HC.CONTENT_TYPE_MAPPINGS ):
+                        
+                        we_were_file_or_tag_affected = True
+                        
                     
                 
             
         
-        if we_were_affected:
+        if we_were_file_or_tag_affected:
             
             self._PublishSelectionChange( force_reload = True )
             
@@ -1626,13 +1802,16 @@ class MediaPanel( ClientMedia.ListeningMediaList, wx.ScrolledWindow ):
             
         
     
-    def SetFocussedMedia( self, page_key, media ): pass
+    def SetFocussedMedia( self, page_key, media ):
+        
+        pass
+        
     
-    def Sort( self, page_key, sort_by = None ):
+    def Sort( self, page_key, media_sort = None ):
         
         if page_key == self._page_key:
             
-            ClientMedia.ListeningMediaList.Sort( self, sort_by )
+            ClientMedia.ListeningMediaList.Sort( self, media_sort )
             
         
     
@@ -1686,18 +1865,17 @@ class MediaPanelThumbnails( MediaPanel ):
     
     def __init__( self, parent, page_key, file_service_key, media_results ):
         
+        self._client_bmp = wx.Bitmap( 20, 20, 24 )
+        self._clean_canvas_pages = {}
+        self._dirty_canvas_pages = []
+        self._num_rows_per_canvas_page = 1
+        
         MediaPanel.__init__( self, parent, page_key, file_service_key, media_results )
         
         self._last_client_size = ( 0, 0 )
         self._num_columns = 1
         
         self._drag_init_coordinates = None
-        self._client_bmp = wx.EmptyBitmap( 20, 20, 24 )
-        self._clean_canvas_pages = {}
-        self._dirty_canvas_pages = []
-        self._num_rows_per_canvas_page = 1
-        
-        self._timer_animation = wx.Timer( self, ID_TIMER_ANIMATION )
         self._thumbnails_being_faded_in = {}
         self._hashes_faded = set()
         
@@ -1705,14 +1883,13 @@ class MediaPanelThumbnails( MediaPanel ):
         
         self.SetScrollRate( 0, thumbnail_span_height )
         
-        self.Bind( wx.EVT_LEFT_DOWN, self.EventSelection )
-        self.Bind( wx.EVT_MOTION, self.EventDragTest )
+        self.Bind( wx.EVT_LEFT_DOWN, self.EventLeftDown )
+        self.Bind( wx.EVT_MOTION, self.EventDrag )
         self.Bind( wx.EVT_RIGHT_DOWN, self.EventShowMenu )
         self.Bind( wx.EVT_LEFT_DCLICK, self.EventMouseFullScreen )
         self.Bind( wx.EVT_MIDDLE_DOWN, self.EventMouseFullScreen )
         self.Bind( wx.EVT_PAINT, self.EventPaint )
         self.Bind( wx.EVT_SIZE, self.EventResize )
-        self.Bind( wx.EVT_TIMER, self.TIMEREventAnimation, id = ID_TIMER_ANIMATION )
         self.Bind( wx.EVT_ERASE_BACKGROUND, self.EventEraseBackground )
         
         self.Bind( wx.EVT_KEY_DOWN, self.EventKeyDown )
@@ -1722,6 +1899,7 @@ class MediaPanelThumbnails( MediaPanel ):
         self.RefreshAcceleratorTable()
         
         HG.client_controller.sub( self, 'MaintainPageCache', 'memory_maintenance_pulse' )
+        HG.client_controller.sub( self, 'NewFileInfo', 'new_file_info' )
         HG.client_controller.sub( self, 'NewThumbnails', 'new_thumbnails' )
         HG.client_controller.sub( self, 'ThumbnailsResized', 'thumbnail_resize' )
         HG.client_controller.sub( self, 'RefreshAcceleratorTable', 'notify_new_options' )
@@ -1754,7 +1932,7 @@ class MediaPanelThumbnails( MediaPanel ):
         
         ( thumbnail_span_width, thumbnail_span_height ) = self._GetThumbnailSpanDimensions()
         
-        self._dirty_canvas_pages.append( wx.EmptyBitmap( client_width, self._num_rows_per_canvas_page * thumbnail_span_height, 24 ) )
+        self._dirty_canvas_pages.append( wx.Bitmap( client_width, self._num_rows_per_canvas_page * thumbnail_span_height, 24 ) )
         
     
     def _DeleteAllDirtyPages( self ):
@@ -1796,7 +1974,9 @@ class MediaPanelThumbnails( MediaPanel ):
         
         dc = wx.MemoryDC( bmp )
         
-        dc.SetBackground( wx.Brush( wx.Colour( *HC.options[ 'gui_colours' ][ 'thumbgrid_background' ] ) ) )
+        new_options = HG.client_controller.new_options
+        
+        dc.SetBackground( wx.Brush( new_options.GetColour( CC.COLOUR_THUMBGRID_BACKGROUND ) ) )
         
         dc.SetPen( wx.TRANSPARENT_PEN )
         
@@ -1881,6 +2061,18 @@ class MediaPanelThumbnails( MediaPanel ):
     
     def _FadeThumbnails( self, thumbnails ):
         
+        if len( thumbnails ) == 0:
+            
+            return
+            
+        
+        if not HG.client_controller.gui.IsCurrentPage( self._page_key ):
+            
+            self._DirtyAllPages()
+            
+            return
+            
+        
         now_precise = HydrusData.GetNowPrecise()
         
         for thumbnail in thumbnails:
@@ -1916,17 +2108,14 @@ class MediaPanelThumbnails( MediaPanel ):
             
             image = image.AdjustChannels( 1, 1, 1, 0.20 )
             
-            alpha_bmp = wx.BitmapFromImage( image, 32 )
+            alpha_bmp = wx.Bitmap( image, 32 )
             
             image.Destroy()
             
             self._thumbnails_being_faded_in[ hash ] = ( bmp, alpha_bmp, thumbnail_index, thumbnail, now_precise, 0 )
             
         
-        if not self._timer_animation.IsRunning():
-            
-            self._timer_animation.Start( 1, wx.TIMER_ONE_SHOT )
-            
+        HG.client_controller.gui.RegisterAnimationUpdateWindow( self )
         
     
     def _GenerateMediaCollection( self, media_results ):
@@ -2072,12 +2261,20 @@ class MediaPanelThumbnails( MediaPanel ):
             
             new_position = current_position + columns + ( self._num_columns * rows )
             
-            if new_position < 0: new_position = 0
-            elif new_position > len( self._sorted_media ) - 1: new_position = len( self._sorted_media ) - 1
+            if new_position < 0:
+                
+                new_position = 0
+                
+            elif new_position > len( self._sorted_media ) - 1:
+                
+                new_position = len( self._sorted_media ) - 1
+                
             
-            self._HitMedia( self._sorted_media[ new_position ], False, shift )
+            new_media = self._sorted_media[ new_position ]
             
-            self._ScrollToMedia( media_to_use )
+            self._HitMedia( new_media, False, shift )
+            
+            self._ScrollToMedia( new_media )
             
         
         
@@ -2166,7 +2363,7 @@ class MediaPanelThumbnails( MediaPanel ):
         
         if client_dimensions_changed or thumb_layout_changed:
             
-            self._client_bmp = wx.EmptyBitmap( client_width, client_height, 24 )
+            self._client_bmp = wx.Bitmap( client_width, client_height, 24 )
             
             width_got_bigger = old_client_width < client_width
             
@@ -2203,6 +2400,8 @@ class MediaPanelThumbnails( MediaPanel ):
         self._DirtyAllPages()
         
         self._PublishSelectionChange()
+        
+        HG.client_controller.pub( 'refresh_page_name', self._page_key )
         
         self.Refresh()
         
@@ -2245,21 +2444,25 @@ class MediaPanelThumbnails( MediaPanel ):
             
             ( thumbnail_span_width, thumbnail_span_height ) = self._GetThumbnailSpanDimensions()
             
+            new_options = HG.client_controller.new_options
+            
+            percent_visible = new_options.GetInteger( 'thumbnail_visibility_scroll_percent' ) / float( 100 )
+            
             if y < start_y * y_unit:
                 
                 y_to_scroll_to = y / y_unit
                 
                 self.Scroll( -1, y_to_scroll_to )
                 
-                wx.PostEvent( self, wx.ScrollWinEvent( wx.wxEVT_SCROLLWIN_THUMBRELEASE, pos = y_to_scroll_to ) )
+                wx.QueueEvent( self.GetEventHandler(), wx.ScrollWinEvent( wx.wxEVT_SCROLLWIN_THUMBRELEASE, pos = y_to_scroll_to ) )
                 
-            elif y > ( start_y * y_unit ) + height - thumbnail_span_height:
+            elif y > ( start_y * y_unit ) + height - ( thumbnail_span_height * percent_visible ):
                 
                 y_to_scroll_to = ( y - height ) / y_unit
                 
                 self.Scroll( -1, y_to_scroll_to + 2 )
                 
-                wx.PostEvent( self, wx.ScrollWinEvent( wx.wxEVT_SCROLLWIN_THUMBRELEASE, pos = y_to_scroll_to + 2 ) )
+                wx.QueueEvent( self.GetEventHandler(), wx.ScrollWinEvent( wx.wxEVT_SCROLLWIN_THUMBRELEASE, pos = y_to_scroll_to + 2 ) )
                 
             
         
@@ -2298,6 +2501,17 @@ class MediaPanelThumbnails( MediaPanel ):
             
         
     
+    def _UpdateBackgroundColour( self ):
+        
+        MediaPanel._UpdateBackgroundColour( self )
+    
+        self._DirtyAllPages()
+        
+        self._DeleteAllDirtyPages()
+        
+        self.Refresh()
+        
+    
     def AddMediaResults( self, page_key, media_results, append = True ):
         
         if page_key == self._page_key:
@@ -2306,7 +2520,7 @@ class MediaPanelThumbnails( MediaPanel ):
             
             self._RecalculateVirtualSize()
             
-            self._FadeThumbnails( thumbnails )
+            HG.client_controller.GetCache( 'thumbnail' ).Waterfall( self._page_key, thumbnails )
             
             if len( self._selected_media ) == 0:
                 
@@ -2315,21 +2529,25 @@ class MediaPanelThumbnails( MediaPanel ):
             
         
     
-    def EventDragTest( self, event ):
+    def EventDrag( self, event ):
         
-        if event.LeftIsDown() and self._drag_init_coordinates is not None:
+        we_started_dragging_on_this_panel = self._drag_init_coordinates is not None
+        
+        if we_started_dragging_on_this_panel and event.LeftIsDown() and event.Dragging():
             
             ( old_x, old_y ) = self._drag_init_coordinates
             
-            ( x, y ) = event.GetPosition()
+            ( x, y ) = wx.GetMousePosition()
             
             ( delta_x, delta_y ) = ( x - old_x, y - old_y )
             
             if abs( delta_x ) > 5 or abs( delta_y ) > 5:
                 
-                hashes = self._GetSelectedHashes( discriminant = CC.DISCRIMINANT_LOCAL, ordered = True )
+                media = self._GetSelectedFlatMedia( discriminant = CC.DISCRIMINANT_LOCAL )
                 
-                if len( hashes ) > 0:
+                if len( media ) > 0:
+                    
+                    self._drag_init_coordinates = None
                     
                     drop_source = wx.DropSource( self )
                     
@@ -2339,7 +2557,11 @@ class MediaPanelThumbnails( MediaPanel ):
                     
                     hydrus_media_data_object = wx.CustomDataObject( 'application/hydrus-media' )
                     
-                    data = json.dumps( [ hash.encode( 'hex' ) for hash in hashes ] )
+                    hashes = [ m.GetHash() for m in media ]
+                    
+                    data = ( self._page_key.encode( 'hex' ), [ hash.encode( 'hex' ) for hash in hashes ] )
+                    
+                    data = json.dumps( data )
                     
                     hydrus_media_data_object.SetData( data )
                     
@@ -2351,9 +2573,70 @@ class MediaPanelThumbnails( MediaPanel ):
                     
                     client_files_manager = HG.client_controller.client_files_manager
                     
-                    for hash in hashes:
+                    original_paths = []
+                    
+                    for m in media:
                         
-                        path = client_files_manager.GetFilePath( hash )
+                        hash = m.GetHash()
+                        mime = m.GetMime()
+                        
+                        original_path = client_files_manager.GetFilePath( hash, mime )
+                        
+                        original_paths.append( original_path )
+                        
+                    
+                    #
+                    
+                    do_temp_dnd = False
+                    
+                    new_options = HG.client_controller.new_options
+                    
+                    if new_options.GetBoolean( 'discord_dnd_fix' ):
+                        
+                        if len( original_paths ) <= 10 and sum( ( os.path.getsize( path ) for path in original_paths ) ) < 50 * 1048576:
+                            
+                            do_temp_dnd = True
+                            
+                        
+                    
+                    temp_dir = HG.client_controller.temp_dir
+                    
+                    if do_temp_dnd and os.path.exists( temp_dir ):
+                        
+                        dnd_paths = []
+                        
+                        for original_path in original_paths:
+                            
+                            filename = os.path.basename( original_path )
+                            
+                            dnd_path = os.path.join( temp_dir, filename )
+                            
+                            if not os.path.exists( dnd_path ):
+                                
+                                HydrusPaths.MirrorFile( original_path, dnd_path )
+                                
+                            
+                            dnd_paths.append( dnd_path )
+                            
+                        
+                        flags = wx.Drag_AllowMove
+                        
+                    else:
+                        
+                        dnd_paths = original_paths
+                        
+                        if event.CmdDown():
+                            
+                            # secret dangerous discord compat mode
+                            flags = wx.Drag_AllowMove
+                            
+                        else:
+                            
+                            flags = wx.Drag_CopyOnly
+                            
+                        
+                    
+                    for path in dnd_paths:
                         
                         file_data_object.AddFile( path )
                         
@@ -2364,22 +2647,33 @@ class MediaPanelThumbnails( MediaPanel ):
                     
                     drop_source.SetData( data_object )
                     
-                    drop_source.DoDragDrop()
+                    result = drop_source.DoDragDrop( flags )
                     
-                
-                self._drag_init_coordinates = None
+                    if result not in ( wx.DragError, wx.DragNone ):
+                        
+                        HG.client_controller.pub( 'media_focus_went_to_external_program', self._page_key )
+                        
+                    
                 
             
         
+        event.Skip()
+        
     
-    def EventEraseBackground( self, event ): pass
+    def EventEraseBackground( self, event ):
+        
+        pass
+        
     
     def EventKeyDown( self, event ):
         
         # accelerator tables can't handle escape key in windows, gg
         
-        if event.GetKeyCode() == wx.WXK_ESCAPE: self._Select( 'none' )
-        if event.GetKeyCode() in ( wx.WXK_PAGEUP, wx.WXK_PAGEDOWN ):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            
+            self._Select( 'none' )
+            
+        elif event.GetKeyCode() in ( wx.WXK_PAGEUP, wx.WXK_PAGEDOWN ):
             
             if event.GetKeyCode() == wx.WXK_PAGEUP:
                 
@@ -2397,6 +2691,17 @@ class MediaPanelThumbnails( MediaPanel ):
         else: event.Skip()
         
     
+    def EventLeftDown( self, event ):
+        
+        self._drag_init_coordinates = wx.GetMousePosition()
+        
+        self._HitMedia( self._GetThumbnailUnderMouse( event ), event.CmdDown(), event.ShiftDown() )
+        
+        # this specifically does not scroll to media, as for clicking (esp. double-clicking attempts), the scroll can be jarring
+        
+        event.Skip()
+        
+    
     def EventMenu( self, event ):
         
         action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
@@ -2405,19 +2710,13 @@ class MediaPanelThumbnails( MediaPanel ):
             
             ( command, data ) = action
             
-            if command == 'archive_file': self._Archive()
-            elif command == 'copy_bmp': self._CopyBMPToClipboard()
-            elif command == 'copy_files': self._CopyFilesToClipboard()
-            elif command == 'copy_hash': self._CopyHashToClipboard( data )
-            elif command == 'copy_hashes': self._CopyHashesToClipboard( data )
-            elif command == 'copy_hashes': self._CopyHashesToClipboard( data )
-            elif command == 'copy_service_filename': self._CopyServiceFilenameToClipboard( data )
-            elif command == 'copy_service_filenames': self._CopyServiceFilenamesToClipboard( data )
-            elif command == 'copy_path': self._CopyPathToClipboard()
-            elif command == 'copy_paths': self._CopyPathsToClipboard()
+            if command == 'copy_files': self._CopyFilesToClipboard()
             elif command == 'ctrl-space':
                 
-                if self._focussed_media is not None: self._HitMedia( self._focussed_media, True, False )
+                if self._focussed_media is not None:
+                    
+                    self._HitMedia( self._focussed_media, True, False )
+                    
                 
             elif command == 'delete_file':
                 
@@ -2430,29 +2729,13 @@ class MediaPanelThumbnails( MediaPanel ):
                     self._Delete( data )
                     
                 
-            elif command == 'export_files': self._ExportFiles()
-            elif command == 'export_tags': self._ExportTags()
-            elif command == 'launch_the_archive_delete_filter': self._ArchiveDeleteFilter()
             elif command == 'fullscreen': self._FullScreen()
-            elif command == 'inbox_file': self._Inbox()
-            elif command == 'manage_file_ratings': self._ManageRatings()
-            elif command == 'manage_file_tags': self._ManageTags()
-            elif command == 'modify_account': self._ModifyUploaders( data )
-            elif command == 'open_file_in_external_program': self._OpenExternally()
-            elif command == 'petition': self._PetitionFiles( data )
-            elif command == 'remove_file_from_view': self._Remove()
-            elif command == 'rescind_petition': self._RescindPetitionFiles( data )
-            elif command == 'rescind_upload': self._RescindUploadFiles( data )
             elif command == 'scroll_end': self._ScrollEnd( False )
             elif command == 'scroll_home': self._ScrollHome( False )
             elif command == 'shift_scroll_end': self._ScrollEnd( True )
             elif command == 'shift_scroll_home': self._ScrollHome( True )
             elif command == 'select': self._Select( data )
-            elif command == 'share_on_local_booru': self._ShareOnLocalBooru()
-            elif command == 'show_selection_in_new_query_page': self._ShowSelectionInNewPage()
             elif command == 'undelete': self._Undelete()
-            elif command == 'upload': self._UploadFiles( data )
-            elif command == 'upload_directory': self._UploadDirectory( data )
             elif command == 'key_up': self._MoveFocussedThumbnail( -1, 0, False )
             elif command == 'key_down': self._MoveFocussedThumbnail( 1, 0, False )
             elif command == 'key_left': self._MoveFocussedThumbnail( 0, -1, False )
@@ -2567,23 +2850,9 @@ class MediaPanelThumbnails( MediaPanel ):
         self._last_client_size = self.GetClientSize()
         
     
-    def EventSelection( self, event ):
-        
-        self._drag_init_coordinates = event.GetPosition()
-        
-        self._HitMedia( self._GetThumbnailUnderMouse( event ), event.CmdDown(), event.ShiftDown() )
-        
-        if not ( event.CmdDown() or event.ShiftDown() ):
-            
-            self._ScrollToMedia( self._focussed_media )
-            
-        
-        event.Skip()
-        
-    
     def EventShowMenu( self, event ):
         
-        new_options = HG.client_controller.GetNewOptions()
+        new_options = HG.client_controller.new_options
         
         advanced_mode = new_options.GetBoolean( 'advanced_mode' )
         
@@ -2610,815 +2879,790 @@ class MediaPanelThumbnails( MediaPanel ):
         all_local_file_domains = services_manager.Filter( all_specific_file_domains, ( HC.LOCAL_FILE_DOMAIN, ) )
         all_file_repos = services_manager.Filter( all_specific_file_domains, ( HC.FILE_REPOSITORY, ) )
         
-        media_has_inbox = True in ( media.HasInbox() for media in self._sorted_media )
-        media_has_archive = True in ( media.HasArchive() for media in self._sorted_media )
+        has_local = True in ( locations_manager.IsLocal() for locations_manager in all_locations_managers )
+        has_remote = True in ( locations_manager.IsRemote() for locations_manager in all_locations_managers )
+        
+        num_inbox = sum( ( media.GetNumFiles() for media in self._sorted_media if media.HasInbox() ) )
+        num_archive = sum( ( media.GetNumFiles() for media in self._sorted_media if media.HasArchive() ) )
+        
+        media_has_inbox = num_inbox > 0
+        media_has_archive = num_archive > 0
         
         menu = wx.Menu()
         
-        if thumbnail is None:
+        if self._focussed_media is not None:
             
-            ClientGUIMenus.AppendMenuItem( self, menu, 'refresh', 'Refresh the current search.', HG.client_controller.pub, 'refresh_query', self._page_key )
+            # variables
             
-            if len( self._sorted_media ) > 0:
+            num_selected = self._GetNumSelected()
+            
+            multiple_selected = num_selected > 1
+            
+            services_manager = HG.client_controller.services_manager
+            
+            services = services_manager.GetServices()
+            
+            service_keys_to_names = { service.GetServiceKey() : service.GetName() for service in services }
+            
+            tag_repositories = [ service for service in services if service.GetServiceType() == HC.TAG_REPOSITORY ]
+            
+            file_repositories = [ service for service in services if service.GetServiceType() == HC.FILE_REPOSITORY ]
+            
+            ipfs_services = [ service for service in services if service.GetServiceType() == HC.IPFS ]
+            
+            local_ratings_services = [ service for service in services if service.GetServiceType() in ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) ]
+            
+            local_booru_service = [ service for service in services if service.GetServiceType() == HC.LOCAL_BOORU ][0]
+            
+            local_booru_is_running = local_booru_service.GetPort() is not None
+            
+            i_can_post_ratings = len( local_ratings_services ) > 0
+            
+            focussed_is_local = CC.COMBINED_LOCAL_FILE_SERVICE_KEY in self._focussed_media.GetLocationsManager().GetCurrent()
+            
+            file_service_keys = { repository.GetServiceKey() for repository in file_repositories }
+            upload_permission_file_service_keys = { repository.GetServiceKey() for repository in file_repositories if repository.HasPermission( HC.CONTENT_TYPE_FILES, HC.PERMISSION_ACTION_CREATE ) }
+            petition_resolve_permission_file_service_keys = { repository.GetServiceKey() for repository in file_repositories if repository.HasPermission( HC.CONTENT_TYPE_FILES, HC.PERMISSION_ACTION_OVERRULE ) }
+            petition_permission_file_service_keys = { repository.GetServiceKey() for repository in file_repositories if repository.HasPermission( HC.CONTENT_TYPE_FILES, HC.PERMISSION_ACTION_PETITION ) } - petition_resolve_permission_file_service_keys
+            user_manage_permission_file_service_keys = { repository.GetServiceKey() for repository in file_repositories if repository.HasPermission( HC.CONTENT_TYPE_ACCOUNTS, HC.PERMISSION_ACTION_OVERRULE ) }
+            ipfs_service_keys = { service.GetServiceKey() for service in ipfs_services }
+            
+            focussed_is_ipfs = True in ( service_key in ipfs_service_keys for service_key in self._focussed_media.GetLocationsManager().GetCurrentRemote() )
+            
+            if multiple_selected:
                 
-                ClientGUIMenus.AppendSeparator( menu )
+                download_phrase = 'download all possible selected'
+                rescind_download_phrase = 'cancel downloads for all possible selected'
+                upload_phrase = 'upload all possible selected to'
+                rescind_upload_phrase = 'rescind pending selected uploads to'
+                petition_phrase = 'petition all possible selected for removal from'
+                rescind_petition_phrase = 'rescind selected petitions for'
+                remote_delete_phrase = 'delete all possible selected from'
+                modify_account_phrase = 'modify the accounts that uploaded selected to'
                 
-                select_menu = wx.Menu()
+                pin_phrase = 'pin all to'
+                rescind_pin_phrase = 'rescind pin to'
+                unpin_phrase = 'unpin all from'
+                rescind_unpin_phrase = 'rescind unpin from'
                 
-                if len( self._selected_media ) < len( self._sorted_media ):
-                    
-                    ClientGUIMenus.AppendMenuItem( self, select_menu, 'all', 'Select everything.', self._Select, 'all' )
-                    
+                manage_tags_phrase = 'selected files\' tags'
+                manage_ratings_phrase = 'selected files\' ratings'
                 
-                ClientGUIMenus.AppendMenuItem( self, select_menu, 'invert', 'Swap what is and is not selected.', self._Select, 'invert' )
+                archive_phrase = 'archive selected'
+                inbox_phrase = 'return selected to inbox'
+                remove_phrase = 'remove selected from view'
+                local_delete_phrase = 'delete selected'
+                trash_delete_phrase = 'delete selected from trash now'
+                undelete_phrase = 'undelete selected'
+                dump_phrase = 'dump selected to 4chan'
+                export_phrase = 'files'
+                copy_phrase = 'files'
                 
-                if media_has_archive and media_has_inbox:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, select_menu, 'inbox', 'Select everything in the inbox.', self._Select, 'inbox' )
-                    ClientGUIMenus.AppendMenuItem( self, select_menu, 'archive', 'Select everything that is archived.', self._Select, 'archive' )
-                    
+            else:
                 
-                if len( all_specific_file_domains ) > 1:
-                    
-                    selectable_file_domains = list( all_local_file_domains )
-                    
-                    if CC.TRASH_SERVICE_KEY in all_specific_file_domains:
-                        
-                        selectable_file_domains.append( CC.TRASH_SERVICE_KEY )
-                        
-                    
-                    selectable_file_domains.extend( all_file_repos )
-                    
-                    for service_key in selectable_file_domains:
-                        
-                        name = services_manager.GetName( service_key )
-                        
-                        ClientGUIMenus.AppendMenuItem( self, select_menu, name, 'Select everything in ' + name + '.', self._Select, 'file_service', service_key )
-                        
-                    
+                download_phrase = 'download'
+                rescind_download_phrase = 'cancel download'
+                upload_phrase = 'upload to'
+                rescind_upload_phrase = 'rescind pending upload to'
+                petition_phrase = 'petition for removal from'
+                rescind_petition_phrase = 'rescind petition for'
+                remote_delete_phrase = 'delete from'
+                modify_account_phrase = 'modify the account that uploaded this to'
                 
-                if len( self._selected_media ) > 0:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, select_menu, 'none', 'Deselect everything.', self._Select, 'none' )
-                    
+                pin_phrase = 'pin to'
+                rescind_pin_phrase = 'rescind pin to'
+                unpin_phrase = 'unpin from'
+                rescind_unpin_phrase = 'rescind unpin from'
                 
-                ClientGUIMenus.AppendMenu( menu, select_menu, 'select' )
+                manage_tags_phrase = 'file\'s tags'
+                manage_ratings_phrase = 'file\'s ratings'
+                
+                archive_phrase = 'archive'
+                inbox_phrase = 'return to inbox'
+                remove_phrase = 'remove from view'
+                local_delete_phrase = 'delete'
+                trash_delete_phrase = 'delete from trash now'
+                undelete_phrase = 'undelete'
+                dump_phrase = 'dump to 4chan'
+                export_phrase = 'file'
+                copy_phrase = 'file'
                 
             
-        else:
+            # info about the files
             
-            if self._focussed_media is not None:
+            groups_of_current_remote_service_keys = [ locations_manager.GetCurrentRemote() for locations_manager in selected_locations_managers ]
+            groups_of_pending_remote_service_keys = [ locations_manager.GetPendingRemote() for locations_manager in selected_locations_managers ]
+            groups_of_petitioned_remote_service_keys = [ locations_manager.GetPetitionedRemote() for locations_manager in selected_locations_managers ]
+            groups_of_deleted_remote_service_keys = [ locations_manager.GetDeletedRemote() for locations_manager in selected_locations_managers ]
+            
+            current_remote_service_keys = HydrusData.MassUnion( groups_of_current_remote_service_keys )
+            pending_remote_service_keys = HydrusData.MassUnion( groups_of_pending_remote_service_keys )
+            petitioned_remote_service_keys = HydrusData.MassUnion( groups_of_petitioned_remote_service_keys )
+            deleted_remote_service_keys = HydrusData.MassUnion( groups_of_deleted_remote_service_keys )
+            
+            common_current_remote_service_keys = HydrusData.IntelligentMassIntersect( groups_of_current_remote_service_keys )
+            common_pending_remote_service_keys = HydrusData.IntelligentMassIntersect( groups_of_pending_remote_service_keys )
+            common_petitioned_remote_service_keys = HydrusData.IntelligentMassIntersect( groups_of_petitioned_remote_service_keys )
+            common_deleted_remote_service_keys = HydrusData.IntelligentMassIntersect( groups_of_deleted_remote_service_keys )
+            
+            disparate_current_remote_service_keys = current_remote_service_keys - common_current_remote_service_keys
+            disparate_pending_remote_service_keys = pending_remote_service_keys - common_pending_remote_service_keys
+            disparate_petitioned_remote_service_keys = petitioned_remote_service_keys - common_petitioned_remote_service_keys
+            disparate_deleted_remote_service_keys = deleted_remote_service_keys - common_deleted_remote_service_keys
+            
+            some_downloading = True in ( locations_manager.IsDownloading() for locations_manager in selected_locations_managers )
+            
+            pending_file_service_keys = pending_remote_service_keys.intersection( file_service_keys )
+            petitioned_file_service_keys = petitioned_remote_service_keys.intersection( file_service_keys )
+            
+            common_current_file_service_keys = common_current_remote_service_keys.intersection( file_service_keys )
+            common_pending_file_service_keys = common_pending_remote_service_keys.intersection( file_service_keys )
+            common_petitioned_file_service_keys = common_petitioned_remote_service_keys.intersection( file_service_keys )
+            common_deleted_file_service_keys = common_deleted_remote_service_keys.intersection( file_service_keys )
+            
+            disparate_current_file_service_keys = disparate_current_remote_service_keys.intersection( file_service_keys )
+            disparate_pending_file_service_keys = disparate_pending_remote_service_keys.intersection( file_service_keys )
+            disparate_petitioned_file_service_keys = disparate_petitioned_remote_service_keys.intersection( file_service_keys )
+            disparate_deleted_file_service_keys = disparate_deleted_remote_service_keys.intersection( file_service_keys )
+            
+            pending_ipfs_service_keys = pending_remote_service_keys.intersection( ipfs_service_keys )
+            petitioned_ipfs_service_keys = petitioned_remote_service_keys.intersection( ipfs_service_keys )
+            
+            common_current_ipfs_service_keys = common_current_remote_service_keys.intersection( ipfs_service_keys )
+            common_pending_ipfs_service_keys = common_pending_file_service_keys.intersection( ipfs_service_keys )
+            common_petitioned_ipfs_service_keys = common_petitioned_remote_service_keys.intersection( ipfs_service_keys )
+            
+            disparate_current_ipfs_service_keys = disparate_current_remote_service_keys.intersection( ipfs_service_keys )
+            disparate_pending_ipfs_service_keys = disparate_pending_remote_service_keys.intersection( ipfs_service_keys )
+            disparate_petitioned_ipfs_service_keys = disparate_petitioned_remote_service_keys.intersection( ipfs_service_keys )
+            
+            # valid commands for the files
+            
+            uploadable_file_service_keys = set()
+            
+            downloadable_file_service_keys = set()
+            
+            petitionable_file_service_keys = set()
+            
+            deletable_file_service_keys = set()
+            
+            modifyable_file_service_keys = set()
+            
+            pinnable_ipfs_service_keys = set()
+            
+            unpinnable_ipfs_service_keys = set()
+            
+            for locations_manager in selected_locations_managers:
                 
-                # variables
+                # FILE REPOS
                 
-                num_selected = self._GetNumSelected()
+                # we can upload (set pending) to a repo_id when we have permission, a file is local, not current, not pending, and either ( not deleted or we_can_overrule )
                 
-                multiple_selected = num_selected > 1
+                if locations_manager.IsLocal():
+                    
+                    uploadable_file_service_keys.update( upload_permission_file_service_keys - locations_manager.GetCurrentRemote() - locations_manager.GetPendingRemote() - ( locations_manager.GetDeletedRemote() - petition_resolve_permission_file_service_keys ) )
+                    
                 
-                services_manager = HG.client_controller.services_manager
+                # we can download (set pending to local) when we have permission, a file is not local and not already downloading and current
                 
-                services = services_manager.GetServices()
+                if not locations_manager.IsLocal() and not locations_manager.IsDownloading():
+                    
+                    downloadable_file_service_keys.update( ipfs_service_keys.union( file_service_keys ) & locations_manager.GetCurrentRemote() )
+                    
                 
-                service_keys_to_names = { service.GetServiceKey() : service.GetName() for service in services }
+                # we can petition when we have permission and a file is current and it is not already petitioned
                 
-                tag_repositories = [ service for service in services if service.GetServiceType() == HC.TAG_REPOSITORY ]
+                petitionable_file_service_keys.update( ( petition_permission_file_service_keys & locations_manager.GetCurrentRemote() ) - locations_manager.GetPetitionedRemote() )
                 
-                file_repositories = [ service for service in services if service.GetServiceType() == HC.FILE_REPOSITORY ]
+                # we can delete remote when we have permission and a file is current and it is not already petitioned
                 
-                ipfs_services = [ service for service in services if service.GetServiceType() == HC.IPFS ]
+                deletable_file_service_keys.update( ( petition_resolve_permission_file_service_keys & locations_manager.GetCurrentRemote() ) - locations_manager.GetPetitionedRemote() )
                 
-                local_ratings_services = [ service for service in services if service.GetServiceType() in ( HC.LOCAL_RATING_LIKE, HC.LOCAL_RATING_NUMERICAL ) ]
+                # we can modify users when we have permission and the file is current or deleted
                 
-                local_booru_service = [ service for service in services if service.GetServiceType() == HC.LOCAL_BOORU ][0]
+                modifyable_file_service_keys.update( user_manage_permission_file_service_keys & ( locations_manager.GetCurrentRemote() | locations_manager.GetDeletedRemote() ) )
                 
-                local_booru_is_running = local_booru_service.GetPort() is not None
+                # IPFS
                 
-                i_can_post_ratings = len( local_ratings_services ) > 0
+                # we can pin if a file is local, not current, not pending
                 
-                focussed_is_local = CC.COMBINED_LOCAL_FILE_SERVICE_KEY in self._focussed_media.GetLocationsManager().GetCurrent()
+                if locations_manager.IsLocal():
+                    
+                    pinnable_ipfs_service_keys.update( ipfs_service_keys - locations_manager.GetCurrentRemote() - locations_manager.GetPendingRemote() )
+                    
                 
-                file_service_keys = { repository.GetServiceKey() for repository in file_repositories }
-                upload_permission_file_service_keys = { repository.GetServiceKey() for repository in file_repositories if repository.HasPermission( HC.CONTENT_TYPE_FILES, HC.PERMISSION_ACTION_CREATE ) }
-                petition_resolve_permission_file_service_keys = { repository.GetServiceKey() for repository in file_repositories if repository.HasPermission( HC.CONTENT_TYPE_FILES, HC.PERMISSION_ACTION_OVERRULE ) }
-                petition_permission_file_service_keys = { repository.GetServiceKey() for repository in file_repositories if repository.HasPermission( HC.CONTENT_TYPE_FILES, HC.PERMISSION_ACTION_PETITION ) } - petition_resolve_permission_file_service_keys
-                user_manage_permission_file_service_keys = { repository.GetServiceKey() for repository in file_repositories if repository.HasPermission( HC.CONTENT_TYPE_ACCOUNTS, HC.PERMISSION_ACTION_OVERRULE ) }
-                ipfs_service_keys = { service.GetServiceKey() for service in ipfs_services }
+                # we can unpin a file if it is current and not petitioned
                 
-                focussed_is_ipfs = True in ( service_key in ipfs_service_keys for service_key in self._focussed_media.GetLocationsManager().GetCurrentRemote() )
+                unpinnable_ipfs_service_keys.update( ( ipfs_service_keys & locations_manager.GetCurrentRemote() ) - locations_manager.GetPetitionedRemote() )
                 
-                if multiple_selected:
-                    
-                    download_phrase = 'download all possible selected'
-                    rescind_download_phrase = 'cancel downloads for all possible selected'
-                    upload_phrase = 'upload all possible selected to'
-                    rescind_upload_phrase = 'rescind pending selected uploads to'
-                    petition_phrase = 'petition all possible selected for removal from'
-                    rescind_petition_phrase = 'rescind selected petitions for'
-                    remote_delete_phrase = 'delete all possible selected from'
-                    modify_account_phrase = 'modify the accounts that uploaded selected to'
-                    
-                    pin_phrase = 'pin all to'
-                    rescind_pin_phrase = 'rescind pin to'
-                    unpin_phrase = 'unpin all from'
-                    rescind_unpin_phrase = 'rescind unpin from'
-                    
-                    manage_tags_phrase = 'selected files\' tags'
-                    manage_ratings_phrase = 'selected files\' ratings'
-                    
-                    archive_phrase = 'archive selected'
-                    inbox_phrase = 'return selected to inbox'
-                    remove_phrase = 'remove selected'
-                    local_delete_phrase = 'delete selected'
-                    trash_delete_phrase = 'delete selected from trash now'
-                    undelete_phrase = 'undelete selected'
-                    dump_phrase = 'dump selected to 4chan'
-                    export_phrase = 'files'
-                    copy_phrase = 'files'
-                    
-                else:
-                    
-                    download_phrase = 'download'
-                    rescind_download_phrase = 'cancel download'
-                    upload_phrase = 'upload to'
-                    rescind_upload_phrase = 'rescind pending upload to'
-                    petition_phrase = 'petition for removal from'
-                    rescind_petition_phrase = 'rescind petition for'
-                    remote_delete_phrase = 'delete from'
-                    modify_account_phrase = 'modify the account that uploaded this to'
-                    
-                    pin_phrase = 'pin to'
-                    rescind_pin_phrase = 'rescind pin to'
-                    unpin_phrase = 'unpin from'
-                    rescind_unpin_phrase = 'rescind unpin from'
-                    
-                    manage_tags_phrase = 'file\'s tags'
-                    manage_ratings_phrase = 'file\'s ratings'
+            
+            # do the actual menu
+            
+            if multiple_selected:
+                
+                ClientGUIMenus.AppendMenuLabel( menu, HydrusData.ConvertIntToPrettyString( num_selected ) + ' files, ' + self._GetPrettyTotalSize( only_selected = True ) )
+                
+            else:
+                
+                for line in self._focussed_media.GetPrettyInfoLines():
                     
-                    archive_phrase = 'archive'
-                    inbox_phrase = 'return to inbox'
-                    remove_phrase = 'remove'
-                    local_delete_phrase = 'delete'
-                    trash_delete_phrase = 'delete from trash now'
-                    undelete_phrase = 'undelete'
-                    dump_phrase = 'dump to 4chan'
-                    export_phrase = 'file'
-                    copy_phrase = 'file'
+                    ClientGUIMenus.AppendMenuLabel( menu, line )
                     
                 
-                # info about the files
+            
+            if len( disparate_current_file_service_keys ) > 0:
                 
-                groups_of_current_remote_service_keys = [ locations_manager.GetCurrentRemote() for locations_manager in selected_locations_managers ]
-                groups_of_pending_remote_service_keys = [ locations_manager.GetPendingRemote() for locations_manager in selected_locations_managers ]
-                groups_of_petitioned_remote_service_keys = [ locations_manager.GetPetitionedRemote() for locations_manager in selected_locations_managers ]
-                groups_of_deleted_remote_service_keys = [ locations_manager.GetDeletedRemote() for locations_manager in selected_locations_managers ]
+                AddServiceKeyLabelsToMenu( menu, disparate_current_file_service_keys, 'some uploaded to' )
                 
-                current_remote_service_keys = HydrusData.MassUnion( groups_of_current_remote_service_keys )
-                pending_remote_service_keys = HydrusData.MassUnion( groups_of_pending_remote_service_keys )
-                petitioned_remote_service_keys = HydrusData.MassUnion( groups_of_petitioned_remote_service_keys )
-                deleted_remote_service_keys = HydrusData.MassUnion( groups_of_deleted_remote_service_keys )
+            
+            if multiple_selected and len( common_current_file_service_keys ) > 0:
                 
-                common_current_remote_service_keys = HydrusData.IntelligentMassIntersect( groups_of_current_remote_service_keys )
-                common_pending_remote_service_keys = HydrusData.IntelligentMassIntersect( groups_of_pending_remote_service_keys )
-                common_petitioned_remote_service_keys = HydrusData.IntelligentMassIntersect( groups_of_petitioned_remote_service_keys )
-                common_deleted_remote_service_keys = HydrusData.IntelligentMassIntersect( groups_of_deleted_remote_service_keys )
+                AddServiceKeyLabelsToMenu( menu, common_current_file_service_keys, 'selected uploaded to' )
                 
-                disparate_current_remote_service_keys = current_remote_service_keys - common_current_remote_service_keys
-                disparate_pending_remote_service_keys = pending_remote_service_keys - common_pending_remote_service_keys
-                disparate_petitioned_remote_service_keys = petitioned_remote_service_keys - common_petitioned_remote_service_keys
-                disparate_deleted_remote_service_keys = deleted_remote_service_keys - common_deleted_remote_service_keys
+            
+            if len( disparate_pending_file_service_keys ) > 0:
                 
-                some_downloading = True in ( locations_manager.IsDownloading() for locations_manager in selected_locations_managers )
+                AddServiceKeyLabelsToMenu( menu, disparate_pending_file_service_keys, 'some pending to' )
                 
-                pending_file_service_keys = pending_remote_service_keys.intersection( file_service_keys )
-                petitioned_file_service_keys = petitioned_remote_service_keys.intersection( file_service_keys )
+            
+            if len( common_pending_file_service_keys ) > 0:
                 
-                common_current_file_service_keys = common_current_remote_service_keys.intersection( file_service_keys )
-                common_pending_file_service_keys = common_pending_remote_service_keys.intersection( file_service_keys )
-                common_petitioned_file_service_keys = common_petitioned_remote_service_keys.intersection( file_service_keys )
-                common_deleted_file_service_keys = common_deleted_remote_service_keys.intersection( file_service_keys )
+                AddServiceKeyLabelsToMenu( menu, common_pending_file_service_keys, 'pending to' )
                 
-                disparate_current_file_service_keys = disparate_current_remote_service_keys.intersection( file_service_keys )
-                disparate_pending_file_service_keys = disparate_pending_remote_service_keys.intersection( file_service_keys )
-                disparate_petitioned_file_service_keys = disparate_petitioned_remote_service_keys.intersection( file_service_keys )
-                disparate_deleted_file_service_keys = disparate_deleted_remote_service_keys.intersection( file_service_keys )
+            
+            if len( disparate_petitioned_file_service_keys ) > 0:
                 
-                pending_ipfs_service_keys = pending_remote_service_keys.intersection( ipfs_service_keys )
-                petitioned_ipfs_service_keys = petitioned_remote_service_keys.intersection( ipfs_service_keys )
+                AddServiceKeyLabelsToMenu( menu, disparate_petitioned_file_service_keys, 'some petitioned from' )
                 
-                common_current_ipfs_service_keys = common_current_remote_service_keys.intersection( ipfs_service_keys )
-                common_pending_ipfs_service_keys = common_pending_file_service_keys.intersection( ipfs_service_keys )
-                common_petitioned_ipfs_service_keys = common_petitioned_remote_service_keys.intersection( ipfs_service_keys )
+            
+            if len( common_petitioned_file_service_keys ) > 0:
                 
-                disparate_current_ipfs_service_keys = disparate_current_remote_service_keys.intersection( ipfs_service_keys )
-                disparate_pending_ipfs_service_keys = disparate_pending_remote_service_keys.intersection( ipfs_service_keys )
-                disparate_petitioned_ipfs_service_keys = disparate_petitioned_remote_service_keys.intersection( ipfs_service_keys )
+                AddServiceKeyLabelsToMenu( menu, common_petitioned_file_service_keys, 'petitioned from' )
                 
-                # valid commands for the files
+            
+            if len( disparate_deleted_file_service_keys ) > 0:
                 
-                uploadable_file_service_keys = set()
+                AddServiceKeyLabelsToMenu( menu, disparate_deleted_file_service_keys, 'some deleted from' )
                 
-                downloadable_file_service_keys = set()
+            
+            if len( common_deleted_file_service_keys ) > 0:
                 
-                petitionable_file_service_keys = set()
+                AddServiceKeyLabelsToMenu( menu, common_deleted_file_service_keys, 'deleted from' )
                 
-                deletable_file_service_keys = set()
+            
+            if len( disparate_current_ipfs_service_keys ) > 0:
                 
-                modifyable_file_service_keys = set()
+                AddServiceKeyLabelsToMenu( menu, disparate_current_ipfs_service_keys, 'some pinned to' )
                 
-                pinnable_ipfs_service_keys = set()
+            
+            if multiple_selected and len( common_current_ipfs_service_keys ) > 0:
                 
-                unpinnable_ipfs_service_keys = set()
+                AddServiceKeyLabelsToMenu( menu, common_current_ipfs_service_keys, 'selected pinned to' )
                 
-                for locations_manager in selected_locations_managers:
-                    
-                    # FILE REPOS
-                    
-                    # we can upload (set pending) to a repo_id when we have permission, a file is local, not current, not pending, and either ( not deleted or we_can_overrule )
-                    
-                    if locations_manager.IsLocal():
-                        
-                        uploadable_file_service_keys.update( upload_permission_file_service_keys - locations_manager.GetCurrentRemote() - locations_manager.GetPendingRemote() - ( locations_manager.GetDeletedRemote() - petition_resolve_permission_file_service_keys ) )
-                        
-                    
-                    # we can download (set pending to local) when we have permission, a file is not local and not already downloading and current
-                    
-                    if not locations_manager.IsLocal() and not locations_manager.IsDownloading():
-                        
-                        downloadable_file_service_keys.update( ipfs_service_keys.union( file_service_keys ) & locations_manager.GetCurrentRemote() )
-                        
-                    
-                    # we can petition when we have permission and a file is current and it is not already petitioned
-                    
-                    petitionable_file_service_keys.update( ( petition_permission_file_service_keys & locations_manager.GetCurrentRemote() ) - locations_manager.GetPetitionedRemote() )
-                    
-                    # we can delete remote when we have permission and a file is current and it is not already petitioned
-                    
-                    deletable_file_service_keys.update( ( petition_resolve_permission_file_service_keys & locations_manager.GetCurrentRemote() ) - locations_manager.GetPetitionedRemote() )
-                    
-                    # we can modify users when we have permission and the file is current or deleted
-                    
-                    modifyable_file_service_keys.update( user_manage_permission_file_service_keys & ( locations_manager.GetCurrentRemote() | locations_manager.GetDeletedRemote() ) )
-                    
-                    # IPFS
-                    
-                    # we can pin if a file is local, not current, not pending
-                    
-                    if locations_manager.IsLocal():
-                        
-                        pinnable_ipfs_service_keys.update( ipfs_service_keys - locations_manager.GetCurrentRemote() - locations_manager.GetPendingRemote() )
-                        
-                    
-                    # we can unpin a file if it is current and not petitioned
-                    
-                    unpinnable_ipfs_service_keys.update( ( ipfs_service_keys & locations_manager.GetCurrentRemote() ) - locations_manager.GetPetitionedRemote() )
-                    
+            
+            if len( disparate_pending_ipfs_service_keys ) > 0:
                 
-                # do the actual menu
+                AddServiceKeyLabelsToMenu( menu, disparate_pending_ipfs_service_keys, 'some to be pinned to' )
                 
-                if multiple_selected:
-                    
-                    ClientGUIMenus.AppendMenuLabel( menu, HydrusData.ConvertIntToPrettyString( num_selected ) + ' files, ' + self._GetPrettyTotalSelectedSize() )
-                    
-                else:
-                    
-                    for line in thumbnail.GetPrettyInfoLines():
-                        
-                        ClientGUIMenus.AppendMenuLabel( menu, line )
-                        
-                    
+            
+            if len( common_pending_ipfs_service_keys ) > 0:
                 
-                if len( disparate_current_file_service_keys ) > 0:
-                    
-                    AddServiceKeyLabelsToMenu( menu, disparate_current_file_service_keys, 'some uploaded to' )
-                    
+                AddServiceKeyLabelsToMenu( menu, common_pending_ipfs_service_keys, 'to be pinned to' )
+                
+            
+            if len( disparate_petitioned_ipfs_service_keys ) > 0:
+                
+                AddServiceKeyLabelsToMenu( menu, disparate_petitioned_ipfs_service_keys, 'some to be unpinned from' )
+                
+            
+            if len( common_petitioned_ipfs_service_keys ) > 0:
                 
-                if multiple_selected and len( common_current_file_service_keys ) > 0:
+                AddServiceKeyLabelsToMenu( menu, common_petitioned_ipfs_service_keys, unpin_phrase )
+                
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
+            #
+            
+            len_interesting_remote_service_keys = 0
+            
+            len_interesting_remote_service_keys += len( downloadable_file_service_keys )
+            len_interesting_remote_service_keys += len( uploadable_file_service_keys )
+            len_interesting_remote_service_keys += len( pending_file_service_keys )
+            len_interesting_remote_service_keys += len( petitionable_file_service_keys )
+            len_interesting_remote_service_keys += len( petitioned_file_service_keys )
+            len_interesting_remote_service_keys += len( deletable_file_service_keys )
+            len_interesting_remote_service_keys += len( modifyable_file_service_keys )
+            len_interesting_remote_service_keys += len( pinnable_ipfs_service_keys )
+            len_interesting_remote_service_keys += len( pending_ipfs_service_keys )
+            len_interesting_remote_service_keys += len( unpinnable_ipfs_service_keys )
+            len_interesting_remote_service_keys += len( petitioned_ipfs_service_keys )
+            
+            if multiple_selected:
+                
+                len_interesting_remote_service_keys += len( ipfs_service_keys )
+                
+            
+            if len_interesting_remote_service_keys > 0:
+                
+                remote_action_menu = wx.Menu()
+                
+                if len( downloadable_file_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, common_current_file_service_keys, 'selected uploaded to' )
+                    ClientGUIMenus.AppendMenuItem( self, remote_action_menu, download_phrase, 'Download all possible selected files.', self._DownloadSelected )
                     
                 
-                if len( disparate_pending_file_service_keys ) > 0:
+                if some_downloading:
                     
-                    AddServiceKeyLabelsToMenu( menu, disparate_pending_file_service_keys, 'some pending to' )
+                    ClientGUIMenus.AppendMenuItem( self, remote_action_menu, rescind_download_phrase, 'Stop downloading any of the selected files.', self._RescindDownloadSelected )
                     
                 
-                if len( common_pending_file_service_keys ) > 0:
+                if len( uploadable_file_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, common_pending_file_service_keys, 'pending to' )
+                    AddServiceKeysToMenu( self, remote_action_menu, uploadable_file_service_keys, upload_phrase, 'Upload all selected files to the file repository.', self._UploadFiles )
                     
                 
-                if len( disparate_petitioned_file_service_keys ) > 0:
+                if len( pending_file_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, disparate_petitioned_file_service_keys, 'some petitioned from' )
+                    AddServiceKeysToMenu( self, remote_action_menu, pending_file_service_keys, rescind_upload_phrase, 'Rescind the pending upload to the file repository.', self._RescindUploadFiles )
                     
                 
-                if len( common_petitioned_file_service_keys ) > 0:
+                if len( petitionable_file_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, common_petitioned_file_service_keys, 'petitioned from' )
+                    AddServiceKeysToMenu( self, remote_action_menu, petitionable_file_service_keys, petition_phrase, 'Petition these files for deletion from the file repository.', self._PetitionFiles )
                     
                 
-                if len( disparate_deleted_file_service_keys ) > 0:
+                if len( petitioned_file_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, disparate_deleted_file_service_keys, 'some deleted from' )
+                    AddServiceKeysToMenu( self, remote_action_menu, petitioned_file_service_keys, rescind_petition_phrase, 'Rescind the petition to delete these files from the file repository.', self._RescindPetitionFiles )
                     
                 
-                if len( common_deleted_file_service_keys ) > 0:
+                if len( deletable_file_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, common_deleted_file_service_keys, 'deleted from' )
+                    AddServiceKeysToMenu( self, remote_action_menu, deletable_file_service_keys, remote_delete_phrase, 'Delete these files from the file repository.', self._Delete )
                     
                 
-                if len( disparate_current_ipfs_service_keys ) > 0:
+                if len( modifyable_file_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, disparate_current_ipfs_service_keys, 'some pinned to' )
+                    AddServiceKeysToMenu( self, remote_action_menu, modifyable_file_service_keys, modify_account_phrase, 'Modify the account(s) that uploaded these files to the file repository.', self._ModifyUploaders )
                     
                 
-                if multiple_selected and len( common_current_ipfs_service_keys ) > 0:
+                if len( pinnable_ipfs_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, common_current_ipfs_service_keys, 'selected pinned to' )
+                    AddServiceKeysToMenu( self, remote_action_menu, pinnable_ipfs_service_keys, pin_phrase, 'Pin these files to the ipfs service.', self._UploadFiles )
                     
                 
-                if len( disparate_pending_ipfs_service_keys ) > 0:
+                if len( pending_ipfs_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, disparate_pending_ipfs_service_keys, 'some to be pinned to' )
+                    AddServiceKeysToMenu( self, remote_action_menu, pending_ipfs_service_keys, rescind_pin_phrase, 'Rescind the pending pin to the ipfs service.', self._RescindUploadFiles )
                     
                 
-                if len( common_pending_ipfs_service_keys ) > 0:
+                if len( unpinnable_ipfs_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, common_pending_ipfs_service_keys, 'to be pinned to' )
+                    AddServiceKeysToMenu( self, remote_action_menu, unpinnable_ipfs_service_keys, unpin_phrase, 'Unpin these files from the ipfs service.', self._PetitionFiles )
                     
                 
-                if len( disparate_petitioned_ipfs_service_keys ) > 0:
+                if len( petitioned_ipfs_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, disparate_petitioned_ipfs_service_keys, 'some to be unpinned from' )
+                    AddServiceKeysToMenu( self, remote_action_menu, petitioned_ipfs_service_keys, rescind_unpin_phrase, 'Rescind the pending unpin from the ipfs service.', self._RescindPetitionFiles )
                     
                 
-                if len( common_petitioned_ipfs_service_keys ) > 0:
+                if multiple_selected and len( ipfs_service_keys ) > 0:
                     
-                    AddServiceKeyLabelsToMenu( menu, common_petitioned_ipfs_service_keys, unpin_phrase )
+                    AddServiceKeysToMenu( self, remote_action_menu, ipfs_service_keys, 'pin new directory to', 'Pin these files as a directory to the ipfs service.', self._UploadDirectory )
                     
                 
-                ClientGUIMenus.AppendSeparator( menu )
+                ClientGUIMenus.AppendMenu( menu, remote_action_menu, 'remote services' )
                 
-                #
+            
+            #
+            
+            manage_menu = wx.Menu()
+            
+            ClientGUIMenus.AppendMenuItem( self, manage_menu, manage_tags_phrase, 'Manage tags for the selected files.', self._ManageTags )
+            
+            if i_can_post_ratings:
                 
-                len_interesting_remote_service_keys = 0
+                ClientGUIMenus.AppendMenuItem( self, manage_menu, manage_ratings_phrase, 'Manage ratings for the selected files.', self._ManageRatings )
                 
-                len_interesting_remote_service_keys += len( downloadable_file_service_keys )
-                len_interesting_remote_service_keys += len( uploadable_file_service_keys )
-                len_interesting_remote_service_keys += len( pending_file_service_keys )
-                len_interesting_remote_service_keys += len( petitionable_file_service_keys )
-                len_interesting_remote_service_keys += len( petitioned_file_service_keys )
-                len_interesting_remote_service_keys += len( deletable_file_service_keys )
-                len_interesting_remote_service_keys += len( modifyable_file_service_keys )
-                len_interesting_remote_service_keys += len( pinnable_ipfs_service_keys )
-                len_interesting_remote_service_keys += len( pending_ipfs_service_keys )
-                len_interesting_remote_service_keys += len( unpinnable_ipfs_service_keys )
-                len_interesting_remote_service_keys += len( petitioned_ipfs_service_keys )
-                
-                if multiple_selected:
-                    
-                    len_interesting_remote_service_keys += len( ipfs_service_keys )
-                    
-                
-                if len_interesting_remote_service_keys > 0:
-                    
-                    remote_action_menu = wx.Menu()
-                    
-                    if len( downloadable_file_service_keys ) > 0:
-                        
-                        ClientGUIMenus.AppendMenuItem( self, remote_action_menu, download_phrase, 'Download all possible selected files.', self._DownloadSelected )
-                        
-                    
-                    if some_downloading:
-                        
-                        ClientGUIMenus.AppendMenuItem( self, remote_action_menu, rescind_download_phrase, 'Stop downloading any of the selected files.', self._RescindDownloadSelected )
-                        
-                    
-                    if len( uploadable_file_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, uploadable_file_service_keys, upload_phrase, 'Upload all selected files to the file repository.', self._UploadFiles )
-                        
-                    
-                    if len( pending_file_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, pending_file_service_keys, rescind_upload_phrase, 'Rescind the pending upload to the file repository.', self._RescindUploadFiles )
-                        
-                    
-                    if len( petitionable_file_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, petitionable_file_service_keys, petition_phrase, 'Petition these files for deletion from the file repository.', self._PetitionFiles )
-                        
-                    
-                    if len( petitioned_file_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, petitioned_file_service_keys, rescind_petition_phrase, 'Rescind the petition to delete these files from the file repository.', self._RescindPetitionFiles )
-                        
-                    
-                    if len( deletable_file_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, deletable_file_service_keys, remote_delete_phrase, 'Delete these files from the file repository.', self._Delete )
-                        
-                    
-                    if len( modifyable_file_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, modifyable_file_service_keys, modify_account_phrase, 'Modify the account(s) that uploaded these files to the file repository.', self._ModifyUploaders )
-                        
-                    
-                    if len( pinnable_ipfs_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, pinnable_ipfs_service_keys, pin_phrase, 'Pin these files to the ipfs service.', self._UploadFiles )
-                        
-                    
-                    if len( pending_ipfs_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, pending_ipfs_service_keys, rescind_pin_phrase, 'Rescind the pending pin to the ipfs service.', self._RescindUploadFiles )
-                        
-                    
-                    if len( unpinnable_ipfs_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, unpinnable_ipfs_service_keys, unpin_phrase, 'Unpin these files from the ipfs service.', self._PetitionFiles )
-                        
-                    
-                    if len( petitioned_ipfs_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, petitioned_ipfs_service_keys, rescind_unpin_phrase, 'Rescind the pending unpin from the ipfs service.', self._RescindPetitionFiles )
-                        
-                    
-                    if multiple_selected and len( ipfs_service_keys ) > 0:
-                        
-                        AddServiceKeysToMenu( self, remote_action_menu, ipfs_service_keys, 'pin new directory to', 'Pin these files as a directory to the ipfs service.', self._UploadDirectory )
-                        
-                    
-                    ClientGUIMenus.AppendMenu( menu, remote_action_menu, 'remote services' )
-                    
+            
+            ClientGUIMenus.AppendMenuItem( self, manage_menu, 'file\'s known urls', 'Manage urls for the focused file.', self._ManageURLs )
+            ClientGUIMenus.AppendMenuItem( self, manage_menu, 'file\'s notes', 'Manage notes for the focused file.', self._ManageNotes )
+            
+            ClientGUIMenus.AppendMenu( menu, manage_menu, 'manage' )
+            
+            #
+            
+            if selection_has_local:
                 
-                #
+                ClientGUIMenus.AppendMenuItem( self, menu, 'archive/delete filter', 'Launch a special media viewer that will quickly archive (left-click) and delete (right-click) the selected media.', self._ArchiveDeleteFilter )
                 
-                manage_menu = wx.Menu()
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
+            if selection_has_inbox:
                 
-                ClientGUIMenus.AppendMenuItem( self, manage_menu, manage_tags_phrase, 'Manage tags for the selected files.', self._ManageTags )
+                ClientGUIMenus.AppendMenuItem( self, menu, archive_phrase, 'Archive the selected files.', self._Archive )
                 
-                if i_can_post_ratings:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, manage_menu, manage_ratings_phrase, 'Manage ratings for the selected files.', self._ManageRatings )
-                    
+            
+            if selection_has_archive:
                 
-                ClientGUIMenus.AppendMenuItem( self, manage_menu, 'file\'s known urls', 'Manage urls for the focused file.', self._ManageURLs )
+                ClientGUIMenus.AppendMenuItem( self, menu, inbox_phrase, 'Put the selected files back in the inbox.', self._Inbox )
                 
-                ClientGUIMenus.AppendMenu( menu, manage_menu, 'manage' )
+            
+            ClientGUIMenus.AppendMenuItem( self, menu, remove_phrase, 'Remove the selected files from the current view.', self._Remove )
+            
+            if selection_has_local_file_domain:
                 
-                #
+                ClientGUIMenus.AppendMenuItem( self, menu, local_delete_phrase, 'Delete the selected files from \'my files\'.', self._Delete, CC.LOCAL_FILE_SERVICE_KEY )
                 
-                if selection_has_local and multiple_selected:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, menu, 'archive/delete filter', 'Launch a special media viewer that will quickly archive (left-click) and delete (right-click) the selected media.', self._ArchiveDeleteFilter )
-                    
+            
+            if selection_has_trash:
                 
-                ClientGUIMenus.AppendSeparator( menu )
+                ClientGUIMenus.AppendMenuItem( self, menu, trash_delete_phrase, 'Delete the selected files from the trash, forcing an immediate physical delete from your hard drive.', self._Delete, CC.TRASH_SERVICE_KEY )
+                ClientGUIMenus.AppendMenuItem( self, menu, undelete_phrase, 'Restore the selected files back to \'my files\'.', self._Undelete )
                 
-                if selection_has_inbox:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, menu, archive_phrase, 'Archive the selected files.', self._Archive )
-                    
+            
+            #
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
+            if focussed_is_local:
                 
-                if selection_has_archive:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, menu, inbox_phrase, 'Put the selected files back in the inbox.', self._Inbox )
-                    
+                ClientGUIMenus.AppendMenuItem( self, menu, 'open externally', 'Launch this file with your OS\'s default program for it.', self._OpenExternally )
                 
-                ClientGUIMenus.AppendMenuItem( self, menu, remove_phrase, 'Remove the selected files from the current view.', self._Remove )
+            
+            #
+            
+            urls = self._focussed_media.GetLocationsManager().GetURLs()
+            
+            if len( urls ) > 0:
                 
-                if selection_has_local_file_domain:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, menu, local_delete_phrase, 'Delete the selected files from \'my files\'.', self._Delete, CC.LOCAL_FILE_SERVICE_KEY )
-                    
+                urls = list( urls )
                 
-                if selection_has_trash:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, menu, trash_delete_phrase, 'Delete the selected files from the trash, forcing an immediate physical delete from your hard drive.', self._Delete, CC.TRASH_SERVICE_KEY )
-                    ClientGUIMenus.AppendMenuItem( self, menu, undelete_phrase, 'Restore the selected files back to \'my files\'.', self._Undelete )
-                    
+                urls.sort()
                 
-                #
+                urls_menu = wx.Menu()
                 
-                ClientGUIMenus.AppendSeparator( menu )
+                urls_visit_menu = wx.Menu()
+                urls_copy_menu = wx.Menu()
                 
-                if focussed_is_local:
+                for url in urls:
                     
-                    ClientGUIMenus.AppendMenuItem( self, menu, 'open externally', 'Launch this file with your OS\'s default program for it.', self._OpenExternally )
+                    ClientGUIMenus.AppendMenuItem( self, urls_visit_menu, url, 'Open this url in your web browser.', webbrowser.open, url )
+                    ClientGUIMenus.AppendMenuItem( self, urls_copy_menu, url, 'Copy this url to your clipboard.', HG.client_controller.pub, 'clipboard', 'text', url )
                     
                 
-                #
+                ClientGUIMenus.AppendMenu( urls_menu, urls_visit_menu, 'open' )
+                ClientGUIMenus.AppendMenu( urls_menu, urls_copy_menu, 'copy' )
                 
-                urls = self._focussed_media.GetLocationsManager().GetURLs()
+                ClientGUIMenus.AppendMenu( menu, urls_menu, 'known urls' )
                 
-                if len( urls ) > 0:
-                    
-                    urls = list( urls )
-                    
-                    urls.sort()
-                    
-                    urls_menu = wx.Menu()
-                    
-                    urls_visit_menu = wx.Menu()
-                    urls_copy_menu = wx.Menu()
+            
+            # share
+            
+            share_menu = wx.Menu()
+            
+            #
+            
+            if advanced_mode:
+                
+                if not HC.PLATFORM_LINUX and focussed_is_local:
                     
-                    for url in urls:
-                        
-                        ClientGUIMenus.AppendMenuItem( self, urls_visit_menu, url, 'Open this url in your web browser.', webbrowser.open, url )
-                        ClientGUIMenus.AppendMenuItem( self, urls_copy_menu, url, 'Copy this url to your clipboard.', HG.client_controller.pub, 'clipboard', 'text', url )
-                        
+                    open_menu = wx.Menu()
                     
-                    ClientGUIMenus.AppendMenu( urls_menu, urls_visit_menu, 'open' )
-                    ClientGUIMenus.AppendMenu( urls_menu, urls_copy_menu, 'copy' )
+                    ClientGUIMenus.AppendMenuItem( self, open_menu, 'in file browser', 'Show this file in your OS\'s file browser.', self._OpenFileLocation )
                     
-                    ClientGUIMenus.AppendMenu( menu, urls_menu, 'known urls' )
+                    ClientGUIMenus.AppendMenu( share_menu, open_menu, 'open' )
                     
-                
-                # share
                 
-                share_menu = wx.Menu()
+            
+            copy_menu = wx.Menu()
+            
+            if selection_has_local:
                 
-                #
+                ClientGUIMenus.AppendMenuItem( self, copy_menu, copy_phrase, 'Copy the selected files to the clipboard.', self._CopyFilesToClipboard )
                 
                 if advanced_mode:
                     
-                    if not HC.PLATFORM_LINUX and focussed_is_local:
-                        
-                        open_menu = wx.Menu()
-                        
-                        ClientGUIMenus.AppendMenuItem( self, open_menu, 'in file browser', 'Show this file in your OS\'s file browser.', self._OpenFileLocation )
-                        
-                        ClientGUIMenus.AppendMenu( share_menu, open_menu, 'open' )
-                        
+                    copy_hash_menu = wx.Menu()
                     
-                
-                copy_menu = wx.Menu()
-                
-                if selection_has_local:
+                    ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha256 (hydrus default)', 'Copy the selected file\'s SHA256 hash to the clipboard.', self._CopyHashToClipboard, 'sha256' )
+                    ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'md5', 'Copy the selected file\'s MD5 hash to the clipboard.', self._CopyHashToClipboard, 'md5' )
+                    ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha1', 'Copy the selected file\'s SHA1 hash to the clipboard.', self._CopyHashToClipboard, 'sha1' )
+                    ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha512', 'Copy the selected file\'s SHA512 hash to the clipboard.', self._CopyHashToClipboard, 'sha512' )
                     
-                    ClientGUIMenus.AppendMenuItem( self, copy_menu, copy_phrase, 'Copy the selected files to the clipboard.', self._CopyFilesToClipboard )
-                    
-                    if advanced_mode:
-                        
-                        copy_hash_menu = wx.Menu()
-                        
-                        ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha256 (hydrus default)', 'Copy the selected file\'s SHA256 hash to the clipboard.', self._CopyHashToClipboard, 'sha256' )
-                        ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'md5', 'Copy the selected file\'s MD5 hash to the clipboard.', self._CopyHashToClipboard, 'md5' )
-                        ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha1', 'Copy the selected file\'s SHA1 hash to the clipboard.', self._CopyHashToClipboard, 'sha1' )
-                        ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha512', 'Copy the selected file\'s SHA512 hash to the clipboard.', self._CopyHashToClipboard, 'sha512' )
-                        
-                        ClientGUIMenus.AppendMenu( copy_menu, copy_hash_menu, 'hash' )
-                        
-                        if multiple_selected:
-                            
-                            copy_hash_menu = wx.Menu()
-                            
-                            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha256 (hydrus default)', 'Copy the selected files\' SHA256 hashes to the clipboard.', self._CopyHashesToClipboard, 'sha256' )
-                            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'md5', 'Copy the selected files\' MD5 hashes to the clipboard.', self._CopyHashesToClipboard, 'md5' )
-                            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha1', 'Copy the selected files\' SHA1 hashes to the clipboard.', self._CopyHashesToClipboard, 'sha1' )
-                            ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha512', 'Copy the selected files\' SHA512 hashes to the clipboard.', self._CopyHashesToClipboard, 'sha512' )
-                            
-                            ClientGUIMenus.AppendMenu( copy_menu, copy_hash_menu, 'hashes' )
-                            
-                        
-                    
-                else:
-                    
-                    if advanced_mode:
-                        
-                        ClientGUIMenus.AppendMenuItem( self, copy_menu, 'sha256 hash', 'Copy the selected file\'s SHA256 hash to the clipboard.', self._CopyHashToClipboard, 'sha256' )
-                        
-                        if multiple_selected:
-                            
-                            ClientGUIMenus.AppendMenuItem( self, copy_menu, 'sha256 hashes', 'Copy the selected files\' SHA256 hash to the clipboard.', self._CopyHashesToClipboard, 'sha256' )
-                            
-                        
-                    
-                
-                for ipfs_service_key in self._focussed_media.GetLocationsManager().GetCurrentRemote().intersection( ipfs_service_keys ):
-                    
-                    name = service_keys_to_names[ ipfs_service_key ]
-                    
-                    ClientGUIMenus.AppendMenuItem( self, copy_menu, name + ' multihash', 'Copy the selected file\'s multihash to the clipboard.', self._CopyServiceFilenameToClipboard, ipfs_service_key )
-                    
-                
-                if multiple_selected:
-                    
-                    for ipfs_service_key in disparate_current_ipfs_service_keys.union( common_current_ipfs_service_keys ):
-                        
-                        name = service_keys_to_names[ ipfs_service_key ]
-                        
-                        ClientGUIMenus.AppendMenuItem( self, copy_menu, name + ' multihashes', 'Copy the selected files\' multihashes to the clipboard.', self._CopyServiceFilenamesToClipboard, ipfs_service_key )
-                        
-                    
-                
-                if focussed_is_local:
-                    
-                    if self._focussed_media.GetMime() in HC.IMAGES and self._focussed_media.GetDuration() is None:
-                        
-                        ClientGUIMenus.AppendMenuItem( self, copy_menu, 'image', 'Copy the selected file\'s image data to the clipboard (as a bmp).', self._CopyBMPToClipboard )
-                        
-                    
-                    ClientGUIMenus.AppendMenuItem( self, copy_menu, 'path', 'Copy the selected file\'s path to the clipboard.', self._CopyPathToClipboard )
-                    
-                
-                if multiple_selected and selection_has_local:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, copy_menu, 'paths', 'Copy the selected files\' paths to the clipboard.', self._CopyPathsToClipboard )
-                    
-                
-                ClientGUIMenus.AppendMenu( share_menu, copy_menu, 'copy' )
-                
-                #
-                
-                export_menu  = wx.Menu()
-                
-                ClientGUIMenus.AppendMenuItem( self, export_menu, export_phrase, 'Export the selected files to an external folder.', self._ExportFiles )
-                
-                if advanced_mode:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, export_menu, 'tags', 'Export the selected files\' tags to an external database.', self._ExportTags )
-                    
-                
-                share_menu.AppendMenu( CC.ID_NULL, 'export', export_menu )
-                
-                #
-                
-                if local_booru_is_running:
-                    
-                    ClientGUIMenus.AppendMenuItem( self, share_menu, 'on local booru', 'Share the selected files on your client\'s local booru.', self._ShareOnLocalBooru )
-                    
-                
-                #
-                
-                ClientGUIMenus.AppendMenu( menu, share_menu, 'share' )
-                
-                #
-                
-                ClientGUIMenus.AppendSeparator( menu )
-                
-                ClientGUIMenus.AppendMenuItem( self, menu, 'refresh', 'Refresh the current search.', HG.client_controller.pub, 'refresh_query', self._page_key )
-                
-                ClientGUIMenus.AppendSeparator( menu )
-                
-                if len( self._sorted_media ) > 0:
-                    
-                    select_menu = wx.Menu()
-                    
-                    if len( self._selected_media ) < len( self._sorted_media ):
-                        
-                        ClientGUIMenus.AppendMenuItem( self, select_menu, 'all', 'Select everything.', self._Select, 'all' )
-                        
-                    
-                    ClientGUIMenus.AppendMenuItem( self, select_menu, 'invert', 'Swap what is and is not selected.', self._Select, 'invert' )
-                    
-                    if media_has_archive and media_has_inbox:
-                        
-                        ClientGUIMenus.AppendMenuItem( self, select_menu, 'inbox', 'Select everything in the inbox.', self._Select, 'inbox' )
-                        ClientGUIMenus.AppendMenuItem( self, select_menu, 'archive', 'Select everything that is archived.', self._Select, 'archive' )
-                        
-                    
-                    if len( all_specific_file_domains ) > 1:
-                        
-                        selectable_file_domains = list( all_local_file_domains )
-                        
-                        if CC.TRASH_SERVICE_KEY in all_specific_file_domains:
-                            
-                            selectable_file_domains.append( CC.TRASH_SERVICE_KEY )
-                            
-                        
-                        selectable_file_domains.extend( all_file_repos )
-                        
-                        for service_key in selectable_file_domains:
-                            
-                            name = services_manager.GetName( service_key )
-                            
-                            ClientGUIMenus.AppendMenuItem( self, select_menu, name, 'Select everything in ' + name + '.', self._Select, 'file_service', service_key )
-                            
-                        
-                    
-                    if len( self._selected_media ) > 0:
-                        
-                        ClientGUIMenus.AppendMenuItem( self, select_menu, 'none', 'Deselect everything.', self._Select, 'none' )
-                        
-                    
-                    ClientGUIMenus.AppendMenu( menu, select_menu, 'select' )
-                    
-                
-                ClientGUIMenus.AppendSeparator( menu )
-                
-                ClientGUIMenus.AppendMenuItem( self, menu, 'open selection in a new page', 'Copy your current selection into a simple new page.', self._ShowSelectionInNewPage )
-                
-                if advanced_mode:
-                    
-                    duplicates_menu = menu # this is important to make the menu flexible if not multiple selected
-                    
-                    focussed_hash = self._focussed_media.GetDisplayMedia().GetHash()
+                    ClientGUIMenus.AppendMenu( copy_menu, copy_hash_menu, 'hash' )
                     
                     if multiple_selected:
                         
-                        duplicates_menu = wx.Menu()
+                        copy_hash_menu = wx.Menu()
                         
-                        duplicates_action_submenu = wx.Menu()
+                        ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha256 (hydrus default)', 'Copy the selected files\' SHA256 hashes to the clipboard.', self._CopyHashesToClipboard, 'sha256' )
+                        ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'md5', 'Copy the selected files\' MD5 hashes to the clipboard.', self._CopyHashesToClipboard, 'md5' )
+                        ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha1', 'Copy the selected files\' SHA1 hashes to the clipboard.', self._CopyHashesToClipboard, 'sha1' )
+                        ClientGUIMenus.AppendMenuItem( self, copy_hash_menu, 'sha512', 'Copy the selected files\' SHA512 hashes to the clipboard.', self._CopyHashesToClipboard, 'sha512' )
                         
-                        label = 'set this file as better than the ' + HydrusData.ConvertIntToPrettyString( num_selected - 1 ) + ' other selected'
-                        
-                        ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, label, 'Set the focused media to be better than the other selected files.', self._SetDuplicatesFocusedBetter )
-                        
-                        num_files = self._GetNumSelected()
-                        
-                        num_pairs = num_files * ( num_files - 1 ) / 2 # combinations -- n!/2(n-2)!
-                        
-                        num_pairs_text = HydrusData.ConvertIntToPrettyString( num_pairs ) + ' pairs'
-                        
-                        ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'set all selected as same quality', 'Set all the selected files as same quality duplicates.', self._SetDuplicates, HC.DUPLICATE_SAME_QUALITY )
-                        
-                        ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'set all selected as alternates', 'Set all the selected files as alternates.', self._SetDuplicates, HC.DUPLICATE_ALTERNATE )
-                        
-                        ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'set all selected as not duplicates', 'Set all the selected files as not duplicates.', self._SetDuplicates, HC.DUPLICATE_NOT_DUPLICATE )
-                        
-                        ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'make a custom duplicates action', 'Choose which duplicates status to set to this selection and customise non-default merge options.', self._SetDuplicatesCustom )
-                        
-                        ClientGUIMenus.AppendSeparator( duplicates_action_submenu )
-                        
-                        ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'send the ' + num_pairs_text + ' in this selection to be compared in the duplicates filter', 'Set all the possible pairs in the selection as unknown/potential duplicate pairs.', self._SetDuplicates, HC.DUPLICATE_UNKNOWN )
-                        
-                        ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'remove the ' + num_pairs_text + ' in this selection from the duplicates system', 'Remove all duplicates relationships from all the pairs in this selection.', self._SetDuplicates, None )
-                        
-                        ClientGUIMenus.AppendSeparator( duplicates_action_submenu )
-                        
-                        duplicates_edit_action_submenu = wx.Menu()
-                        
-                        for duplicate_type in ( HC.DUPLICATE_BETTER, HC.DUPLICATE_SAME_QUALITY, HC.DUPLICATE_ALTERNATE, HC.DUPLICATE_NOT_DUPLICATE ):
-                            
-                            ClientGUIMenus.AppendMenuItem( self, duplicates_edit_action_submenu, 'for ' + HC.duplicate_type_string_lookup[ duplicate_type ], 'Edit what happens when you set this status.', self._EditDuplicateActionOptions, duplicate_type )
-                            
-                        
-                        ClientGUIMenus.AppendMenu( duplicates_action_submenu, duplicates_edit_action_submenu, 'edit default merge options' )
-                        
-                        ClientGUIMenus.AppendMenu( menu, duplicates_menu, 'duplicates' )
-                        
-                        ClientGUIMenus.AppendMenu( duplicates_menu, duplicates_action_submenu, 'set duplicate relationships' )
-                        
-                    
-                    if HG.client_controller.DBCurrentlyDoingJob():
-                        
-                        ClientGUIMenus.AppendMenuLabel( duplicates_menu, 'Could not fetch duplicates (db currently locked)' )
-                        
-                    else:
-                        
-                        duplicate_types_to_counts = HG.client_controller.Read( 'duplicate_types_to_counts', self._file_service_key, focussed_hash )
-                        
-                        if len( duplicate_types_to_counts ) > 0:
-                            
-                            duplicates_view_menu = wx.Menu()
-                            
-                            for duplicate_type in ( HC.DUPLICATE_BETTER_OR_WORSE, HC.DUPLICATE_BETTER, HC.DUPLICATE_WORSE, HC.DUPLICATE_SAME_QUALITY, HC.DUPLICATE_ALTERNATE, HC.DUPLICATE_NOT_DUPLICATE, HC.DUPLICATE_UNKNOWN ):
-                                
-                                if duplicate_type in duplicate_types_to_counts:
-                                    
-                                    count = duplicate_types_to_counts[ duplicate_type ]
-                                    
-                                    label = HydrusData.ConvertIntToPrettyString( count ) + ' ' + HC.duplicate_type_string_lookup[ duplicate_type ]
-                                    
-                                    ClientGUIMenus.AppendMenuItem( self, duplicates_view_menu, label, 'Show these duplicates in a new page.', self._ShowDuplicatesInNewPage, focussed_hash, duplicate_type )
-                                    
-                                
-                            
-                            ClientGUIMenus.AppendMenu( duplicates_menu, duplicates_view_menu, 'view this file\'s duplicates' )
-                            
+                        ClientGUIMenus.AppendMenu( copy_menu, copy_hash_menu, 'hashes' )
                         
                     
                 
-                if advanced_mode:
-                    
-                    if self._focussed_media.HasImages():
-                        
-                        ClientGUIMenus.AppendSeparator( menu )
-                        
-                        similar_menu = wx.Menu()
-                        
-                        ClientGUIMenus.AppendMenuItem( self, similar_menu, 'exact match', 'Search the database for files that look precisely like this one.', self._GetSimilarTo, HC.HAMMING_EXACT_MATCH )
-                        ClientGUIMenus.AppendMenuItem( self, similar_menu, 'very similar', 'Search the database for files that look just like this one.', self._GetSimilarTo, HC.HAMMING_VERY_SIMILAR )
-                        ClientGUIMenus.AppendMenuItem( self, similar_menu, 'similar', 'Search the database for files that look generally like this one.', self._GetSimilarTo, HC.HAMMING_SIMILAR )
-                        ClientGUIMenus.AppendMenuItem( self, similar_menu, 'speculative', 'Search the database for files that probably look like this one. This is sometimes useful for symbols with sharp edges or lines.', self._GetSimilarTo, HC.HAMMING_SPECULATIVE )
-                        
-                        ClientGUIMenus.AppendMenu( menu, similar_menu, 'find similar files' )
-                        
-                    
+            else:
                 
                 if advanced_mode:
                     
-                    if focussed_is_local and self._focussed_media.GetMime() in HC.VIDEO:
+                    ClientGUIMenus.AppendMenuItem( self, copy_menu, 'sha256 hash', 'Copy the selected file\'s SHA256 hash to the clipboard.', self._CopyHashToClipboard, 'sha256' )
+                    
+                    if multiple_selected:
                         
-                        advanced_menu = wx.Menu()
-                        
-                        ClientGUIMenus.AppendMenuItem( self, advanced_menu, 'attempt to correct video frame count', 'Recalculate this video\'s metadata using a slower but more accurate video parsing routine.', self._RecheckVideoMetadata )
-                        
-                        ClientGUIMenus.AppendMenu( menu, advanced_menu, 'advanced' )
+                        ClientGUIMenus.AppendMenuItem( self, copy_menu, 'sha256 hashes', 'Copy the selected files\' SHA256 hash to the clipboard.', self._CopyHashesToClipboard, 'sha256' )
                         
                     
+                
+            
+            for ipfs_service_key in self._focussed_media.GetLocationsManager().GetCurrentRemote().intersection( ipfs_service_keys ):
+                
+                name = service_keys_to_names[ ipfs_service_key ]
+                
+                ClientGUIMenus.AppendMenuItem( self, copy_menu, name + ' multihash', 'Copy the selected file\'s multihash to the clipboard.', self._CopyServiceFilenameToClipboard, ipfs_service_key )
+                
+            
+            if multiple_selected:
+                
+                for ipfs_service_key in disparate_current_ipfs_service_keys.union( common_current_ipfs_service_keys ):
+                    
+                    name = service_keys_to_names[ ipfs_service_key ]
+                    
+                    ClientGUIMenus.AppendMenuItem( self, copy_menu, name + ' multihashes', 'Copy the selected files\' multihashes to the clipboard.', self._CopyServiceFilenamesToClipboard, ipfs_service_key )
+                    
+                
+            
+            if focussed_is_local:
+                
+                if self._focussed_media.GetMime() in HC.IMAGES and self._focussed_media.GetDuration() is None:
+                    
+                    ClientGUIMenus.AppendMenuItem( self, copy_menu, 'image', 'Copy the selected file\'s image data to the clipboard (as a bmp).', self._CopyBMPToClipboard )
+                    
+                
+                ClientGUIMenus.AppendMenuItem( self, copy_menu, 'path', 'Copy the selected file\'s path to the clipboard.', self._CopyPathToClipboard )
+                
+            
+            if multiple_selected and selection_has_local:
+                
+                ClientGUIMenus.AppendMenuItem( self, copy_menu, 'paths', 'Copy the selected files\' paths to the clipboard.', self._CopyPathsToClipboard )
+                
+            
+            ClientGUIMenus.AppendMenu( share_menu, copy_menu, 'copy' )
+            
+            #
+            
+            export_menu  = wx.Menu()
+            
+            ClientGUIMenus.AppendMenuItem( self, export_menu, export_phrase, 'Export the selected files to an external folder.', self._ExportFiles )
+            
+            if advanced_mode:
+                
+                ClientGUIMenus.AppendMenuItem( self, export_menu, 'tags', 'Export the selected files\' tags to an external database.', self._ExportTags )
+                
+            
+            ClientGUIMenus.AppendMenu( share_menu, export_menu, 'export' )
+            
+            #
+            
+            if local_booru_is_running:
+                
+                ClientGUIMenus.AppendMenuItem( self, share_menu, 'on local booru', 'Share the selected files on your client\'s local booru.', self._ShareOnLocalBooru )
+                
+            
+            #
+            
+            ClientGUIMenus.AppendMenu( menu, share_menu, 'share' )
+            
+            #
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
+        
+        ClientGUIMenus.AppendMenuItem( self, menu, 'refresh', 'Refresh the current search.', HG.client_controller.pub, 'refresh_query', self._page_key )
+        
+        if len( self._sorted_media ) > 0:
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
+            select_menu = wx.Menu()
+            
+            if len( self._selected_media ) < len( self._sorted_media ):
+                
+                all_label = 'all (' + HydrusData.ConvertIntToPrettyString( len( self._sorted_media ) ) + ')'
+                
+                if media_has_archive and not media_has_inbox:
+                    
+                    all_label += ' (all in archive)'
+                    
+                elif media_has_inbox and not media_has_archive:
+                    
+                    all_label += ' (all in inbox)'
+                    
+                
+                ClientGUIMenus.AppendMenuItem( self, select_menu, all_label, 'Select everything.', self._Select, 'all' )
+                
+            
+            if media_has_archive and media_has_inbox:
+                
+                inbox_label = 'inbox (' + HydrusData.ConvertIntToPrettyString( num_inbox ) + ')'
+                archive_label = 'archive (' + HydrusData.ConvertIntToPrettyString( num_archive ) + ')'
+                
+                ClientGUIMenus.AppendMenuItem( self, select_menu, inbox_label, 'Select everything in the inbox.', self._Select, 'inbox' )
+                ClientGUIMenus.AppendMenuItem( self, select_menu, archive_label, 'Select everything that is archived.', self._Select, 'archive' )
+                
+            
+            if len( all_specific_file_domains ) > 1:
+                
+                selectable_file_domains = list( all_local_file_domains )
+                
+                if CC.TRASH_SERVICE_KEY in all_specific_file_domains:
+                    
+                    selectable_file_domains.append( CC.TRASH_SERVICE_KEY )
+                    
+                
+                selectable_file_domains.extend( all_file_repos )
+                
+                for service_key in selectable_file_domains:
+                    
+                    name = services_manager.GetName( service_key )
+                    
+                    ClientGUIMenus.AppendMenuItem( self, select_menu, name, 'Select everything in ' + name + '.', self._Select, 'file_service', service_key )
+                    
+                
+            
+            if has_local and has_remote:
+                
+                ClientGUIMenus.AppendMenuItem( self, select_menu, 'local', 'Select everything in the client.', self._Select, 'local' )
+                ClientGUIMenus.AppendMenuItem( self, select_menu, 'remote', 'Select everything that is not in the client.', self._Select, 'remote' )
+                
+            
+            if len( self._selected_media ) > 0:
+                
+                if len( self._selected_media ) < len( self._sorted_media ):
+                
+                    invert_label = 'invert (' + HydrusData.ConvertIntToPrettyString( len( self._sorted_media ) - len( self._selected_media ) ) + ')'
+                    
+                    ClientGUIMenus.AppendMenuItem( self, select_menu, invert_label, 'Swap what is and is not selected.', self._Select, 'invert' )
+                    
+                
+                ClientGUIMenus.AppendMenuItem( self, select_menu, 'none (0)', 'Deselect everything.', self._Select, 'none' )
+                
+            
+            ClientGUIMenus.AppendMenu( menu, select_menu, 'select' )
+            
+        
+        if self._focussed_media is not None:
+            
+            ClientGUIMenus.AppendSeparator( menu )
+            
+            ClientGUIMenus.AppendMenuItem( self, menu, 'open selection in a new page', 'Copy your current selection into a simple new page.', self._ShowSelectionInNewPage )
+            
+            if advanced_mode:
+                
+                duplicates_menu = menu # this is important to make the menu flexible if not multiple selected
+                
+                focussed_hash = self._focussed_media.GetDisplayMedia().GetHash()
+                
+                if multiple_selected:
+                    
+                    duplicates_menu = wx.Menu()
+                    
+                    duplicates_action_submenu = wx.Menu()
+                    
+                    label = 'set this file as better than the ' + HydrusData.ConvertIntToPrettyString( num_selected - 1 ) + ' other selected'
+                    
+                    ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, label, 'Set the focused media to be better than the other selected files.', self._SetDuplicatesFocusedBetter )
+                    
+                    num_files = self._GetNumSelected()
+                    
+                    num_pairs = num_files * ( num_files - 1 ) / 2 # combinations -- n!/2(n-2)!
+                    
+                    num_pairs_text = HydrusData.ConvertIntToPrettyString( num_pairs ) + ' pairs'
+                    
+                    ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'set all selected as same quality', 'Set all the selected files as same quality duplicates.', self._SetDuplicates, HC.DUPLICATE_SAME_QUALITY )
+                    
+                    ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'set all selected as alternates', 'Set all the selected files as alternates.', self._SetDuplicates, HC.DUPLICATE_ALTERNATE )
+                    
+                    ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'set all selected as not duplicates', 'Set all the selected files as not duplicates.', self._SetDuplicates, HC.DUPLICATE_NOT_DUPLICATE )
+                    
+                    ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'make a custom duplicates action', 'Choose which duplicates status to set to this selection and customise non-default merge options.', self._SetDuplicatesCustom )
+                    
+                    ClientGUIMenus.AppendSeparator( duplicates_action_submenu )
+                    
+                    ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'send the ' + num_pairs_text + ' in this selection to be compared in the duplicates filter', 'Set all the possible pairs in the selection as unknown/potential duplicate pairs.', self._SetDuplicates, HC.DUPLICATE_UNKNOWN )
+                    
+                    ClientGUIMenus.AppendMenuItem( self, duplicates_action_submenu, 'remove the ' + num_pairs_text + ' in this selection from the duplicates system', 'Remove all duplicates relationships from all the pairs in this selection.', self._SetDuplicates, None )
+                    
+                    ClientGUIMenus.AppendSeparator( duplicates_action_submenu )
+                    
+                    duplicates_edit_action_submenu = wx.Menu()
+                    
+                    for duplicate_type in ( HC.DUPLICATE_BETTER, HC.DUPLICATE_SAME_QUALITY, HC.DUPLICATE_ALTERNATE, HC.DUPLICATE_NOT_DUPLICATE ):
+                        
+                        ClientGUIMenus.AppendMenuItem( self, duplicates_edit_action_submenu, 'for ' + HC.duplicate_type_string_lookup[ duplicate_type ], 'Edit what happens when you set this status.', self._EditDuplicateActionOptions, duplicate_type )
+                        
+                    
+                    ClientGUIMenus.AppendMenu( duplicates_action_submenu, duplicates_edit_action_submenu, 'edit default merge options' )
+                    
+                    ClientGUIMenus.AppendMenu( menu, duplicates_menu, 'duplicates' )
+                    
+                    ClientGUIMenus.AppendMenu( duplicates_menu, duplicates_action_submenu, 'set duplicate relationships' )
+                    
+                
+                if HG.client_controller.DBCurrentlyDoingJob():
+                    
+                    ClientGUIMenus.AppendMenuLabel( duplicates_menu, 'Could not fetch duplicates (db currently locked)' )
+                    
+                else:
+                    
+                    duplicate_types_to_counts = HG.client_controller.Read( 'duplicate_types_to_counts', self._file_service_key, focussed_hash )
+                    
+                    if len( duplicate_types_to_counts ) > 0:
+                        
+                        duplicates_view_menu = wx.Menu()
+                        
+                        for duplicate_type in ( HC.DUPLICATE_BETTER_OR_WORSE, HC.DUPLICATE_BETTER, HC.DUPLICATE_WORSE, HC.DUPLICATE_SAME_QUALITY, HC.DUPLICATE_ALTERNATE, HC.DUPLICATE_NOT_DUPLICATE, HC.DUPLICATE_UNKNOWN ):
+                            
+                            if duplicate_type in duplicate_types_to_counts:
+                                
+                                count = duplicate_types_to_counts[ duplicate_type ]
+                                
+                                label = HydrusData.ConvertIntToPrettyString( count ) + ' ' + HC.duplicate_type_string_lookup[ duplicate_type ]
+                                
+                                ClientGUIMenus.AppendMenuItem( self, duplicates_view_menu, label, 'Show these duplicates in a new page.', self._ShowDuplicatesInNewPage, focussed_hash, duplicate_type )
+                                
+                            
+                        
+                        ClientGUIMenus.AppendMenu( duplicates_menu, duplicates_view_menu, 'view this file\'s duplicates' )
+                        
+                    
+                
+            
+            if advanced_mode:
+                
+                if self._focussed_media.HasImages():
+                    
+                    ClientGUIMenus.AppendSeparator( menu )
+                    
+                    similar_menu = wx.Menu()
+                    
+                    ClientGUIMenus.AppendMenuItem( self, similar_menu, 'exact match', 'Search the database for files that look precisely like this one.', self._GetSimilarTo, HC.HAMMING_EXACT_MATCH )
+                    ClientGUIMenus.AppendMenuItem( self, similar_menu, 'very similar', 'Search the database for files that look just like this one.', self._GetSimilarTo, HC.HAMMING_VERY_SIMILAR )
+                    ClientGUIMenus.AppendMenuItem( self, similar_menu, 'similar', 'Search the database for files that look generally like this one.', self._GetSimilarTo, HC.HAMMING_SIMILAR )
+                    ClientGUIMenus.AppendMenuItem( self, similar_menu, 'speculative', 'Search the database for files that probably look like this one. This is sometimes useful for symbols with sharp edges or lines.', self._GetSimilarTo, HC.HAMMING_SPECULATIVE )
+                    
+                    ClientGUIMenus.AppendMenu( menu, similar_menu, 'find similar files' )
+                    
+                
+            
+            if advanced_mode:
+                
+                ClientGUIMenus.AppendMenuItem( self, menu, 'reparse files and regenerate thumbnails', 'Refresh this file\'s metadata and regenerate its thumbnails.', self._ReparseFile )
                 
             
         
@@ -3437,6 +3681,16 @@ class MediaPanelThumbnails( MediaPanel ):
         self._DeleteAllDirtyPages()
         
     
+    def NewFileInfo( self, hashes ):
+        
+        affected_media = self._GetMedia( hashes )
+        
+        for media in affected_media:
+            
+            media.RefreshFileInfo()
+            
+        
+    
     def NewThumbnails( self, hashes ):
         
         affected_thumbnails = self._GetMedia( hashes )
@@ -3448,6 +3702,11 @@ class MediaPanelThumbnails( MediaPanel ):
         
     
     def RefreshAcceleratorTable( self ):
+        
+        if not self:
+            
+            return
+            
         
         entries = [
         ( wx.ACCEL_NORMAL, wx.WXK_HOME, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'scroll_home' ) ),
@@ -3481,7 +3740,6 @@ class MediaPanelThumbnails( MediaPanel ):
         ( wx.ACCEL_SHIFT, wx.WXK_RIGHT, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'key_shift_right' ) ),
         ( wx.ACCEL_SHIFT, wx.WXK_NUMPAD_RIGHT, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'key_shift_right' ) ),
         ( wx.ACCEL_CTRL, ord( 'A' ), ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'select', 'all' ) ),
-        ( wx.ACCEL_CTRL, ord( 'c' ), ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'copy_files' )  ),
         ( wx.ACCEL_CTRL, wx.WXK_SPACE, ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetPermanentId( 'ctrl-space' )  )
         ]
         
@@ -3500,7 +3758,10 @@ class MediaPanelThumbnails( MediaPanel ):
         
         if page_key == self._page_key:
             
-            if media is None: self._SetFocussedMedia( None )
+            if media is None:
+                
+                self._SetFocussedMedia( None )
+                
             else:
                 
                 try:
@@ -3511,14 +3772,17 @@ class MediaPanelThumbnails( MediaPanel ):
                     
                     self._ScrollToMedia( self._focussed_media )
                     
-                except: pass
+                except:
+                    
+                    pass
+                    
                 
             
         
     
-    def Sort( self, page_key, sort_by = None ):
+    def Sort( self, page_key, media_sort = None ):
         
-        MediaPanel.Sort( self, page_key, sort_by )
+        MediaPanel.Sort( self, page_key, media_sort )
         
         self._DirtyAllPages()
         
@@ -3538,133 +3802,139 @@ class MediaPanelThumbnails( MediaPanel ):
         self._DirtyAllPages()
         
     
-    def TIMEREventAnimation( self, event ):
+    def TIMERAnimationUpdate( self ):
         
-        try:
+        FRAME_DURATION = 1.0 / 60
+        NUM_FRAMES_TO_FILL_IN = 15
+        
+        loop_started = HydrusData.GetNowPrecise()
+        loop_should_break_time = loop_started + ( FRAME_DURATION / 2 )
+        
+        ( thumbnail_span_width, thumbnail_span_height ) = self._GetThumbnailSpanDimensions()
+        
+        hashes = list( self._thumbnails_being_faded_in.keys() )
+        
+        random.shuffle( hashes )
+        
+        dcs = {}
+        
+        ( xUnit, yUnit ) = self.GetScrollPixelsPerUnit()
+        
+        y_start = self._GetYStart()
+        
+        earliest_y = y_start * yUnit
+        
+        page_height = self._num_rows_per_canvas_page * thumbnail_span_height
+        
+        for hash in hashes:
             
-            FRAME_DURATION = 1.0 / 60
-            NUM_FRAMES_TO_FILL_IN = 15
+            ( original_bmp, alpha_bmp, thumbnail_index, thumbnail, animation_started, num_frames_rendered ) = self._thumbnails_being_faded_in[ hash ]
             
-            loop_started = HydrusData.GetNowPrecise()
-            loop_should_break_time = loop_started + ( FRAME_DURATION / 2 )
+            num_frames_supposed_to_be_rendered = int( ( loop_started - animation_started ) / FRAME_DURATION )
             
-            ( thumbnail_span_width, thumbnail_span_height ) = self._GetThumbnailSpanDimensions()
+            num_frames_to_render = num_frames_supposed_to_be_rendered - num_frames_rendered
             
-            hashes = list( self._thumbnails_being_faded_in.keys() )
-            
-            random.shuffle( hashes )
-            
-            dcs = {}
-            
-            for hash in hashes:
+            if num_frames_to_render == 0:
                 
-                ( original_bmp, alpha_bmp, thumbnail_index, thumbnail, animation_started, num_frames_rendered ) = self._thumbnails_being_faded_in[ hash ]
-                
-                num_frames_supposed_to_be_rendered = int( ( loop_started - animation_started ) / FRAME_DURATION )
-                
-                num_frames_to_render = num_frames_supposed_to_be_rendered - num_frames_rendered
-                
-                if num_frames_to_render > 0:
-                    
-                    delete_entry = False
-                    
-                    try:
-                        
-                        expected_thumbnail = self._sorted_media[ thumbnail_index ]
-                        
-                    except:
-                        
-                        expected_thumbnail = None
-                        
-                    
-                    page_index = self._GetPageIndexFromThumbnailIndex( thumbnail_index )
-                    
-                    if expected_thumbnail != thumbnail:
-                        
-                        delete_entry = True
-                        
-                    elif page_index not in self._clean_canvas_pages:
-                        
-                        delete_entry = True
-                        
-                    else:
-                        
-                        times_to_draw = 1
-                        
-                        if num_frames_supposed_to_be_rendered >= NUM_FRAMES_TO_FILL_IN:
-                            
-                            bmp_to_use = original_bmp
-                            
-                            delete_entry = True
-                            
-                        else:
-                            
-                            times_to_draw = num_frames_to_render
-                            
-                            bmp_to_use = alpha_bmp
-                            
-                            num_frames_rendered += times_to_draw
-                            
-                            self._thumbnails_being_faded_in[ hash ] = ( original_bmp, alpha_bmp, thumbnail_index, thumbnail, animation_started, num_frames_rendered )
-                            
-                        
-                        thumbnail_col = thumbnail_index % self._num_columns
-                        
-                        thumbnail_row = thumbnail_index / self._num_columns
-                        
-                        x = thumbnail_col * thumbnail_span_width + CC.THUMBNAIL_MARGIN
-                        
-                        y = ( thumbnail_row - ( page_index * self._num_rows_per_canvas_page ) ) * thumbnail_span_height + CC.THUMBNAIL_MARGIN
-                        
-                        if page_index not in dcs:
-                            
-                            canvas_bmp = self._clean_canvas_pages[ page_index ]
-                            
-                            dc = wx.MemoryDC( canvas_bmp )
-                            
-                            dcs[ page_index ] = dc
-                            
-                        
-                        dc = dcs[ page_index ]
-                        
-                        for i in range( times_to_draw ):
-                            
-                            dc.DrawBitmap( bmp_to_use, x, y, True )
-                            
-                        
-                    
-                    if delete_entry:
-                        
-                        del self._thumbnails_being_faded_in[ hash ]
-                        
-                        original_bmp.Destroy()
-                        alpha_bmp.Destroy()
-                        
-                    
-                
-                if HydrusData.TimeHasPassedPrecise( loop_should_break_time ):
-                    
-                    break
-                    
+                continue
                 
             
-            if len( self._thumbnails_being_faded_in ) > 0:
+            delete_entry = False
+            
+            try:
                 
-                self._timer_animation.Start( 1, wx.TIMER_ONE_SHOT )
+                expected_thumbnail = self._sorted_media[ thumbnail_index ]
+                
+            except:
+                
+                expected_thumbnail = None
                 
             
-            self.Refresh()
+            page_index = self._GetPageIndexFromThumbnailIndex( thumbnail_index )
             
-        except wx.PyDeadObjectError:
+            if expected_thumbnail != thumbnail:
+                
+                delete_entry = True
+                
+            elif page_index not in self._clean_canvas_pages:
+                
+                delete_entry = True
+                
+            else:
+                
+                times_to_draw = 1
+                
+                if num_frames_supposed_to_be_rendered >= NUM_FRAMES_TO_FILL_IN:
+                    
+                    bmp_to_use = original_bmp
+                    
+                    delete_entry = True
+                    
+                else:
+                    
+                    times_to_draw = num_frames_to_render
+                    
+                    bmp_to_use = alpha_bmp
+                    
+                    num_frames_rendered += times_to_draw
+                    
+                    self._thumbnails_being_faded_in[ hash ] = ( original_bmp, alpha_bmp, thumbnail_index, thumbnail, animation_started, num_frames_rendered )
+                    
+                
+                thumbnail_col = thumbnail_index % self._num_columns
+                
+                thumbnail_row = thumbnail_index / self._num_columns
+                
+                x = thumbnail_col * thumbnail_span_width + CC.THUMBNAIL_MARGIN
+                
+                y = ( thumbnail_row - ( page_index * self._num_rows_per_canvas_page ) ) * thumbnail_span_height + CC.THUMBNAIL_MARGIN
+                
+                if page_index not in dcs:
+                    
+                    canvas_bmp = self._clean_canvas_pages[ page_index ]
+                    
+                    dc = wx.MemoryDC( canvas_bmp )
+                    
+                    dcs[ page_index ] = dc
+                    
+                
+                dc = dcs[ page_index ]
+                
+                for i in range( times_to_draw ):
+                    
+                    dc.DrawBitmap( bmp_to_use, x, y, True )
+                    
+                
+                #
+                
+                page_virtual_y = page_height * page_index
+                
+                page_client_y = page_virtual_y - earliest_y
+                
+                client_y = page_client_y + y
+                d = True
+                self.RefreshRect( wx.Rect( x, client_y, thumbnail_span_width - CC.THUMBNAIL_MARGIN, thumbnail_span_height - CC.THUMBNAIL_MARGIN ) )
+                
             
-            self._timer_animation.Stop()
+            if delete_entry:
+                
+                del self._thumbnails_being_faded_in[ hash ]
+                
+                original_bmp.Destroy()
+                alpha_bmp.Destroy()
+                
             
-        except:
+            if HydrusData.TimeHasPassedPrecise( loop_should_break_time ):
+                
+                break
+                
             
-            self._timer_animation.Stop()
+        
+        if len( self._thumbnails_being_faded_in ) == 0:
             
-            raise
+            HG.client_controller.gui.UnregisterAnimationUpdateWindow( self )
             
+        
         
     
     def WaterfallThumbnails( self, page_key, thumbnails ):
@@ -3695,7 +3965,31 @@ class Thumbnail( Selectable ):
         self._file_service_key = file_service_key
         
     
-    def Dumped( self, dump_status ): self._dump_status = dump_status
+    def _ScaleUpThumbnailDimensions( self, thumbnail_dimensions, scale_up_dimensions ):
+        
+        ( thumb_width, thumb_height ) = thumbnail_dimensions
+        ( scale_up_width, scale_up_height ) = scale_up_dimensions
+        
+        # we want to expand the image so that the smallest dimension fills everything
+        
+        scale_factor = max( scale_up_width / float( thumb_width ), scale_up_height / float( thumb_height ) )
+        
+        destination_width = int( round( thumb_width * scale_factor ) )
+        destination_height = int( round( thumb_height * scale_factor ) )
+        
+        offset_x = ( scale_up_width - destination_width ) / 2
+        offset_y = ( scale_up_height - destination_height ) / 2
+        
+        offset_position = ( offset_x, offset_y )
+        destination_dimensions = ( destination_width, destination_height )
+        
+        return ( offset_position, destination_dimensions )
+        
+    
+    def Dumped( self, dump_status ):
+        
+        self._dump_status = dump_status
+        
     
     def GetBmp( self ):
         
@@ -3707,167 +4001,146 @@ class Thumbnail( Selectable ):
         
         ( width, height ) = ClientData.AddPaddingToDimensions( HC.options[ 'thumbnail_dimensions' ], CC.THUMBNAIL_BORDER * 2 )
         
-        bmp = wx.EmptyBitmap( width, height, 24 )
+        bmp = wx.Bitmap( width, height, 24 )
         
         dc = wx.MemoryDC( bmp )
         
+        new_options = HG.client_controller.new_options
+        
         if not local:
             
-            if self._selected: rgb = HC.options[ 'gui_colours' ][ 'thumb_background_remote_selected' ]
-            else: rgb = HC.options[ 'gui_colours' ][ 'thumb_background_remote' ]
+            if self._selected:
+                
+                colour_type = CC.COLOUR_THUMB_BACKGROUND_REMOTE_SELECTED
+                
+            else:
+                
+                colour_type = CC.COLOUR_THUMB_BACKGROUND_REMOTE
+                
             
         else:
             
-            if self._selected: rgb = HC.options[ 'gui_colours' ][ 'thumb_background_selected' ]
-            else: rgb = HC.options[ 'gui_colours' ][ 'thumb_background' ]
+            if self._selected:
+                
+                colour_type = CC.COLOUR_THUMB_BACKGROUND_SELECTED
+                
+            else:
+                
+                colour_type = CC.COLOUR_THUMB_BACKGROUND
+                
             
         
-        dc.SetBackground( wx.Brush( wx.Colour( *rgb ) ) )
+        dc.SetBackground( wx.Brush( new_options.GetColour( colour_type ) ) )
         
         dc.Clear()
         
+        thumbnail_fill = HG.client_controller.new_options.GetBoolean( 'thumbnail_fill' )
+        
         ( thumb_width, thumb_height ) = thumbnail_hydrus_bmp.GetSize()
         
-        x_offset = ( width - thumb_width ) / 2
-        
-        y_offset = ( height - thumb_height ) / 2
-        
-        wx_bmp = thumbnail_hydrus_bmp.GetWxBitmap()
+        if thumbnail_fill:
+            
+            wx_image = thumbnail_hydrus_bmp.GetWxImage()
+            
+            scale_up_dimensions = HC.options[ 'thumbnail_dimensions' ]
+            
+            ( offset_position, destination_dimensions ) = self._ScaleUpThumbnailDimensions( ( thumb_width, thumb_height ), scale_up_dimensions )
+            
+            ( destination_width, destination_height ) = destination_dimensions
+            
+            wx_image = wx_image.Scale( destination_width, destination_height, wx.IMAGE_QUALITY_HIGH )
+            
+            wx_bmp = wx.Bitmap( wx_image )
+            
+            wx_image.Destroy()
+            
+            ( x_offset, y_offset ) = offset_position
+            
+            x_offset += CC.THUMBNAIL_BORDER
+            y_offset += CC.THUMBNAIL_BORDER
+            
+        else:
+            
+            wx_bmp = thumbnail_hydrus_bmp.GetWxBitmap()
+            
+            x_offset = ( width - thumb_width ) / 2
+            
+            y_offset = ( height - thumb_height ) / 2
+            
         
         dc.DrawBitmap( wx_bmp, x_offset, y_offset )
         
         wx_bmp.Destroy()
         
-        namespaces = self.GetTagsManager().GetCombinedNamespaces( ( 'creator', 'series', 'title', 'volume', 'chapter', 'page' ) )
+        new_options = HG.client_controller.new_options
         
-        creators = namespaces[ 'creator' ]
-        series = namespaces[ 'series' ]
-        titles = namespaces[ 'title' ]
-        volumes = namespaces[ 'volume' ]
-        chapters = namespaces[ 'chapter' ]
-        pages = namespaces[ 'page' ]
+        tm = self.GetTagsManager()
         
-        new_options = HG.client_controller.GetNewOptions()
+        tags = tm.GetCurrent( CC.COMBINED_TAG_SERVICE_KEY ).union( tm.GetPending( CC.COMBINED_TAG_SERVICE_KEY ) )
         
-        if new_options.GetBoolean( 'show_thumbnail_page' ):
-            
-            collections_string = ''
-            
-            if len( volumes ) > 0:
-                
-                if len( volumes ) == 1:
-                    
-                    ( volume, ) = volumes
-                    
-                    collections_string = 'v' + str( volume )
-                    
-                else:
-                    
-                    volumes_sorted = HydrusTags.SortNumericTags( volumes )
-                    
-                    collections_string_append = 'v' + str( volumes_sorted[0] ) + '-' + str( volumes_sorted[-1] )
-                    
-                
-            
-            if len( chapters ) > 0:
-                
-                if len( chapters ) == 1:
-                    
-                    ( chapter, ) = chapters
-                    
-                    collections_string_append = 'c' + str( chapter )
-                    
-                else:
-                    
-                    chapters_sorted = HydrusTags.SortNumericTags( chapters )
-                    
-                    collections_string_append = 'c' + str( chapters_sorted[0] ) + '-' + str( chapters_sorted[-1] )
-                    
-                
-                if len( collections_string ) > 0: collections_string += '-' + collections_string_append
-                else: collections_string = collections_string_append
-                
-            
-            if len( pages ) > 0:
-                
-                if len( pages ) == 1:
-                    
-                    ( page, ) = pages
-                    
-                    collections_string_append = 'p' + str( page )
-                    
-                else:
-                    
-                    pages_sorted = HydrusTags.SortNumericTags( pages )
-                    
-                    collections_string_append = 'p' + str( pages_sorted[0] ) + '-' + str( pages_sorted[-1] )
-                    
-                
-                if len( collections_string ) > 0: collections_string += '-' + collections_string_append
-                else: collections_string = collections_string_append
-                
-            
-            if len( collections_string ) > 0:
-                
-                dc.SetFont( wx.SystemSettings.GetFont( wx.SYS_DEFAULT_GUI_FONT ) )
-                
-                ( text_x, text_y ) = dc.GetTextExtent( collections_string )
-                
-                top_left_x = width - text_x - CC.THUMBNAIL_BORDER
-                top_left_y = height - text_y - CC.THUMBNAIL_BORDER
-                
-                dc.SetBrush( wx.Brush( CC.COLOUR_UNSELECTED ) )
-                
-                dc.SetTextForeground( CC.COLOUR_SELECTED_DARK )
-                
-                dc.SetPen( wx.TRANSPARENT_PEN )
-                
-                dc.DrawRectangle( top_left_x - 1, top_left_y - 1, text_x + 2, text_y + 2 )
-                
-                dc.DrawText( collections_string, top_left_x, top_left_y )
-                
-            
-        
-        if new_options.GetBoolean( 'show_thumbnail_title_banner' ):
+        if len( tags ) > 0:
             
             siblings_manager = HG.client_controller.GetManager( 'tag_siblings' )
             
-            upper_info_string = ''
+            tags = siblings_manager.CollapseTags( CC.COMBINED_TAG_SERVICE_KEY, tags )
             
-            if len( creators ) > 0:
-                
-                upper_info_string = ', '.join( creators )
-                
-                if len( series ) > 0 or len( titles ) > 0: upper_info_string += ' - '
-                
+            upper_tag_summary_generator = new_options.GetTagSummaryGenerator( 'thumbnail_top' )
             
-            if len( series ) > 0:
-                
-                upper_info_string += ', '.join( series )
-                
-            elif len( titles ) > 0:
-                
-                upper_info_string += ', '.join( titles )
-                
+            upper_summary = upper_tag_summary_generator.GenerateSummary( tags )
             
-            if len( upper_info_string ) > 0:
+            lower_tag_summary_generator = new_options.GetTagSummaryGenerator( 'thumbnail_bottom_right' )
+            
+            lower_summary = lower_tag_summary_generator.GenerateSummary( tags )
+            
+            if len( upper_summary ) > 0 or len( lower_summary ) > 0:
                 
-                dc.SetFont( wx.SystemSettings.GetFont( wx.SYS_DEFAULT_GUI_FONT ) )
+                gc = wx.GraphicsContext.Create( dc )
                 
-                ( text_x, text_y ) = dc.GetTextExtent( upper_info_string )
+                if len( upper_summary ) > 0:
+                    
+                    text_colour_with_alpha = upper_tag_summary_generator.GetTextColour()
+                    
+                    gc.SetFont( wx.SystemSettings.GetFont( wx.SYS_DEFAULT_GUI_FONT ), text_colour_with_alpha )
+                    
+                    background_colour_with_alpha = upper_tag_summary_generator.GetBackgroundColour()
+                    
+                    gc.SetBrush( wx.Brush( background_colour_with_alpha ) )
+                    
+                    gc.SetPen( wx.TRANSPARENT_PEN )
+                    
+                    ( text_x, text_y ) = gc.GetTextExtent( upper_summary )
+                    
+                    top_left_x = int( ( width - text_x ) / 2 )
+                    top_left_y = CC.THUMBNAIL_BORDER
+                    
+                    gc.DrawRectangle( 0, top_left_y - 1, width, text_y + 2 )
+                    
+                    gc.DrawText( upper_summary, top_left_x, top_left_y )
+                    
                 
-                top_left_x = int( ( width - text_x ) / 2 )
-                top_left_y = CC.THUMBNAIL_BORDER
+                if len( lower_summary ) > 0:
+                    
+                    text_colour_with_alpha = lower_tag_summary_generator.GetTextColour()
+                    
+                    gc.SetFont( wx.SystemSettings.GetFont( wx.SYS_DEFAULT_GUI_FONT ), text_colour_with_alpha )
+                    
+                    background_colour_with_alpha = lower_tag_summary_generator.GetBackgroundColour()
+                    
+                    gc.SetBrush( wx.Brush( background_colour_with_alpha ) )
+                    
+                    gc.SetPen( wx.TRANSPARENT_PEN )
+                    
+                    ( text_x, text_y ) = gc.GetTextExtent( lower_summary )
+                    
+                    top_left_x = width - text_x - CC.THUMBNAIL_BORDER
+                    top_left_y = height - text_y - CC.THUMBNAIL_BORDER
+                    
+                    gc.DrawRectangle( top_left_x - 1, top_left_y - 1, text_x + 2, text_y + 2 )
+                    
+                    gc.DrawText( lower_summary, top_left_x, top_left_y )
+                    
                 
-                dc.SetBrush( wx.Brush( CC.COLOUR_UNSELECTED ) )
-                
-                dc.SetTextForeground( CC.COLOUR_SELECTED_DARK )
-                
-                dc.SetPen( wx.TRANSPARENT_PEN )
-                
-                dc.DrawRectangle( 0, top_left_y - 1, width, text_y + 2 )
-                
-                dc.DrawText( upper_info_string, top_left_x, top_left_y )
+                del gc
                 
             
         
@@ -3875,16 +4148,28 @@ class Thumbnail( Selectable ):
         
         if not local:
             
-            if self._selected: rgb = HC.options[ 'gui_colours' ][ 'thumb_border_remote_selected' ]
-            else: rgb = HC.options[ 'gui_colours' ][ 'thumb_border_remote' ]
+            if self._selected:
+                
+                colour_type = CC.COLOUR_THUMB_BORDER_REMOTE_SELECTED
+                
+            else:
+                
+                colour_type = CC.COLOUR_THUMB_BORDER_REMOTE
+                
             
         else:
             
-            if self._selected: rgb = HC.options[ 'gui_colours' ][ 'thumb_border_selected' ]
-            else: rgb = HC.options[ 'gui_colours' ][ 'thumb_border' ]
+            if self._selected:
+                
+                colour_type = CC.COLOUR_THUMB_BORDER_SELECTED
+                
+            else:
+                
+                colour_type = CC.COLOUR_THUMB_BORDER
+                
             
         
-        dc.SetPen( wx.Pen( wx.Colour( *rgb ), style=wx.SOLID ) )
+        dc.SetPen( wx.Pen( new_options.GetColour( colour_type ), style = wx.PENSTYLE_SOLID ) )
         
         dc.DrawRectangle( 0, 0, width, height )
         

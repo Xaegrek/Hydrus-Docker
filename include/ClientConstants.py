@@ -29,7 +29,21 @@ COLOUR_UNSELECTED = wx.Colour( 223, 227, 230 )
 
 COLOUR_MESSAGE = wx.Colour( 230, 246, 255 )
 
-SHORTCUT_HELP = '''You can set up many custom shortcuts in file->options->shortcuts. Please check that to see your current mapping.
+COLOUR_THUMB_BACKGROUND = 0
+COLOUR_THUMB_BACKGROUND_SELECTED = 1
+COLOUR_THUMB_BACKGROUND_REMOTE = 2
+COLOUR_THUMB_BACKGROUND_REMOTE_SELECTED = 3
+COLOUR_THUMB_BORDER = 4
+COLOUR_THUMB_BORDER_SELECTED = 5
+COLOUR_THUMB_BORDER_REMOTE = 6
+COLOUR_THUMB_BORDER_REMOTE_SELECTED = 7
+COLOUR_THUMBGRID_BACKGROUND = 8
+COLOUR_AUTOCOMPLETE_BACKGROUND = 9
+COLOUR_MEDIA_BACKGROUND = 10
+COLOUR_MEDIA_TEXT = 11
+COLOUR_TAGS_BOX = 12
+
+SHORTCUT_HELP = '''You can set up many custom shortcuts in file->shortcuts. Please check that to see your current mapping.
 
 Some shortcuts remain hardcoded, however:
 
@@ -198,7 +212,7 @@ media_viewer_capabilities[ HC.IMAGE_PNG ] = static_full_support
 media_viewer_capabilities[ HC.IMAGE_APNG ] = animated_full_support
 media_viewer_capabilities[ HC.IMAGE_GIF ] = animated_full_support
 
-if HC.PLATFORM_WINDOWS:
+if False and HC.PLATFORM_WINDOWS: # currently disabled due to wx 4.0 update, which was crashing with FlashWindow
     
     media_viewer_capabilities[ HC.APPLICATION_FLASH ] = [ MEDIA_VIEWER_ACTION_SHOW_AS_NORMAL, MEDIA_VIEWER_ACTION_SHOW_BEHIND_EMBED, MEDIA_VIEWER_ACTION_SHOW_OPEN_EXTERNALLY_BUTTON, MEDIA_VIEWER_ACTION_DO_NOT_SHOW_ON_ACTIVATION_OPEN_EXTERNALLY, MEDIA_VIEWER_ACTION_DO_NOT_SHOW ]
     
@@ -208,6 +222,9 @@ else:
     
 
 media_viewer_capabilities[ HC.APPLICATION_PDF ] = no_support
+media_viewer_capabilities[ HC.APPLICATION_ZIP ] = no_support
+media_viewer_capabilities[ HC.APPLICATION_7Z ] = no_support
+media_viewer_capabilities[ HC.APPLICATION_RAR ] = no_support
 media_viewer_capabilities[ HC.VIDEO_AVI ] = animated_full_support
 media_viewer_capabilities[ HC.VIDEO_FLV ] = animated_full_support
 media_viewer_capabilities[ HC.VIDEO_MOV ] = animated_full_support
@@ -273,6 +290,16 @@ network_context_type_description_lookup[ NETWORK_CONTEXT_DOWNLOADER_QUERY ] = 'N
 network_context_type_description_lookup[ NETWORK_CONTEXT_SUBSCRIPTION ] = 'Network traffic going through this subscription.'
 network_context_type_description_lookup[ NETWORK_CONTEXT_THREAD_WATCHER_THREAD ] = 'Network traffic going through this single thread watch (you probably shouldn\'t be able to see this!)'
 
+PAGE_FILE_COUNT_DISPLAY_ALL = 0
+PAGE_FILE_COUNT_DISPLAY_NONE = 1
+PAGE_FILE_COUNT_DISPLAY_ONLY_IMPORTERS = 2
+
+page_file_count_display_string_lookup = {}
+
+page_file_count_display_string_lookup[ PAGE_FILE_COUNT_DISPLAY_ALL ] = 'for all pages'
+page_file_count_display_string_lookup[ PAGE_FILE_COUNT_DISPLAY_ONLY_IMPORTERS ] = 'for import pages'
+page_file_count_display_string_lookup[ PAGE_FILE_COUNT_DISPLAY_NONE ] = 'for no pages'
+
 SHORTCUT_MODIFIER_CTRL = 0
 SHORTCUT_MODIFIER_ALT = 1
 SHORTCUT_MODIFIER_SHIFT = 2
@@ -309,10 +336,10 @@ SHORTCUTS_RESERVED_NAMES = [ 'archive_delete_filter', 'duplicate_filter', 'media
 
 # shortcut commands
 
-SHORTCUTS_MEDIA_ACTIONS = [ 'manage_file_tags', 'manage_file_ratings', 'archive_file', 'inbox_file', 'delete_file', 'remove_file_from_view', 'open_file_in_external_program', 'launch_the_archive_delete_filter' ]
-SHORTCUTS_MEDIA_VIEWER_ACTIONS = [ 'move_animation_to_previous_frame', 'move_animation_to_next_frame', 'switch_between_fullscreen_borderless_and_regular_framed_window', 'pan_up', 'pan_down', 'pan_left', 'pan_right', 'zoom_in', 'zoom_out', 'switch_between_100_percent_and_canvas_zoom' ]
+SHORTCUTS_MEDIA_ACTIONS = [ 'manage_file_tags', 'manage_file_ratings', 'manage_file_urls', 'manage_file_notes', 'archive_file', 'inbox_file', 'delete_file', 'remove_file_from_view', 'open_file_in_external_program', 'launch_the_archive_delete_filter', 'copy_bmp', 'copy_file', 'copy_path', 'copy_sha256_hash', 'get_similar_to_exact', 'get_similar_to_very_similar', 'get_similar_to_similar', 'get_similar_to_speculative' ]
+SHORTCUTS_MEDIA_VIEWER_ACTIONS = [ 'move_animation_to_previous_frame', 'move_animation_to_next_frame', 'switch_between_fullscreen_borderless_and_regular_framed_window', 'pan_up', 'pan_down', 'pan_left', 'pan_right', 'zoom_in', 'zoom_out', 'switch_between_100_percent_and_canvas_zoom', 'flip_darkmode' ]
 SHORTCUTS_MEDIA_VIEWER_BROWSER_ACTIONS = [ 'view_next', 'view_first', 'view_last', 'view_previous' ]
-SHORTCUTS_MAIN_GUI_ACTIONS = [ 'refresh', 'new_page', 'synchronised_wait_switch', 'set_media_focus', 'show_hide_splitters', 'set_search_focus', 'unclose_page', 'close_page', 'redo', 'undo' ]
+SHORTCUTS_MAIN_GUI_ACTIONS = [ 'refresh', 'new_page', 'synchronised_wait_switch', 'set_media_focus', 'show_hide_splitters', 'set_search_focus', 'unclose_page', 'close_page', 'redo', 'undo', 'flip_darkmode', 'check_all_import_folders' ]
 SHORTCUTS_DUPLICATE_FILTER_ACTIONS = [ 'duplicate_filter_this_is_better', 'duplicate_filter_exactly_the_same', 'duplicate_filter_alternates', 'duplicate_filter_not_dupes', 'duplicate_filter_custom_action', 'duplicate_filter_skip', 'duplicate_filter_back' ]
 SHORTCUTS_ARCHIVE_DELETE_FILTER_ACTIONS = [ 'archive_delete_filter_keep', 'archive_delete_filter_delete', 'archive_delete_filter_skip', 'archive_delete_filter_back' ]
 
@@ -332,14 +359,6 @@ SHUTDOWN_TIMESTAMP_DELETE_ORPHANS = 2
 
 ( SizeChangedEvent, EVT_SIZE_CHANGED ) = wx.lib.newevent.NewCommandEvent()
 
-SORT_BY_SMALLEST = 0
-SORT_BY_LARGEST = 1
-SORT_BY_SHORTEST = 2
-SORT_BY_LONGEST = 3
-SORT_BY_NEWEST = 4
-SORT_BY_OLDEST = 5
-SORT_BY_MIME = 6
-SORT_BY_RANDOM = 7
 SORT_BY_LEXICOGRAPHIC_ASC = 8
 SORT_BY_LEXICOGRAPHIC_DESC = 9
 SORT_BY_INCIDENCE_ASC = 10
@@ -348,52 +367,33 @@ SORT_BY_LEXICOGRAPHIC_NAMESPACE_ASC = 12
 SORT_BY_LEXICOGRAPHIC_NAMESPACE_DESC = 13
 SORT_BY_INCIDENCE_NAMESPACE_ASC = 14
 SORT_BY_INCIDENCE_NAMESPACE_DESC = 15
-SORT_BY_WIDTH_ASC = 16
-SORT_BY_WIDTH_DESC = 17
-SORT_BY_HEIGHT_ASC = 18
-SORT_BY_HEIGHT_DESC = 19
-SORT_BY_RATIO_ASC = 20
-SORT_BY_RATIO_DESC = 21
-SORT_BY_NUM_PIXELS_ASC = 22
-SORT_BY_NUM_PIXELS_DESC = 23
+
+SORT_FILES_BY_FILESIZE = 0
+SORT_FILES_BY_DURATION = 1
+SORT_FILES_BY_IMPORT_TIME = 2
+SORT_FILES_BY_MIME = 3
+SORT_FILES_BY_RANDOM = 4
+SORT_FILES_BY_WIDTH = 5
+SORT_FILES_BY_HEIGHT = 6
+SORT_FILES_BY_RATIO = 7
+SORT_FILES_BY_NUM_PIXELS = 8
+SORT_FILES_BY_NUM_TAGS = 9
+
+SORT_ASC = 0
+SORT_DESC = 1
 
 SORT_CHOICES = []
 
-SORT_CHOICES.append( ( 'system', SORT_BY_SMALLEST ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_LARGEST ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_SHORTEST ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_LONGEST ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_NEWEST ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_OLDEST ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_WIDTH_ASC ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_WIDTH_DESC ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_HEIGHT_ASC ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_HEIGHT_DESC ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_RATIO_DESC ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_RATIO_ASC ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_NUM_PIXELS_ASC ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_NUM_PIXELS_DESC ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_MIME ) )
-SORT_CHOICES.append( ( 'system', SORT_BY_RANDOM ) )
-
-sort_string_lookup = {}
-
-sort_string_lookup[ SORT_BY_SMALLEST ] = 'smallest filesize first'
-sort_string_lookup[ SORT_BY_LARGEST ] = 'largest filesize first'
-sort_string_lookup[ SORT_BY_SHORTEST ] = 'shortest duration first'
-sort_string_lookup[ SORT_BY_LONGEST ] = 'longest duration first'
-sort_string_lookup[ SORT_BY_NEWEST ] = 'most recently imported first'
-sort_string_lookup[ SORT_BY_OLDEST ] = 'least recently imported first'
-sort_string_lookup[ SORT_BY_MIME ] = 'mime'
-sort_string_lookup[ SORT_BY_RANDOM ] = 'random order'
-sort_string_lookup[ SORT_BY_WIDTH_ASC ] = 'least wide first'
-sort_string_lookup[ SORT_BY_WIDTH_DESC ] = 'most wide first'
-sort_string_lookup[ SORT_BY_HEIGHT_ASC ] = 'least tall first'
-sort_string_lookup[ SORT_BY_HEIGHT_DESC ] = 'most tall first'
-sort_string_lookup[ SORT_BY_RATIO_ASC ] = 'tallest ratio first'
-sort_string_lookup[ SORT_BY_RATIO_DESC ] = 'widest ratio first'
-sort_string_lookup[ SORT_BY_NUM_PIXELS_ASC ] = 'fewest pixels first'
-sort_string_lookup[ SORT_BY_NUM_PIXELS_DESC ] = 'most pixels first'
+SORT_CHOICES.append( ( 'system', SORT_FILES_BY_FILESIZE ) )
+SORT_CHOICES.append( ( 'system', SORT_FILES_BY_DURATION ) )
+SORT_CHOICES.append( ( 'system', SORT_FILES_BY_IMPORT_TIME ) )
+SORT_CHOICES.append( ( 'system', SORT_FILES_BY_MIME ) )
+SORT_CHOICES.append( ( 'system', SORT_FILES_BY_RANDOM ) )
+SORT_CHOICES.append( ( 'system', SORT_FILES_BY_WIDTH ) )
+SORT_CHOICES.append( ( 'system', SORT_FILES_BY_HEIGHT ) )
+SORT_CHOICES.append( ( 'system', SORT_FILES_BY_RATIO ) )
+SORT_CHOICES.append( ( 'system', SORT_FILES_BY_NUM_PIXELS ) )
+SORT_CHOICES.append( ( 'system', SORT_FILES_BY_NUM_TAGS ) )
 
 STATUS_UNKNOWN = 0
 STATUS_SUCCESSFUL = 1
@@ -559,6 +559,9 @@ class GlobalBMPs( object ):
         
         GlobalBMPs.seed_cache = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'seed_cache.png' ) )
         
+        GlobalBMPs.copy = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'copy.png' ) )
+        GlobalBMPs.paste = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'paste.png' ) )
+        
         GlobalBMPs.eight_chan = wx.Bitmap( os.path.join( HC.STATIC_DIR, '8chan.png' ) )
         GlobalBMPs.twitter = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'twitter.png' ) )
         GlobalBMPs.tumblr = wx.Bitmap( os.path.join( HC.STATIC_DIR, 'tumblr.png' ) )
@@ -579,6 +582,8 @@ LOCAL_UPDATE_SERVICE_KEY = 'repository updates'
 
 LOCAL_BOORU_SERVICE_KEY = 'local booru'
 
+LOCAL_NOTES_SERVICE_KEY = 'local notes'
+
 TRASH_SERVICE_KEY = 'trash'
 
 COMBINED_LOCAL_FILE_SERVICE_KEY = 'all local files'
@@ -586,3 +591,5 @@ COMBINED_LOCAL_FILE_SERVICE_KEY = 'all local files'
 COMBINED_FILE_SERVICE_KEY = 'all known files'
 
 COMBINED_TAG_SERVICE_KEY = 'all known tags'
+
+TEST_SERVICE_KEY = 'test service'

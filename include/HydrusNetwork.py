@@ -210,6 +210,11 @@ def DumpToGETQuery( args ):
     
 def ParseBodyString( json_string ):
     
+    if json_string == '':
+        
+        return HydrusSerialisable.SerialisableDictionary()
+        
+    
     args = HydrusSerialisable.CreateFromNetworkString( json_string )
     
     if 'access_key' in args:
@@ -385,6 +390,7 @@ class Account( object ):
         if self._IsBanned():
             
             return ( False, self._GetBannedString() )
+            
         
         if self._IsExpired():
             
@@ -775,7 +781,7 @@ class AccountType( object ):
     
     def GetBandwidthStringsAndGaugeTuples( self, bandwidth_tracker ):
         
-        return self._bandwidth_rules.GetUsageStringsAndGaugeTuples( bandwidth_tracker )
+        return self._bandwidth_rules.GetBandwidthStringsAndGaugeTuples( bandwidth_tracker )
         
     
     def GetAccountTypeKey( self ):
@@ -905,6 +911,7 @@ class AccountType( object ):
 class ClientToServerUpdate( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_CLIENT_TO_SERVER_UPDATE
+    SERIALISABLE_NAME = 'Client To Server Update'
     SERIALISABLE_VERSION = 1
     
     def __init__( self ):
@@ -1006,6 +1013,7 @@ HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIAL
 class Content( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_CONTENT
+    SERIALISABLE_NAME = 'Content'
     SERIALISABLE_VERSION = 1
     
     def __init__( self, content_type = None, content_data = None ):
@@ -1194,6 +1202,7 @@ HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIAL
 class ContentUpdate( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_CONTENT_UPDATE
+    SERIALISABLE_NAME = 'Content Update'
     SERIALISABLE_VERSION = 1
     
     def __init__( self ):
@@ -1328,6 +1337,7 @@ HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIAL
 class Credentials( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_CREDENTIALS
+    SERIALISABLE_NAME = 'Credentials'
     SERIALISABLE_VERSION = 1
     
     def __init__( self, host = None, port = None, access_key = None ):
@@ -1503,6 +1513,7 @@ HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIAL
 class DefinitionsUpdate( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_DEFINITIONS_UPDATE
+    SERIALISABLE_NAME = 'Definitions Update'
     SERIALISABLE_VERSION = 1
     
     def __init__( self ):
@@ -1579,6 +1590,7 @@ HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIAL
 class Metadata( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_METADATA
+    SERIALISABLE_NAME = 'Metadata'
     SERIALISABLE_VERSION = 1
     
     CLIENT_DELAY = 20 * 60
@@ -1792,7 +1804,7 @@ class Metadata( HydrusSerialisable.SerialisableBase ):
                 
                 next_update_time = self._next_update_due + delay
                 
-                status = 'metadata synchronised up to ' + HydrusData.ConvertTimestampToPrettyAgo( biggest_end ) + ', next update due ' + HydrusData.ConvertTimestampToPrettyPending( next_update_time )
+                status = 'metadata synchronised up to ' + HydrusData.ConvertTimestampToPrettyAgo( biggest_end ) + ' ago, next update due ' + HydrusData.ConvertTimestampToPrettyPending( next_update_time )
                 
             
             return ( num_update_hashes, status )
@@ -1842,6 +1854,7 @@ HydrusSerialisable.SERIALISABLE_TYPES_TO_OBJECT_TYPES[ HydrusSerialisable.SERIAL
 class Petition( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_PETITION
+    SERIALISABLE_NAME = 'Petition'
     SERIALISABLE_VERSION = 1
     
     def __init__( self, action = None, petitioner_account = None, reason = None, contents = None ):

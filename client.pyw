@@ -19,10 +19,18 @@ try:
     
     from include import ClientController
     import threading
-    from twisted.internet import reactor
     from include import HydrusGlobals as HG
     from include import HydrusLogger
     import traceback
+    
+    try:
+        
+        from twisted.internet import reactor
+        
+    except:
+        
+        HG.twisted_is_broke = True
+        
     
     #
     
@@ -39,6 +47,11 @@ try:
     if result.db_dir is None:
         
         db_dir = HC.DEFAULT_DB_DIR
+        
+        if not HydrusPaths.DirectoryIsWritable( db_dir ):
+            
+            db_dir = os.path.join( os.path.expanduser( '~' ), 'Hydrus' )
+            
         
     else:
         
@@ -67,7 +80,10 @@ try:
             
             HydrusData.Print( 'hydrus client started' )
             
-            threading.Thread( target = reactor.run, kwargs = { 'installSignalHandlers' : 0 } ).start()
+            if not HG.twisted_is_broke:
+                
+                threading.Thread( target = reactor.run, kwargs = { 'installSignalHandlers' : 0 } ).start()
+                
             
             controller = ClientController.Controller( db_dir, no_daemons, no_wal )
             
@@ -78,6 +94,23 @@ try:
             HydrusData.Print( 'hydrus client failed' )
             
             HydrusData.Print( traceback.format_exc() )
+            
+            try:
+                
+                import wx
+                
+                message = 'The client failed to start. The error follows (it has also been written to the log in the db directory). If it is not obvious, please inform hydrus dev.'
+                
+                message += os.linesep * 2
+                
+                message += traceback.format_exc()
+                
+                wx.SafeShowMessage( 'hydrus client failed', message )
+                
+            except:
+                
+                pass
+                
             
         finally:
             
@@ -93,7 +126,10 @@ try:
                 HydrusData.Print( traceback.format_exc() )
                 
             
-            reactor.callFromThread( reactor.stop )
+            if not HG.twisted_is_broke:
+                
+                reactor.callFromThread( reactor.stop )
+                
             
             HydrusData.Print( 'hydrus client shut down' )
             

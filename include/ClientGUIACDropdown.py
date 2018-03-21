@@ -7,6 +7,7 @@ import ClientGUIMenus
 import ClientSearch
 import collections
 import HydrusConstants as HC
+import HydrusData
 import HydrusExceptions
 import HydrusGlobals as HG
 import HydrusTags
@@ -15,6 +16,12 @@ import wx
 
 ID_TIMER_DROPDOWN_HIDE = wx.NewId()
 ID_TIMER_AC_LAG = wx.NewId()
+
+( SelectUpEvent, EVT_SELECT_UP ) = wx.lib.newevent.NewCommandEvent()
+( SelectDownEvent, EVT_SELECT_DOWN ) = wx.lib.newevent.NewCommandEvent()
+
+( ShowPreviousEvent, EVT_SHOW_PREVIOUS ) = wx.lib.newevent.NewCommandEvent()
+( ShowNextEvent, EVT_SHOW_NEXT ) = wx.lib.newevent.NewCommandEvent()
 
 # much of this is based on the excellent TexCtrlAutoComplete class by Edward Flick, Michele Petrazzo and Will Sadkin, just with plenty of simplification and integration into hydrus
 class AutoCompleteDropdown( wx.Panel ):
@@ -35,7 +42,9 @@ class AutoCompleteDropdown( wx.Panel ):
         
         # This turned out to be ugly when I added the manage tags frame, so I've set it to if the tlp has a parent, which basically means "not the main gui"
         
-        if tlp.GetParent() is not None  or HC.options[ 'always_embed_autocompletes' ]:
+        not_main_gui = tlp.GetParent() is not None
+        
+        if not_main_gui or HC.options[ 'always_embed_autocompletes' ]:
             
             self._float_mode = False
             
@@ -46,10 +55,13 @@ class AutoCompleteDropdown( wx.Panel ):
         
         self._text_ctrl = wx.TextCtrl( self, style=wx.TE_PROCESS_ENTER )
         
-        self._text_ctrl.SetBackgroundColour( wx.Colour( *HC.options[ 'gui_colours' ][ 'autocomplete_background' ] ) )
+        self._UpdateBackgroundColour()
         
         self._last_attempted_dropdown_width = 0
         self._last_attempted_dropdown_position = ( None, None )
+        
+        self._last_move_event_started = 0.0
+        self._last_move_event_occurred = 0.0
         
         if self._float_mode:
             
@@ -64,7 +76,7 @@ class AutoCompleteDropdown( wx.Panel ):
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._text_ctrl, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._text_ctrl, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         #self._dropdown_window = wx.PopupWindow( self, flags = wx.BORDER_RAISED )
         #self._dropdown_window = wx.PopupTransientWindow( self, style = wx.BORDER_RAISED )
@@ -82,7 +94,7 @@ class AutoCompleteDropdown( wx.Panel ):
             
             if self._text_ctrl.IsShown():
                 
-                self._dropdown_window.SetPosition( self._text_ctrl.ClientToScreenXY( 0, 0 ) )
+                self._dropdown_window.SetPosition( self._text_ctrl.ClientToScreen( ( 0, 0 ) ) )
                 
             
             self._dropdown_window.Show()
@@ -102,7 +114,10 @@ class AutoCompleteDropdown( wx.Panel ):
         
         self._dropdown_list = self._InitDropDownList()
         
-        if not self._float_mode: vbox.AddF( self._dropdown_window, CC.FLAGS_EXPAND_BOTH_WAYS )
+        if not self._float_mode:
+            
+            vbox.Add( self._dropdown_window, CC.FLAGS_EXPAND_BOTH_WAYS )
+            
         
         self.SetSizer( vbox )
         
@@ -111,18 +126,14 @@ class AutoCompleteDropdown( wx.Panel ):
         
         self._initial_matches_fetched = False
         
+        self._move_hide_job = None
+        
         if self._float_mode:
             
             self.Bind( wx.EVT_MOVE, self.EventMove )
             self.Bind( wx.EVT_SIZE, self.EventMove )
             
-            self.Bind( wx.EVT_TIMER, self.TIMEREventDropdownHide, id = ID_TIMER_DROPDOWN_HIDE )
-            
-            self._move_hide_timer = wx.Timer( self, id = ID_TIMER_DROPDOWN_HIDE )
-            
-            self._move_hide_timer.Start( 1, wx.TIMER_ONE_SHOT )
-            
-            tlp.Bind( wx.EVT_MOVE, self.EventMove )
+            HG.client_controller.sub( self, '_ParentMovedOrResized', 'main_gui_move_event' )
             
             parent = self
             
@@ -144,11 +155,11 @@ class AutoCompleteDropdown( wx.Panel ):
                 
             
         
-        self.Bind( wx.EVT_TIMER, self.TIMEREventLag, id = ID_TIMER_AC_LAG )
+        HG.client_controller.sub( self, '_UpdateBackgroundColour', 'notify_new_colourset' )
         
-        self._lag_timer = wx.Timer( self, id = ID_TIMER_AC_LAG )
+        self._refresh_list_job = None
         
-        wx.CallAfter( self._UpdateList )
+        self._ScheduleListRefresh( 0.0 )
         
     
     def _BroadcastChoices( self, predicates ):
@@ -161,6 +172,52 @@ class AutoCompleteDropdown( wx.Panel ):
         text = self._text_ctrl.GetValue()
         
         self._BroadcastChoices( { text } )
+        
+    
+    def _CancelScheduledListRefresh( self ):
+        
+        if self._refresh_list_job is not None:
+            
+            self._refresh_list_job.Cancel()
+            
+        
+    
+    def _DropdownHideShow( self ):
+        
+        if not self._float_mode:
+            
+            return
+            
+        
+        try:
+            
+            if self._ShouldShow():
+                
+                self._ShowDropdown()
+                
+                if self._move_hide_job is not None:
+                    
+                    self._move_hide_job.Cancel()
+                    
+                    self._move_hide_job = None
+                    
+                
+            else:
+                
+                self._HideDropdown()
+                
+            
+        except:
+            
+            if self._move_hide_job is not None:
+                
+                self._move_hide_job.Cancel()
+                
+                self._move_hide_job = None
+                
+            
+            raise
+            
         
     
     def _GenerateMatches( self ):
@@ -181,6 +238,65 @@ class AutoCompleteDropdown( wx.Panel ):
     def _InitDropDownList( self ):
         
         raise NotImplementedError()
+        
+    
+    def _ParentMovedOrResized( self ):
+        
+        if self._float_mode:
+            
+            if HydrusData.TimeHasPassedFloat( self._last_move_event_occurred + 1.0 ):
+                
+                self._last_move_event_started = HydrusData.GetNowFloat()
+                
+            
+            self._last_move_event_occurred = HydrusData.GetNowFloat()
+            
+            # we'll do smoother move updates for a little bit to stop flickeryness, but after that we'll just hide
+            
+            NICE_ANIMATION_GRACE_PERIOD = 0.25
+            
+            time_to_delay_these_calls = HydrusData.TimeHasPassedFloat( self._last_move_event_started + NICE_ANIMATION_GRACE_PERIOD )
+            
+            if time_to_delay_these_calls:
+                
+                self._HideDropdown()
+                
+                if self._ShouldShow():
+                    
+                    if self._move_hide_job is None:
+                        
+                        self._move_hide_job = HG.client_controller.CallRepeatingWXSafe( self._dropdown_window, 0.25, 0.0, self._DropdownHideShow )
+                        
+                    
+                    self._move_hide_job.Delay( 0.25 )
+                    
+                
+            else:
+                
+                self._DropdownHideShow()
+                
+            
+        
+    
+    def _ScheduleListRefresh( self, delay ):
+        
+        if self._refresh_list_job is not None and delay == 0.0:
+            
+            self._refresh_list_job.MoveNextWorkTimeToNow()
+            
+        else:
+            
+            self._CancelScheduledListRefresh()
+            
+            self._refresh_list_job = HG.client_controller.CallLaterWXSafe( self, delay, self._UpdateList )
+            
+        
+    
+    def _SetListDirty( self ):
+        
+        self._cache_text = None
+        
+        self._ScheduleListRefresh( 0.0 )
         
     
     def _ShouldShow( self ):
@@ -227,7 +343,7 @@ class AutoCompleteDropdown( wx.Panel ):
         
         if self._text_ctrl.IsShown():
             
-            desired_dropdown_position = self._text_ctrl.ClientToScreenXY( -2, text_height - 2 )
+            desired_dropdown_position = self._text_ctrl.ClientToScreen( ( -2, text_height - 2 ) )
             
             if self._last_attempted_dropdown_position != desired_dropdown_position:
                 
@@ -272,6 +388,20 @@ class AutoCompleteDropdown( wx.Panel ):
         raise NotImplementedError()
         
     
+    def _UpdateBackgroundColour( self ):
+        
+        colour = HG.client_controller.new_options.GetColour( CC.COLOUR_AUTOCOMPLETE_BACKGROUND )
+        
+        if not self._intercept_key_events:
+            
+            colour = ClientData.GetLighterDarkerColour( colour )
+            
+        
+        self._text_ctrl.SetBackgroundColour( colour )
+        
+        self._text_ctrl.Refresh()
+        
+    
     def _UpdateList( self ):
         
         pass
@@ -290,28 +420,13 @@ class AutoCompleteDropdown( wx.Panel ):
         
         if key in ( wx.WXK_INSERT, wx.WXK_NUMPAD_INSERT ):
             
-            colour = wx.Colour( *HC.options[ 'gui_colours' ][ 'autocomplete_background' ] )
+            self._intercept_key_events = not self._intercept_key_events
             
-            if self._intercept_key_events:
-                
-                self._intercept_key_events = False
-                
-                colour = ClientData.GetLighterDarkerColour( colour )
-                
-            else:
-                
-                self._intercept_key_events = True
-                
-            
-            self._text_ctrl.SetBackgroundColour( colour )
-            
-            self._text_ctrl.Refresh()
+            self._UpdateBackgroundColour()
             
         elif key == wx.WXK_SPACE and event.RawControlDown(): # this is control, not command on os x, for which command+space does some os stuff
             
-            self._UpdateList()
-            
-            self._lag_timer.Stop()
+            self._ScheduleListRefresh( 0.0 )
             
         elif self._intercept_key_events:
             
@@ -325,31 +440,33 @@ class AutoCompleteDropdown( wx.Panel ):
                 
             elif key in ( wx.WXK_UP, wx.WXK_NUMPAD_UP, wx.WXK_DOWN, wx.WXK_NUMPAD_DOWN ) and self._text_ctrl.GetValue() == '' and len( self._dropdown_list ) == 0:
                 
-                if key in ( wx.WXK_UP, wx.WXK_NUMPAD_UP ): id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'select_up' )
-                elif key in ( wx.WXK_DOWN, wx.WXK_NUMPAD_DOWN ): id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'select_down' )
+                if key in ( wx.WXK_UP, wx.WXK_NUMPAD_UP ):
+                    
+                    new_event = SelectUpEvent( -1 )
+                    
+                elif key in ( wx.WXK_DOWN, wx.WXK_NUMPAD_DOWN ):
+                    
+                    new_event = SelectDownEvent( -1 )
+                    
                 
-                new_event = wx.CommandEvent( commandType = wx.wxEVT_COMMAND_MENU_SELECTED, winid = id )
-                
-                self.ProcessEvent( new_event )
+                wx.QueueEvent( self.GetEventHandler(), new_event )
                 
             elif key in ( wx.WXK_PAGEDOWN, wx.WXK_NUMPAD_PAGEDOWN, wx.WXK_PAGEUP, wx.WXK_NUMPAD_PAGEUP ) and self._text_ctrl.GetValue() == '' and len( self._dropdown_list ) == 0:
                 
                 if key in ( wx.WXK_PAGEUP, wx.WXK_NUMPAD_PAGEUP ):
                     
-                    id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'canvas_show_previous' )
+                    new_event = ShowPreviousEvent( -1 )
                     
                 elif key in ( wx.WXK_PAGEDOWN, wx.WXK_NUMPAD_PAGEDOWN ):
                     
-                    id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'canvas_show_next' )
+                    new_event = ShowNextEvent( -1 )
                     
                 
-                new_event = wx.CommandEvent( commandType = wx.wxEVT_COMMAND_MENU_SELECTED, winid = id )
-                
-                self.ProcessEvent( new_event )
+                wx.QueueEvent( self.GetEventHandler(), new_event )
                 
             else:
                 
-                # Don't say processevent here--it duplicates the event processing at higher levels, leading to 2 x F9, for instance
+                # Don't say QueueEvent here--it duplicates the event processing at higher levels, leading to 2 x F9, for instance
                 self._dropdown_list.EventCharHook( event ) # this typically skips the event, letting the text ctrl take it
                 
             
@@ -366,7 +483,10 @@ class AutoCompleteDropdown( wx.Panel ):
     
     def EventKillFocus( self, event ):
         
-        self._move_hide_timer.Start( 1, wx.TIMER_ONE_SHOT )
+        if self._float_mode:
+            
+            self._DropdownHideShow()
+            
         
         event.Skip()
         
@@ -375,29 +495,29 @@ class AutoCompleteDropdown( wx.Panel ):
         
         if self._text_ctrl.GetValue() == '' and len( self._dropdown_list ) == 0:
             
-            if event.GetWheelRotation() > 0: id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'select_up' )
-            else: id = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'select_down' )
+            if event.GetWheelRotation() > 0:
+                
+                new_event = SelectUpEvent( -1 )
+                
+            else:
+                
+                new_event = SelectDownEvent( -1 )
+                
             
-            new_event = wx.CommandEvent( commandType = wx.wxEVT_COMMAND_MENU_SELECTED, winid = id )
-            
-            self.ProcessEvent( new_event )
+            wx.QueueEvent( self.GetEventHandler(), new_event )
             
         else:
             
             if event.CmdDown():
                 
-                key_event = wx.KeyEvent( wx.EVT_CHAR_HOOK.typeId )
-                
                 if event.GetWheelRotation() > 0:
                     
-                    key_event.m_keyCode = wx.WXK_UP
+                    self._dropdown_list.MoveSelectionUp()
                     
                 else:
                     
-                    key_event.m_keyCode = wx.WXK_DOWN
+                    self._dropdown_list.MoveSelectionDown()
                     
-                
-                self._dropdown_list.ProcessEvent( key_event )
                 
             else:
                 
@@ -412,27 +532,24 @@ class AutoCompleteDropdown( wx.Panel ):
                 if event.GetWheelRotation() > 0: command_type = wx.wxEVT_SCROLLWIN_LINEUP
                 else: command_type = wx.wxEVT_SCROLLWIN_LINEDOWN
                 
-                wx.PostEvent( self, wx.ScrollWinEvent( command_type ) )
+                wx.QueueEvent( self._dropdown_list.GetEventHandler(), wx.ScrollWinEvent( command_type ) )
                 
             
         
     
     def EventMove( self, event ):
         
-        try:
-            
-            self._HideDropdown()
-            
-            self._move_hide_timer.Start( 250, wx.TIMER_ONE_SHOT )
-            
-        except wx.PyDeadObjectError: pass
+        self._ParentMovedOrResized()
         
         event.Skip()
         
     
     def EventSetFocus( self, event ):
         
-        self._move_hide_timer.Start( 1, wx.TIMER_ONE_SHOT )
+        if self._float_mode:
+            
+            self._DropdownHideShow()
+            
         
         event.Skip()
         
@@ -443,7 +560,7 @@ class AutoCompleteDropdown( wx.Panel ):
         
         if num_chars == 0:
             
-            self._UpdateList()
+            self._ScheduleListRefresh( 0.0 )
             
         elif HC.options[ 'fetch_ac_results_automatically' ]:
             
@@ -451,63 +568,26 @@ class AutoCompleteDropdown( wx.Panel ):
             
             self._next_updatelist_is_probably_fast = self._next_updatelist_is_probably_fast and num_chars > len( self._last_search_text )
             
-            if self._next_updatelist_is_probably_fast: self._UpdateList()
-            elif num_chars < char_limit: self._lag_timer.Start( long_wait, wx.TIMER_ONE_SHOT )
-            else: self._lag_timer.Start( short_wait, wx.TIMER_ONE_SHOT )
-            
-        
-    
-    def RefreshList( self ):
-        
-        self._cache_text = None
-        
-        self._UpdateList()
-        
-    
-    def TIMEREventDropdownHide( self, event ):
-        
-        try:
-            
-            should_show = self._ShouldShow()
-            
-            if should_show:
+            if self._next_updatelist_is_probably_fast:
                 
-                self._ShowDropdown()
+                self._ScheduleListRefresh( 0.0 )
+                
+            elif num_chars < char_limit:
+                
+                self._ScheduleListRefresh( long_wait / 1000.0 )
                 
             else:
                 
-                self._HideDropdown()
+                self._ScheduleListRefresh( short_wait / 1000.0 )
                 
-            
-            self._move_hide_timer.Start( 250, wx.TIMER_ONE_SHOT )
-            
-        except wx.PyDeadObjectError:
-            
-            self._move_hide_timer.Stop()
-            
-        except:
-            
-            self._move_hide_timer.Stop()
-            
-            raise
             
         
     
-    def TIMEREventLag( self, event ):
+    def ForceSizeCalcNow( self ):
         
-        try:
+        if self._float_mode:
             
-            self._UpdateList()
-            
-        except wx.PyDeadObjectError:
-            
-            self._lag_timer.Stop()
-            
-        except:
-            
-            self._lag_timer.Stop()
-            
-            raise
+            self._DropdownHideShow()
             
         
     
@@ -548,7 +628,7 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         
         self._file_repo_button.SetLabelText( name )
         
-        wx.CallAfter( self.RefreshList )
+        self._SetListDirty()
         
     
     def _ChangeTagService( self, tag_service_key ):
@@ -570,10 +650,12 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         
         self._cache_text = None
         
-        wx.CallAfter( self.RefreshList )
+        self._SetListDirty()
         
     
     def _UpdateList( self ):
+        
+        self._refresh_list_job = None
         
         self._last_search_text = self._text_ctrl.GetValue()
         
@@ -589,7 +671,9 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         
         if num_chars == 0:
             
-            self._lag_timer.Start( 5 * 60 * 1000, wx.TIMER_ONE_SHOT )
+            # refresh system preds after five mins
+            
+            self._ScheduleListRefresh( 300 )
             
         
     
@@ -603,7 +687,13 @@ class AutoCompleteDropdownTags( AutoCompleteDropdown ):
         services.append( services_manager.GetService( CC.TRASH_SERVICE_KEY ) )
         services.append( services_manager.GetService( CC.COMBINED_LOCAL_FILE_SERVICE_KEY ) )
         services.extend( services_manager.GetServices( ( HC.FILE_REPOSITORY, ) ) )
-        services.append( services_manager.GetService( CC.COMBINED_FILE_SERVICE_KEY ) )
+        
+        advanced_mode = HG.client_controller.new_options.GetBoolean( 'advanced_mode' )
+        
+        if advanced_mode:
+            
+            services.append( services_manager.GetService( CC.COMBINED_FILE_SERVICE_KEY ) )
+            
         
         menu = wx.Menu()
         
@@ -660,31 +750,31 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
         self._file_search_context = file_search_context
         
         self._include_current_tags = ClientGUICommon.OnOffButton( self._dropdown_window, self._page_key, 'notify_include_current', on_label = 'include current tags', off_label = 'exclude current tags', start_on = file_search_context.IncludeCurrentTags() )
-        self._include_current_tags.SetToolTipString( 'select whether to include current tags in the search' )
+        self._include_current_tags.SetToolTip( 'select whether to include current tags in the search' )
         self._include_pending_tags = ClientGUICommon.OnOffButton( self._dropdown_window, self._page_key, 'notify_include_pending', on_label = 'include pending tags', off_label = 'exclude pending tags', start_on = file_search_context.IncludePendingTags() )
-        self._include_pending_tags.SetToolTipString( 'select whether to include pending tags in the search' )
+        self._include_pending_tags.SetToolTip( 'select whether to include pending tags in the search' )
         
         self._synchronised = ClientGUICommon.OnOffButton( self._dropdown_window, self._page_key, 'notify_search_immediately', on_label = 'searching immediately', off_label = 'waiting -- tag counts may be inaccurate', start_on = synchronised )
-        self._synchronised.SetToolTipString( 'select whether to renew the search as soon as a new predicate is entered' )
+        self._synchronised.SetToolTip( 'select whether to renew the search as soon as a new predicate is entered' )
         
         self._include_unusual_predicate_types = include_unusual_predicate_types
         
         button_hbox_1 = wx.BoxSizer( wx.HORIZONTAL )
         
-        button_hbox_1.AddF( self._include_current_tags, CC.FLAGS_EXPAND_BOTH_WAYS )
-        button_hbox_1.AddF( self._include_pending_tags, CC.FLAGS_EXPAND_BOTH_WAYS )
+        button_hbox_1.Add( self._include_current_tags, CC.FLAGS_EXPAND_BOTH_WAYS )
+        button_hbox_1.Add( self._include_pending_tags, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         button_hbox_2 = wx.BoxSizer( wx.HORIZONTAL )
         
-        button_hbox_2.AddF( self._file_repo_button, CC.FLAGS_EXPAND_BOTH_WAYS )
-        button_hbox_2.AddF( self._tag_repo_button, CC.FLAGS_EXPAND_BOTH_WAYS )
+        button_hbox_2.Add( self._file_repo_button, CC.FLAGS_EXPAND_BOTH_WAYS )
+        button_hbox_2.Add( self._tag_repo_button, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( button_hbox_1, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        vbox.AddF( self._synchronised, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( button_hbox_2, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        vbox.AddF( self._dropdown_list, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( button_hbox_1, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        vbox.Add( self._synchronised, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( button_hbox_2, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        vbox.Add( self._dropdown_list, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self._dropdown_window.SetSizer( vbox )
         
@@ -1014,7 +1104,7 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
             
             self._file_search_context.SetIncludeCurrentTags( value )
             
-            wx.CallAfter( self.RefreshList )
+            self._SetListDirty()
             
             HG.client_controller.pub( 'refresh_query', self._page_key )
             
@@ -1026,7 +1116,7 @@ class AutoCompleteDropdownTagsRead( AutoCompleteDropdownTags ):
             
             self._file_search_context.SetIncludePendingTags( value )
             
-            wx.CallAfter( self.RefreshList )
+            self._SetListDirty()
             
             HG.client_controller.pub( 'refresh_query', self._page_key )
             
@@ -1061,11 +1151,11 @@ class AutoCompleteDropdownTagsWrite( AutoCompleteDropdownTags ):
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        hbox.AddF( self._file_repo_button, CC.FLAGS_EXPAND_BOTH_WAYS )
-        hbox.AddF( self._tag_repo_button, CC.FLAGS_EXPAND_BOTH_WAYS )
+        hbox.Add( self._file_repo_button, CC.FLAGS_EXPAND_BOTH_WAYS )
+        hbox.Add( self._tag_repo_button, CC.FLAGS_EXPAND_BOTH_WAYS )
         
-        vbox.AddF( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        vbox.AddF( self._dropdown_list, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        vbox.Add( self._dropdown_list, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self._dropdown_window.SetSizer( vbox )
         

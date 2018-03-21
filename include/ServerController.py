@@ -1,4 +1,3 @@
-import httplib
 import HydrusConstants as HC
 import HydrusController
 import HydrusData
@@ -162,6 +161,8 @@ class Controller( HydrusController.HydrusController ):
         
         self._name = 'server'
         
+        self._shutdown = False
+        
         HG.server_controller = self
         
     
@@ -233,7 +234,7 @@ class Controller( HydrusController.HydrusController ):
                     HydrusData.Print( traceback.format_exc() )
                     
                 
-        
+            
             if service_key in self._service_keys_to_connected_ports:
                 
                 deferred = defer.maybeDeferred( self._service_keys_to_connected_ports[ service_key ].stopListening )
@@ -280,11 +281,6 @@ class Controller( HydrusController.HydrusController ):
         return self.db.GetFilesDir()
         
     
-    def GetServerSessionManager( self ):
-        
-        return self._server_session_manager
-        
-    
     def GetServices( self ):
         
         return list( self._services )
@@ -294,7 +290,7 @@ class Controller( HydrusController.HydrusController ):
         
         HydrusController.HydrusController.InitModel( self )
         
-        self._server_session_manager = HydrusSessions.HydrusSessionManagerServer()
+        self.server_session_manager = HydrusSessions.HydrusSessionManagerServer()
         
         self._service_keys_to_connected_ports = {}
         
@@ -382,33 +378,21 @@ class Controller( HydrusController.HydrusController ):
         
         HydrusData.Print( 'Server is running. Press Ctrl+C to quit.' )
         
-        interrupt_received = False
-        
-        while not self._model_shutdown:
+        try:
             
-            try:
-                
+            while not self._model_shutdown and not self._shutdown:
+            
                 time.sleep( 1 )
                 
-            except KeyboardInterrupt:
-                
-                if not interrupt_received:
-                    
-                    interrupt_received = True
-                    
-                    def do_it():
-                        
-                        HydrusData.Print( u'Received a keyboard interrupt\u2026' )
-                        
-                        self.Exit()
-                        
-                    
-                    self.CallToThread( do_it )
-                    
-                
+            
+        except KeyboardInterrupt:
+            
+            HydrusData.Print( u'Received a keyboard interrupt\u2026' )
             
         
         HydrusData.Print( u'Shutting down controller\u2026' )
+        
+        self.Exit()
         
     
     def SaveDirtyObjects( self ):
@@ -422,7 +406,7 @@ class Controller( HydrusController.HydrusController ):
                 self.WriteSynchronous( 'dirty_services', dirty_services )
                 
             
-            dirty_accounts = self._server_session_manager.GetDirtyAccounts()
+            dirty_accounts = self.server_session_manager.GetDirtyAccounts()
             
             if len( dirty_accounts ) > 0:
                 
@@ -479,14 +463,7 @@ class Controller( HydrusController.HydrusController ):
         
         HydrusData.Print( u'Received a server shut down request\u2026' )
         
-        def do_it():
-            
-            time.sleep( 1 )
-            
-            self.Exit()
-            
-        
-        self.CallToThread( do_it )
+        self._shutdown = True
         
     
     def SyncRepositories( self ):

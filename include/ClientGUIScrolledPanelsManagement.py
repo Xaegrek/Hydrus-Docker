@@ -1,24 +1,29 @@
 import ClientCaches
 import ClientConstants as CC
 import ClientData
+import ClientDefaults
 import ClientDownloading
 import ClientGUIACDropdown
 import ClientGUICommon
 import ClientGUIControls
 import ClientGUIDialogs
 import ClientGUIListBoxes
+import ClientGUIListCtrl
 import ClientGUIPredicates
 import ClientGUIScrolledPanels
 import ClientGUIScrolledPanelsEdit
 import ClientGUIScrolledPanelsReview
 import ClientGUISerialisable
+import ClientGUIShortcuts
 import ClientGUITagSuggestions
 import ClientGUITopLevelWindows
+import ClientNetworking
 import ClientImporting
 import ClientMedia
 import ClientRatings
 import ClientSerialisable
 import ClientServices
+import ClientGUITime
 import collections
 import HydrusConstants as HC
 import HydrusData
@@ -30,11 +35,13 @@ import HydrusPaths
 import HydrusSerialisable
 import HydrusTagArchive
 import HydrusTags
+import HydrusText
 import itertools
 import os
 import random
 import traceback
 import urlparse
+import webbrowser
 import wx
 
 class ManageAccountTypesPanel( ClientGUIScrolledPanels.ManagePanel ):
@@ -47,7 +54,7 @@ class ManageAccountTypesPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         self._deletee_account_type_keys_to_new_account_type_keys = {}
         
-        self._account_types_listctrl = ClientGUICommon.SaneListCtrlForSingleObject( self, 200, [ ( 'title', -1 ) ], delete_key_callback = self._Delete, activation_callback = self._Edit )
+        self._account_types_listctrl = ClientGUIListCtrl.SaneListCtrlForSingleObject( self, 200, [ ( 'title', -1 ) ], delete_key_callback = self._Delete, activation_callback = self._Edit )
         
         self._add_button = ClientGUICommon.BetterButton( self, 'add', self._Add )
         self._edit_button = ClientGUICommon.BetterButton( self, 'edit', self._Edit )
@@ -66,14 +73,14 @@ class ManageAccountTypesPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        hbox.AddF( self._add_button, CC.FLAGS_VCENTER )
-        hbox.AddF( self._edit_button, CC.FLAGS_VCENTER )
-        hbox.AddF( self._delete_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._add_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._edit_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._delete_button, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._account_types_listctrl, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( hbox, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( self._account_types_listctrl, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( hbox, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
@@ -243,7 +250,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         ClientGUIScrolledPanels.ManagePanel.__init__( self, parent )
         
-        self._listctrl = ClientGUICommon.SaneListCtrlForSingleObject( self, 400, [ ( 'type', 220 ), ( 'name', -1 ), ( 'deletable', 120 ) ], delete_key_callback = self._Delete, activation_callback = self._Edit )
+        self._listctrl = ClientGUIListCtrl.BetterListCtrl( self, 'manage_services', 25, 20, [ ( 'type', 20 ), ( 'name', -1 ), ( 'deletable', 12 ) ], self._ConvertServiceToListCtrlTuples, delete_key_callback = self._Delete, activation_callback = self._Edit)
         
         menu_items = []
         
@@ -260,51 +267,26 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         #
         
-        all_services = HG.client_controller.services_manager.GetServices()
+        self._original_services = HG.client_controller.services_manager.GetServices()
         
-        for service in all_services:
-            
-            ( display_tuple, sort_tuple ) = self._ConvertServiceToTuples( service )
-            
-            self._listctrl.Append( display_tuple, sort_tuple, service )
-            
+        self._listctrl.AddDatas( self._original_services )
         
-        self._listctrl.SortListItems( 0 )
+        self._listctrl.Sort( 0 )
         
         #
         
         add_remove_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        add_remove_hbox.AddF( self._add_button, CC.FLAGS_LONE_BUTTON )
-        add_remove_hbox.AddF( self._edit_button, CC.FLAGS_LONE_BUTTON )
-        add_remove_hbox.AddF( self._delete_button, CC.FLAGS_LONE_BUTTON )
+        add_remove_hbox.Add( self._add_button, CC.FLAGS_LONE_BUTTON )
+        add_remove_hbox.Add( self._edit_button, CC.FLAGS_LONE_BUTTON )
+        add_remove_hbox.Add( self._delete_button, CC.FLAGS_LONE_BUTTON )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._listctrl, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( add_remove_hbox, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( self._listctrl, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( add_remove_hbox, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
-        
-    
-    def _ConvertServiceToTuples( self, service ):
-        
-        service_type = service.GetServiceType()
-        name = service.GetName()
-        deletable = service_type in HC.ADDREMOVABLE_SERVICES
-        
-        pretty_service_type = HC.service_string_lookup[ service_type ]
-        
-        if deletable:
-            
-            pretty_deletable = 'yes'
-            
-        else:
-            
-            pretty_deletable = ''
-            
-        
-        return ( ( pretty_service_type, name, pretty_deletable ), ( pretty_service_type, name, deletable ) )
         
     
     def _Add( self, service_type ):
@@ -324,67 +306,124 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 new_service = panel.GetValue()
                 
-                self._listctrl.SetNonDupeName( new_service )
+                ClientGUIListCtrl.SetNonDupeName( new_service, self._GetExistingNames() )
                 
-                ( display_tuple, sort_tuple ) = self._ConvertServiceToTuples( new_service )
+                self._listctrl.AddDatas( ( new_service, ) )
                 
-                self._listctrl.Append( display_tuple, sort_tuple, new_service )
+                self._listctrl.Sort()
                 
             
+        
+    
+    def _ConvertServiceToListCtrlTuples( self, service ):
+        
+        service_type = service.GetServiceType()
+        name = service.GetName()
+        deletable = service_type in HC.ADDREMOVABLE_SERVICES
+        
+        pretty_service_type = HC.service_string_lookup[ service_type ]
+        
+        if deletable:
+            
+            pretty_deletable = 'yes'
+            
+        else:
+            
+            pretty_deletable = ''
+            
+        
+        return ( ( pretty_service_type, name, pretty_deletable ), ( pretty_service_type, name, deletable ) )
+        
+    
+    def _GetExistingNames( self ):
+        
+        services = self._listctrl.GetData()
+        
+        names = { service.GetName() for service in services }
+        
+        return names
         
     
     def _Delete( self ):
         
-        deletable_indices = []
+        selected_services = self._listctrl.GetData( only_selected = True )
         
-        selected = self._listctrl.GetAllSelected()
+        deletable_services = [ service for service in selected_services if service.GetServiceType() in HC.ADDREMOVABLE_SERVICES ]
         
-        for index in selected:
+        if len( deletable_services ) > 0:
             
-            service = self._listctrl.GetObject( index )
-            
-            if service.GetServiceType() in HC.ADDREMOVABLE_SERVICES:
+            with ClientGUIDialogs.DialogYesNo( self, 'Delete the selected services?' ) as dlg:
                 
-                deletable_indices.append( index )
+                if dlg.ShowModal() == wx.ID_YES:
+                    
+                    self._listctrl.DeleteDatas( deletable_services )
+                    
                 
             
-        
-        self._listctrl.RemoveIndices( deletable_indices )
         
     
     def _Edit( self ):
         
-        indices = self._listctrl.GetAllSelected()
+        selected_services = self._listctrl.GetData( only_selected = True )
         
-        for index in indices:
+        try:
             
-            service = self._listctrl.GetObject( index )
+            for service in selected_services:
+                
+                with ClientGUITopLevelWindows.DialogEdit( self, 'edit service' ) as dlg:
+                    
+                    panel = self._EditPanel( dlg, service )
+                    
+                    dlg.SetPanel( panel )
+                    
+                    if dlg.ShowModal() == wx.ID_OK:
+                        
+                        self._listctrl.DeleteDatas( ( service, ) )
+                        
+                        edited_service = panel.GetValue()
+                        
+                        ClientGUIListCtrl.SetNonDupeName( edited_service, self._GetExistingNames() )
+                        
+                        self._listctrl.AddDatas( ( edited_service, ) )
+                        
+                    else:
+                        
+                        return
+                        
+                    
+                
             
-            with ClientGUITopLevelWindows.DialogEdit( self, 'edit service' ) as dlg:
-                
-                panel = self._EditPanel( dlg, service )
-                
-                dlg.SetPanel( panel )
-                
-                if dlg.ShowModal() == wx.ID_OK:
-                    
-                    edited_service = panel.GetValue()
-                    
-                    ( display_tuple, sort_tuple ) = self._ConvertServiceToTuples( edited_service )
-                    
-                    self._listctrl.UpdateRow( index, display_tuple, sort_tuple, edited_service )
-                    
-                else:
-                    
-                    return
-                    
-                
+        finally:
+            
+            self._listctrl.Sort()
             
         
     
     def CommitChanges( self ):
         
-        services = self._listctrl.GetObjects()
+        services = self._listctrl.GetData()
+        
+        new_service_keys = { service.GetServiceKey() for service in services }
+        
+        deletee_service_names = [ service.GetName() for service in self._original_services if service.GetServiceKey() not in new_service_keys ]
+        
+        if len( deletee_service_names ) > 0:
+            
+            message = 'You are about to delete the following services:'
+            message += os.linesep * 2
+            message += os.linesep.join( deletee_service_names )
+            message += os.linesep * 2
+            message += 'Are you absolutely sure this is correct?'
+            
+            with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
+                
+                if dlg.ShowModal() != wx.ID_YES:
+                    
+                    raise HydrusExceptions.VetoException( 'Commit cancelled by user! If you do not believe you meant to delete any services (i.e the code accidentally intended to delete them all by itself), please inform hydrus dev immediately.' )
+                    
+                
+            
+            
         
         HG.client_controller.SetServices( services )
         
@@ -444,11 +483,11 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( self._service_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._service_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             for panel in self._panels:
                 
-                vbox.AddF( panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+                vbox.Add( panel, CC.FLAGS_EXPAND_PERPENDICULAR )
                 
             
             self.SetSizer( vbox )
@@ -592,7 +631,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 #
                 
-                self.AddF( self._name, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self.Add( self._name, CC.FLAGS_EXPAND_PERPENDICULAR )
                 
             
             def GetValue( self ):
@@ -601,9 +640,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 if name == '':
                     
-                    wx.MessageBox( 'Please enter a name!' )
-                    
-                    raise HydrusExceptions.VetoException()
+                    raise HydrusExceptions.VetoException( 'Please enter a name!' )
                     
                 
                 return name
@@ -614,19 +651,16 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             def __init__( self, parent, service_type, dictionary ):
                 
-                ClientGUICommon.StaticBox.__init__( self, parent, 'clientside network' )
+                ClientGUICommon.StaticBox.__init__( self, parent, 'network connection' )
                 
                 self._service_type = service_type
                 
                 credentials = dictionary[ 'credentials' ]
-                bandwidth_rules = dictionary[ 'bandwidth_rules' ]
                 
                 self._host = wx.TextCtrl( self )
                 self._port = wx.SpinCtrl( self, min = 1, max = 65535, size = ( 80, -1 ) )
                 
                 self._test_address_button = ClientGUICommon.BetterButton( self, 'test address', self._TestAddress )
-                
-                self._bandwidth_rules = ClientGUIControls.BandwidthRulesCtrl( self, bandwidth_rules )
                 
                 #
                 
@@ -639,15 +673,14 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 hbox = wx.BoxSizer( wx.HORIZONTAL )
                 
-                hbox.AddF( self._host, CC.FLAGS_EXPAND_BOTH_WAYS )
-                hbox.AddF( ClientGUICommon.BetterStaticText( self, ':' ), CC.FLAGS_VCENTER )
-                hbox.AddF( self._port, CC.FLAGS_VCENTER )
+                hbox.Add( self._host, CC.FLAGS_EXPAND_BOTH_WAYS )
+                hbox.Add( ClientGUICommon.BetterStaticText( self, ':' ), CC.FLAGS_VCENTER )
+                hbox.Add( self._port, CC.FLAGS_VCENTER )
                 
                 wrapped_hbox = ClientGUICommon.WrapInText( hbox, self, 'address: ' )
                 
-                self.AddF( wrapped_hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
-                self.AddF( self._test_address_button, CC.FLAGS_LONE_BUTTON )
-                self.AddF( self._bandwidth_rules, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self.Add( wrapped_hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self.Add( self._test_address_button, CC.FLAGS_LONE_BUTTON )
                 
             
             def _TestAddress( self ):
@@ -656,7 +689,14 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     credentials = self.GetCredentials()
                     
-                except HydrusExceptions.VetoException:
+                except HydrusExceptions.VetoException as e:
+                    
+                    message = HydrusData.ToUnicode( e )
+                    
+                    if len( message ) > 0:
+                        
+                        wx.MessageBox( message )
+                        
                     
                     return
                     
@@ -666,21 +706,27 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 if self._service_type == HC.IPFS:
                     
                     scheme = 'http://'
-                    hydrus_network = False
                     request = 'api/v0/version'
                     
                 else:
                     
                     scheme = 'https://'
-                    hydrus_network = True
                     request = ''
                     
                 
                 url = scheme + host + ':' + str( port ) + '/' + request
                 
+                network_job = ClientNetworking.NetworkJobHydrus( CC.TEST_SERVICE_KEY, 'GET', url )
+                
+                network_job.OverrideBandwidth()
+                
+                network_job.SetForLogin( True )
+                
+                HG.client_controller.network_engine.AddJob( network_job )
+                
                 try:
                     
-                    result = HG.client_controller.DoHTTP( HC.GET, url, hydrus_network = hydrus_network )
+                    network_job.WaitUntilDone()
                     
                     wx.MessageBox( 'Got an ok response!' )
                     
@@ -696,9 +742,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 if host == '':
                     
-                    wx.MessageBox( 'Please enter a host!' )
-                    
-                    raise HydrusExceptions.VetoException()
+                    raise HydrusExceptions.VetoException( 'Please enter a host!' )
                     
                 
                 port = self._port.GetValue()
@@ -713,10 +757,6 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 credentials = self.GetCredentials()
                 
                 dictionary_part[ 'credentials' ] = credentials
-                
-                bandwidth_rules = self._bandwidth_rules.GetValue()
-                
-                dictionary_part[ 'bandwidth_rules' ] = bandwidth_rules
                 
                 return dictionary_part
                 
@@ -750,31 +790,78 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 hbox = wx.BoxSizer( wx.HORIZONTAL )
                 
-                hbox.AddF( self._register, CC.FLAGS_LONE_BUTTON )
-                hbox.AddF( self._test_credentials_button, CC.FLAGS_LONE_BUTTON )
+                hbox.Add( self._register, CC.FLAGS_LONE_BUTTON )
+                hbox.Add( self._test_credentials_button, CC.FLAGS_LONE_BUTTON )
                 
                 wrapped_access_key = ClientGUICommon.WrapInText( self._access_key, self, 'access key: ' )
                 
-                self.AddF( wrapped_access_key, CC.FLAGS_EXPAND_PERPENDICULAR )
-                self.AddF( hbox, CC.FLAGS_BUTTON_SIZER )
+                self.Add( wrapped_access_key, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self.Add( hbox, CC.FLAGS_BUTTON_SIZER )
                 
             
             def _GetAccessKeyFromRegistrationKey( self ):
                 
-                def do_it( service, registration_key ):
+                def wx_done():
+                    
+                    if not self:
+                        
+                        return
+                        
+                    
+                    self._register.Enable()
+                    self._register.SetLabel( 'fetch an access key with a registration key' )
+                    
+                
+                def wx_setkey( access_key_encoded ):
+                    
+                    if not self:
+                        
+                        return
+                        
+                    
+                    self._access_key.SetValue( access_key_encoded )
+                    
+                
+                def do_it( credentials, registration_key ):
                     
                     try:
                         
-                        response = service.Request( HC.GET, 'access_key', { 'registration_key' : registration_key } )
+                        ( host, port ) = credentials.GetAddress()
                         
-                        access_key_encoded = response[ 'access_key' ].encode( 'hex' )
+                        url = 'https://' + host + ':' + str( port ) + '/access_key?registration_key=' + registration_key.encode( 'hex' )
                         
-                        wx.CallAfter( self._access_key.SetValue, access_key_encoded )
+                        network_job = ClientNetworking.NetworkJobHydrus( CC.TEST_SERVICE_KEY, 'GET', url )
+                        
+                        network_job.OverrideBandwidth()
+                        
+                        network_job.SetForLogin( True )
+                        
+                        HG.client_controller.network_engine.AddJob( network_job )
+                        
+                        try:
+                            
+                            network_job.WaitUntilDone()
+                            
+                            content = network_job.GetContent()
+                            
+                            response = HydrusNetwork.ParseBodyString( content )
+                            
+                            access_key_encoded = response[ 'access_key' ].encode( 'hex' )
+                            
+                            wx.CallAfter( wx_setkey, access_key_encoded )
+                            
+                            wx.MessageBox( 'Looks good!' )
+                            
+                        except Exception as e:
+                            
+                            HydrusData.PrintException( e )
+                            
+                            wx.MessageBox( 'Had a problem: ' + HydrusData.ToUnicode( e ) )
+                            
                         
                     finally:
                         
-                        wx.CallAfter( self._register.Enable )
-                        wx.CallAfter( self._register.SetLabel, 'fetch an access key with a registration key' )
+                        wx.CallAfter( wx_done )
                         
                     
                 
@@ -782,7 +869,14 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     credentials = self._remote_panel.GetCredentials()
                     
-                except HydrusExceptions.VetoException:
+                except HydrusExceptions.VetoException as e:
+                    
+                    message = HydrusData.ToUnicode( e )
+                    
+                    if len( message ) > 0:
+                        
+                        wx.MessageBox( message )
+                        
                     
                     return
                     
@@ -822,63 +916,75 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                         
                     
                 
-                service_key = HydrusData.GenerateKey()
-                
-                service = ClientServices.GenerateService( service_key, self._service_type, 'test service' )
-                
-                service.SetCredentials( credentials )
-                
                 self._register.Disable()
                 self._register.SetLabel( u'fetching\u2026' )
                 
-                HG.client_controller.CallToThread( do_it, service, registration_key )
+                HG.client_controller.CallToThread( do_it, credentials, registration_key )
                 
             
             def _TestCredentials( self ):
+                
+                def do_it( credentials ):
+                    
+                    service = ClientServices.GenerateService( CC.TEST_SERVICE_KEY, self._service_type, CC.TEST_SERVICE_KEY )
+                    
+                    service.SetCredentials( credentials )
+                    
+                    try:
+                        
+                        if self._service_type in HC.RESTRICTED_SERVICES:
+                            
+                            response = service.Request( HC.GET, 'access_key_verification' )
+                            
+                            if not response[ 'verified' ]:
+                                
+                                wx.MessageBox( 'That access key was not recognised!' )
+                                
+                            else:
+                                
+                                wx.MessageBox( 'Everything looks ok!' )
+                                
+                            
+                        
+                    except HydrusExceptions.WrongServiceTypeException:
+                        
+                        wx.MessageBox( 'Connection was made, but the service was not a ' + HC.service_string_lookup[ self._service_type ] + '.' )
+                        
+                        return
+                        
+                    except HydrusExceptions.NetworkException as e:
+                        
+                        wx.MessageBox( 'Network problem: ' + HydrusData.ToUnicode( e ) )
+                        
+                        return
+                        
+                    finally:
+                        
+                        self._test_credentials_button.Enable()
+                        self._test_credentials_button.SetLabel( 'test access key' )
+                        
+                    
                 
                 try:
                     
                     credentials = self.GetCredentials()
                     
-                except HydrusExceptions.VetoException:
+                except HydrusExceptions.VetoException as e:
+                    
+                    message = HydrusData.ToUnicode( e )
+                    
+                    if len( message ) > 0:
+                        
+                        wx.MessageBox( message )
+                        
                     
                     return
                     
                 
-                service_key = HydrusData.GenerateKey()
+                self._test_credentials_button.Disable()
+                self._test_credentials_button.SetLabel( u'fetching\u2026' )
                 
-                service = ClientServices.GenerateService( service_key, self._service_type, 'test service' )
-                
-                service.SetCredentials( credentials )
-                
-                try:
-                    
-                    if self._service_type in HC.RESTRICTED_SERVICES:
-                        
-                        response = service.Request( HC.GET, 'access_key_verification' )
-                        
-                        if not response[ 'verified' ]:
-                            
-                            wx.MessageBox( 'That access key was not recognised!' )
-                            
-                        else:
-                            
-                            wx.MessageBox( 'Everything looks ok!' )
-                            
-                        
-                    
-                except HydrusExceptions.WrongServiceTypeException:
-                    
-                    wx.MessageBox( 'Connection was made, but the service was not a ' + HC.service_string_lookup[ self._service_type ] + '.' )
-                    
-                    return
-                    
-                except HydrusExceptions.NetworkException as e:
-                    
-                    wx.MessageBox( 'Network problem: ' + HydrusData.ToUnicode( e ) )
-                    
-                    return
-                    
+                HG.client_controller.CallToThread( do_it, credentials )
                 
             
             def GetCredentials( self ):
@@ -891,9 +997,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                 except:
                     
-                    wx.MessageBox( 'Could not understand that access key!' )
-                    
-                    raise HydrusExceptions.VetoException()
+                    raise HydrusExceptions.VetoException( 'Could not understand that access key!')
                     
                 
                 if access_key != '':
@@ -916,9 +1020,9 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     dictionary_part[ 'account' ] = HydrusNetwork.Account.GenerateSerialisableTupleFromAccount( account )
                     
-                    session_manager = HG.client_controller.GetClientSessionManager()
+                    network_context = ClientNetworking.NetworkContext( CC.NETWORK_CONTEXT_HYDRUS, self._service_key )
                     
-                    session_manager.DeleteSessionKey( self._service_key )
+                    HG.client_controller.network_engine.session_manager.ClearSession( network_context )
                     
                 
                 dictionary_part[ 'credentials' ] = credentials
@@ -985,7 +1089,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 #
                 
-                self.AddF( self._st, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self.Add( self._st, CC.FLAGS_EXPAND_PERPENDICULAR )
                 
             
             def GetValue( self ):
@@ -1002,35 +1106,35 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 ClientGUICommon.StaticBox.__init__( self, parent, 'local booru' )
                 
-                #dictionary[ 'port' ] = None
-                #dictionary[ 'upnp_port' ] = None
-                #dictionary[ 'bandwidth_rules' ] = HydrusNetworking.BandwidthRules()
-                
-                self._st = ClientGUICommon.BetterStaticText( self )
-                '''
-            if service_type == HC.LOCAL_BOORU:
-                
                 self._booru_options_panel = ClientGUICommon.StaticBox( self, 'options' )
                 
                 self._port = ClientGUICommon.NoneableSpinCtrl( self._booru_options_panel, 'booru local port', none_phrase = 'do not run local booru service', min = 1, max = 65535 )
                 
                 self._upnp = ClientGUICommon.NoneableSpinCtrl( self._booru_options_panel, 'upnp port', none_phrase = 'do not forward port', max = 65535 )
                 
-                self._max_monthly_data = ClientGUICommon.NoneableSpinCtrl( self._booru_options_panel, 'max monthly MB', multiplier = 1024 * 1024 )
-                
-            '''
-                #
-                
-                self._st.SetLabelText( 'This is a Local Booru service. This box will get regain its port options in a future update.' )
+                self._bandwidth_rules = ClientGUIControls.BandwidthRulesCtrl( self._booru_options_panel, dictionary[ 'bandwidth_rules' ] )
                 
                 #
                 
-                self.AddF( self._st, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self._port.SetValue( dictionary[ 'port' ] )
+                self._upnp.SetValue( dictionary[ 'upnp_port' ] )
+                
+                #
+                
+                self._booru_options_panel.Add( self._port, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self._booru_options_panel.Add( self._upnp, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self._booru_options_panel.Add( self._bandwidth_rules, CC.FLAGS_EXPAND_BOTH_WAYS )
+                
+                self.Add( self._booru_options_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
                 
             
             def GetValue( self ):
                 
                 dictionary_part = {}
+                
+                dictionary_part[ 'port' ] = self._port.GetValue()
+                dictionary_part[ 'upnp_port' ] = self._upnp.GetValue()
+                dictionary_part[ 'bandwidth_rules' ] = self._bandwidth_rules.GetValue()
                 
                 return dictionary_part
                 
@@ -1085,8 +1189,8 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     hbox = wx.BoxSizer( wx.HORIZONTAL )
                     
-                    hbox.AddF( border_ctrl, CC.FLAGS_VCENTER )
-                    hbox.AddF( fill_ctrl, CC.FLAGS_VCENTER )
+                    hbox.Add( border_ctrl, CC.FLAGS_VCENTER )
+                    hbox.Add( fill_ctrl, CC.FLAGS_VCENTER )
                     
                     if colour_type == ClientRatings.LIKE: colour_text = 'liked'
                     elif colour_type == ClientRatings.DISLIKE: colour_text = 'disliked'
@@ -1098,7 +1202,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 gridbox = ClientGUICommon.WrapInGrid( self, rows )
                 
-                self.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
                 
             
             def GetValue( self ):
@@ -1149,7 +1253,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 gridbox = ClientGUICommon.WrapInGrid( self, rows )
                 
-                self.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
                 
             
             def GetValue( self ):
@@ -1187,7 +1291,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 tts += os.linesep
                 tts += 'http://ipfs.io/ipfs/'
                 
-                self._multihash_prefix.SetToolTipString( tts )
+                self._multihash_prefix.SetToolTip( tts )
                 
                 #
                 
@@ -1195,7 +1299,7 @@ class ManageClientServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 #
                 
-                self.AddF( ClientGUICommon.WrapInText( self._multihash_prefix, self, 'multihash prefix: ' ), CC.FLAGS_EXPAND_PERPENDICULAR )
+                self.Add( ClientGUICommon.WrapInText( self._multihash_prefix, self, 'multihash prefix: ' ), CC.FLAGS_EXPAND_PERPENDICULAR )
                 
             
             def GetValue( self ):
@@ -1215,379 +1319,151 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         ClientGUIScrolledPanels.ManagePanel.__init__( self, parent )
         
-        self._new_options = HG.client_controller.GetNewOptions()
+        self._new_options = HG.client_controller.new_options
         
         self._listbook = ClientGUICommon.ListBook( self )
         
+        self._listbook.AddPage( 'gui', 'gui', self._GUIPanel( self._listbook ) ) # leave this at the top, to make it default page
         self._listbook.AddPage( 'connection', 'connection', self._ConnectionPanel( self._listbook ) )
         self._listbook.AddPage( 'files and trash', 'files and trash', self._FilesAndTrashPanel( self._listbook ) )
         self._listbook.AddPage( 'speed and memory', 'speed and memory', self._SpeedAndMemoryPanel( self._listbook, self._new_options ) )
         self._listbook.AddPage( 'maintenance and processing', 'maintenance and processing', self._MaintenanceAndProcessingPanel( self._listbook ) )
         self._listbook.AddPage( 'media', 'media', self._MediaPanel( self._listbook ) )
-        self._listbook.AddPage( 'gui', 'gui', self._GUIPanel( self._listbook ) )
         #self._listbook.AddPage( 'sound', 'sound', self._SoundPanel( self._listbook ) )
         self._listbook.AddPage( 'default file system predicates', 'default file system predicates', self._DefaultFileSystemPredicatesPanel( self._listbook, self._new_options ) )
-        self._listbook.AddPage( 'default tag import options', 'default tag import options', self._DefaultTagImportOptionsPanel( self._listbook, self._new_options ) )
         self._listbook.AddPage( 'colours', 'colours', self._ColoursPanel( self._listbook ) )
+        self._listbook.AddPage( 'regex favourites', 'regex favourites', self._RegexPanel( self._listbook ) )
         self._listbook.AddPage( 'sort/collect', 'sort/collect', self._SortCollectPanel( self._listbook ) )
-        #self._listbook.AddPage( 'file storage locations', 'file storage locations', self._ClientFilesPanel( self._listbook ) )
         self._listbook.AddPage( 'downloading', 'downloading', self._DownloadingPanel( self._listbook, self._new_options ) )
+        self._listbook.AddPage( 'importing', 'importing', self._ImportingPanel( self._listbook, self._new_options ) )
+        self._listbook.AddPage( 'tag summaries', 'tag summaries', self._TagSummariesPanel( self._listbook, self._new_options ) )
         self._listbook.AddPage( 'tags', 'tags', self._TagsPanel( self._listbook, self._new_options ) )
         
         #
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._listbook, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( self._listbook, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
     
-    class _ClientFilesPanel( wx.Panel ):
-        
-        def __init__( self, parent ):
-            
-            wx.Panel.__init__( self, parent )
-            
-            self._client_files = ClientGUICommon.SaneListCtrl( self, 120, [ ( 'preferred path', -1 ), ( 'how the client will store it', 180 ), ( 'weight', 80 ) ], delete_key_callback = self.Delete, activation_callback = self.Edit )
-            
-            self._add = wx.Button( self, label = 'add' )
-            self._add.Bind( wx.EVT_BUTTON, self.EventAdd )
-            
-            self._edit = wx.Button( self, label = 'edit weight' )
-            self._edit.Bind( wx.EVT_BUTTON, self.EventEditWeight )
-            
-            self._delete = wx.Button( self, label = 'delete' )
-            self._delete.Bind( wx.EVT_BUTTON, self.EventDelete )
-            
-            self._resized_thumbnails_override = wx.DirPickerCtrl( self, style = wx.DIRP_USE_TEXTCTRL )
-            
-            self._full_size_thumbnails_override = wx.DirPickerCtrl( self, style = wx.DIRP_USE_TEXTCTRL )
-            
-            #
-            
-            self._new_options = HG.client_controller.GetNewOptions()
-            
-            ( locations_to_ideal_weights, resized_thumbnail_override, full_size_thumbnail_override ) = self._new_options.GetClientFilesLocationsToIdealWeights()
-            
-            for ( location, weight ) in locations_to_ideal_weights.items():
-                
-                ( display_tuple, data_tuple ) = self._GetTuples( location, weight )
-                
-                self._client_files.Append( display_tuple, data_tuple )
-                
-            
-            if resized_thumbnail_override is not None:
-                
-                self._resized_thumbnails_override.SetPath( resized_thumbnail_override )
-                
-            
-            if full_size_thumbnail_override is not None:
-                
-                self._full_size_thumbnails_override.SetPath( full_size_thumbnail_override )
-                
-            
-            #
-            
-            current_locations_string = self._GenerateCurrentLocationsString()
-            
-            vbox = wx.BoxSizer( wx.VERTICAL )
-            
-            text = 'Here you can change where you would like the client to store your files. This is not for new users!'
-            text += os.linesep * 2
-            text += 'As moving many files can take time, this dialog will not realign your storage folders instantly--instead, it changes your _preferred_ locations. If you add or remove folders here, it will take time for the client to incrementally rebalance your storage to the new selection.'
-            text += os.linesep * 2
-            text += 'Hence, if you wish to migrate your files, it is best started through this dialog, not by manually chopping up client_files while the client is closed and trying to catch up later. (This will lead to headaches!) If you have a portable/USB install or plan to move your install, review the \'how the client will store it\' column--paths beneath your database directory will be stored as relative! Plan migrations carefully and make backups!'
-            text += os.linesep * 2
-            text +='Setting a higher weight increases the proportion of your collection that that folder stores. Outstanding rebalancing will occur in your normal idle time, but if you want to perform it immediately, you can force a full rebalance from the database->maintain menu on the main gui.'
-            text += os.linesep * 2
-            text +='Currently, your files are distributed like so:'
-            text += os.linesep * 2
-            text += current_locations_string
-            text += os.linesep * 2
-            text +='And here are where you would like you files to eventually be:'
-            
-            st = ClientGUICommon.BetterStaticText( self, text )
-            
-            st.Wrap( 540 )
-            
-            vbox.AddF( st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            
-            vbox.AddF( self._client_files, CC.FLAGS_EXPAND_PERPENDICULAR )
-            
-            hbox = wx.BoxSizer( wx.HORIZONTAL )
-            
-            hbox.AddF( self._add, CC.FLAGS_VCENTER )
-            hbox.AddF( self._edit, CC.FLAGS_VCENTER )
-            hbox.AddF( self._delete, CC.FLAGS_VCENTER )
-            
-            vbox.AddF( hbox, CC.FLAGS_BUTTON_SIZER )
-            
-            text = 'If you like, you can force your thumbnails to be stored elsewhere, for instance on a low-latency SSD.'
-            text += os.linesep * 2
-            text += 'Normally, your full size thumbnails are very rarely accessed--only to (re)generate resized thumbnails--so you can store them somewhere slow, but if you set the thumbnail size to be the maximum of 200x200, these originals will be used instead of resized thumbs and are thus good in a fast location.'
-            text += os.linesep * 2
-            text += 'Leave either of these blank to store the thumbnails alongside the original files.'
-            
-            st = ClientGUICommon.BetterStaticText( self, text )
-            
-            st.Wrap( 540 )
-            
-            vbox.AddF( st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            
-            hbox = wx.BoxSizer( wx.HORIZONTAL )
-            
-            hbox.AddF( ClientGUICommon.BetterStaticText( self, 'full size thumbnail override location: ' ), CC.FLAGS_VCENTER )
-            hbox.AddF( self._full_size_thumbnails_override, CC.FLAGS_EXPAND_BOTH_WAYS )
-            
-            vbox.AddF( hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
-            
-            hbox = wx.BoxSizer( wx.HORIZONTAL )
-            
-            hbox.AddF( ClientGUICommon.BetterStaticText( self, 'resized thumbnail override location: ' ), CC.FLAGS_VCENTER )
-            hbox.AddF( self._resized_thumbnails_override, CC.FLAGS_EXPAND_BOTH_WAYS )
-            
-            vbox.AddF( hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
-            
-            self.SetSizer( vbox )
-            
-        
-        def _GenerateCurrentLocationsString( self ):
-            
-            prefixes_to_locations = HG.client_controller.Read( 'client_files_locations' )
-            
-            locations_to_file_weights = collections.Counter()
-            locations_to_fs_thumb_weights = collections.Counter()
-            locations_to_r_thumb_weights = collections.Counter()
-            
-            for ( prefix, location ) in prefixes_to_locations.items():
-                
-                if prefix.startswith( 'f' ):
-                    
-                    locations_to_file_weights[ location ] += 1
-                    
-                
-                if prefix.startswith( 't' ):
-                    
-                    locations_to_fs_thumb_weights[ location ] += 1
-                    
-                
-                if prefix.startswith( 'r' ):
-                    
-                    locations_to_r_thumb_weights[ location ] += 1
-                    
-                
-            
-            all_locations = set()
-            
-            all_locations.update( locations_to_file_weights.keys() )
-            all_locations.update( locations_to_fs_thumb_weights.keys() )
-            all_locations.update( locations_to_r_thumb_weights.keys() )
-            
-            all_locations = list( all_locations )
-            
-            all_locations.sort()
-            
-            rows = []
-            
-            for l in all_locations:
-                
-                fp = locations_to_file_weights[ l ] / 256.0
-                ft = locations_to_fs_thumb_weights[ l ] / 256.0
-                fr = locations_to_r_thumb_weights[ l ] / 256.0
-                
-                p = HydrusData.ConvertFloatToPercentage
-                
-                rows.append( l + ': ' + p( fp ) + ' files, ' + p( ft ) + ' full-size thumbs, ' + p( fr ) + ' resized thumbs' )
-                
-            
-            return os.linesep.join( rows )
-            
-        
-        def _GetTuples( self, location, weight ):
-            
-            portable_location = HydrusPaths.ConvertAbsPathToPortablePath( location )
-            pretty_weight = HydrusData.ConvertIntToPrettyString( weight )
-            
-            display_tuple = ( location, portable_location, pretty_weight )
-            data_tuple = ( location, portable_location, weight )
-            
-            return ( display_tuple, data_tuple )
-            
-        
-        def Delete( self ):
-            
-            if len( self._client_files.GetAllSelected() ) < self._client_files.GetItemCount():
-                
-                with ClientGUIDialogs.DialogYesNo( self, 'Remove all selected?' ) as dlg:
-                    
-                    if dlg.ShowModal() == wx.ID_YES:
-                        
-                        self._client_files.RemoveAllSelected()
-                        
-                    
-                
-            
-        
-        def Edit( self ):
-            
-            for i in self._client_files.GetAllSelected():
-                
-                ( location, portable_location, weight ) = self._client_files.GetClientData( i )
-                
-                with wx.NumberEntryDialog( self, 'Enter the weight of ' + location + '.', '', 'Enter Weight', value = int( weight ), min = 1, max = 256 ) as dlg:
-                    
-                    if dlg.ShowModal() == wx.ID_OK:
-                        
-                        weight = dlg.GetValue()
-                        
-                        weight = int( weight )
-                        
-                        ( display_tuple, data_tuple ) = self._GetTuples( location, weight )
-                        
-                        self._client_files.UpdateRow( i, display_tuple, data_tuple )
-                        
-                    
-                
-            
-        
-        def EventAdd( self, event ):
-            
-            with wx.DirDialog( self, 'Select the file location' ) as dlg:
-                
-                if dlg.ShowModal() == wx.ID_OK:
-                    
-                    path = HydrusData.ToUnicode( dlg.GetPath() )
-                    
-                    for ( location, portable_location, weight ) in self._client_files.GetClientData():
-                        
-                        if path == location:
-                            
-                            wx.MessageBox( 'You already have that location entered!' )
-                            
-                            return
-                            
-                        
-                    
-                    with wx.NumberEntryDialog( self, 'Enter the weight of ' + path + '.', '', 'Enter Weight', value = 1, min = 1, max = 256 ) as dlg_num:
-                        
-                        if dlg_num.ShowModal() == wx.ID_OK:
-                            
-                            weight = dlg_num.GetValue()
-                            
-                            weight = int( weight )
-                            
-                            ( display_tuple, data_tuple ) = self._GetTuples( path, weight )
-                            
-                            self._client_files.Append( display_tuple, data_tuple )
-                            
-                        
-                    
-                
-            
-        
-        def EventDelete( self, event ):
-            
-            self.Delete()
-            
-        
-        def EventEditWeight( self, event ):
-            
-            self.Edit()
-            
-        
-        def UpdateOptions( self ):
-            
-            locations_to_weights = {}
-            
-            for ( location, portable_location, weight ) in self._client_files.GetClientData():
-                
-                locations_to_weights[ location ] = weight
-                
-            
-            resized_thumbnails_override = self._resized_thumbnails_override.GetPath()
-            
-            if resized_thumbnails_override == '':
-                
-                resized_thumbnails_override = None
-                
-            
-            full_size_thumbnails_override = self._full_size_thumbnails_override.GetPath()
-            
-            if full_size_thumbnails_override == '':
-                
-                full_size_thumbnails_override = None
-                
-            
-            self._new_options.SetClientFilesLocationsToIdealWeights( locations_to_weights, resized_thumbnails_override, full_size_thumbnails_override )
-            
-        
-
     class _ColoursPanel( wx.Panel ):
         
         def __init__( self, parent ):
             
             wx.Panel.__init__( self, parent )
             
+            self._new_options = HG.client_controller.new_options
+            
+            coloursets_panel = ClientGUICommon.StaticBox( self, 'coloursets' )
+            
+            self._current_colourset = ClientGUICommon.BetterChoice( coloursets_panel )
+            
+            self._current_colourset.Append( 'default', 'default' )
+            self._current_colourset.Append( 'darkmode', 'darkmode' )
+            
+            self._current_colourset.SelectClientData( self._new_options.GetString( 'current_colourset' ) )
+            
+            self._notebook = wx.Notebook( coloursets_panel )
+            
             self._gui_colours = {}
             
-            for ( name, rgb ) in HC.options[ 'gui_colours' ].items():
+            for colourset in ( 'default', 'darkmode' ):
                 
-                ctrl = wx.ColourPickerCtrl( self )
+                self._gui_colours[ colourset ] = {}
                 
-                ctrl.SetMaxSize( ( 20, -1 ) )
+                colour_panel = wx.Panel( self._notebook )
                 
-                self._gui_colours[ name ] = ctrl
+                colour_types = []
+                
+                colour_types.append( CC.COLOUR_THUMB_BACKGROUND )
+                colour_types.append( CC.COLOUR_THUMB_BACKGROUND_SELECTED )
+                colour_types.append( CC.COLOUR_THUMB_BACKGROUND_REMOTE )
+                colour_types.append( CC.COLOUR_THUMB_BACKGROUND_REMOTE_SELECTED )
+                colour_types.append( CC.COLOUR_THUMB_BORDER )
+                colour_types.append( CC.COLOUR_THUMB_BORDER_SELECTED )
+                colour_types.append( CC.COLOUR_THUMB_BORDER_REMOTE )
+                colour_types.append( CC.COLOUR_THUMB_BORDER_REMOTE_SELECTED )
+                colour_types.append( CC.COLOUR_THUMBGRID_BACKGROUND )
+                colour_types.append( CC.COLOUR_AUTOCOMPLETE_BACKGROUND )
+                colour_types.append( CC.COLOUR_MEDIA_BACKGROUND )
+                colour_types.append( CC.COLOUR_MEDIA_TEXT )
+                colour_types.append( CC.COLOUR_TAGS_BOX )
+                
+                for colour_type in colour_types:
+                    
+                    ctrl = wx.ColourPickerCtrl( colour_panel )
+                    
+                    ctrl.SetMaxSize( ( 20, -1 ) )
+                    
+                    ctrl.SetColour( self._new_options.GetColour( colour_type, colourset ) )
+                    
+                    self._gui_colours[ colourset ][ colour_type ] = ctrl
+                    
+                
+                #
+                
+                rows = []
+                
+                hbox = wx.BoxSizer( wx.HORIZONTAL )
+                
+                hbox.Add( self._gui_colours[ colourset ][ CC.COLOUR_THUMB_BACKGROUND ], CC.FLAGS_VCENTER )
+                hbox.Add( self._gui_colours[ colourset ][ CC.COLOUR_THUMB_BACKGROUND_SELECTED ], CC.FLAGS_VCENTER )
+                hbox.Add( self._gui_colours[ colourset ][ CC.COLOUR_THUMB_BACKGROUND_REMOTE ], CC.FLAGS_VCENTER )
+                hbox.Add( self._gui_colours[ colourset ][ CC.COLOUR_THUMB_BACKGROUND_REMOTE_SELECTED ], CC.FLAGS_VCENTER )
+                
+                rows.append( ( 'thumbnail background (local: normal/selected, remote: normal/selected): ', hbox ) )
+                
+                hbox = wx.BoxSizer( wx.HORIZONTAL )
+                
+                hbox.Add( self._gui_colours[ colourset ][ CC.COLOUR_THUMB_BORDER ], CC.FLAGS_VCENTER )
+                hbox.Add( self._gui_colours[ colourset ][ CC.COLOUR_THUMB_BORDER_SELECTED ], CC.FLAGS_VCENTER )
+                hbox.Add( self._gui_colours[ colourset ][ CC.COLOUR_THUMB_BORDER_REMOTE ], CC.FLAGS_VCENTER )
+                hbox.Add( self._gui_colours[ colourset ][ CC.COLOUR_THUMB_BORDER_REMOTE_SELECTED ], CC.FLAGS_VCENTER )
+                
+                rows.append( ( 'thumbnail border (local: normal/selected, remote: normal/selected): ', hbox ) )
+                
+                rows.append( ( 'thumbnail grid background: ', self._gui_colours[ colourset ][ CC.COLOUR_THUMBGRID_BACKGROUND ] ) )
+                rows.append( ( 'autocomplete background: ', self._gui_colours[ colourset ][ CC.COLOUR_AUTOCOMPLETE_BACKGROUND ] ) )
+                rows.append( ( 'media viewer background: ', self._gui_colours[ colourset ][ CC.COLOUR_MEDIA_BACKGROUND ] ) )
+                rows.append( ( 'media viewer text: ', self._gui_colours[ colourset ][ CC.COLOUR_MEDIA_TEXT ] ) )
+                rows.append( ( 'tags box background: ', self._gui_colours[ colourset ][ CC.COLOUR_TAGS_BOX ] ) )
+                
+                gridbox = ClientGUICommon.WrapInGrid( colour_panel, rows )
+                
+                colour_panel.SetSizer( gridbox )
+                
+                select = colourset == 'default'
+                
+                self._notebook.AddPage( colour_panel, colourset, select = select )
                 
             
-            self._namespace_colours = ClientGUIListBoxes.ListBoxTagsColourOptions( self, HC.options[ 'namespace_colours' ] )
+            #
             
-            self._edit_namespace_colour = wx.Button( self, label = 'edit selected' )
+            namespace_colours_panel = ClientGUICommon.StaticBox( self, 'namespace colours' )
+            
+            self._namespace_colours = ClientGUIListBoxes.ListBoxTagsColourOptions( namespace_colours_panel, HC.options[ 'namespace_colours' ] )
+            
+            self._edit_namespace_colour = wx.Button( namespace_colours_panel, label = 'edit selected' )
             self._edit_namespace_colour.Bind( wx.EVT_BUTTON, self.EventEditNamespaceColour )
             
-            self._new_namespace_colour = wx.TextCtrl( self, style = wx.TE_PROCESS_ENTER )
+            self._new_namespace_colour = wx.TextCtrl( namespace_colours_panel, style = wx.TE_PROCESS_ENTER )
             self._new_namespace_colour.Bind( wx.EVT_KEY_DOWN, self.EventKeyDownNamespace )
             
             #
             
-            for ( name, rgb ) in HC.options[ 'gui_colours' ].items(): self._gui_colours[ name ].SetColour( wx.Colour( *rgb ) )
+            coloursets_panel.Add( ClientGUICommon.WrapInText( self._current_colourset, coloursets_panel, 'current colourset: ' ), CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            coloursets_panel.Add( self._notebook, CC.FLAGS_EXPAND_BOTH_WAYS )
             
-            #
+            namespace_colours_panel.Add( self._namespace_colours, CC.FLAGS_EXPAND_BOTH_WAYS )
+            namespace_colours_panel.Add( self._new_namespace_colour, CC.FLAGS_EXPAND_PERPENDICULAR )
+            namespace_colours_panel.Add( self._edit_namespace_colour, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            rows = []
-            
-            hbox = wx.BoxSizer( wx.HORIZONTAL )
-            
-            hbox.AddF( self._gui_colours[ 'thumb_background' ], CC.FLAGS_VCENTER )
-            hbox.AddF( self._gui_colours[ 'thumb_background_selected' ], CC.FLAGS_VCENTER )
-            hbox.AddF( self._gui_colours[ 'thumb_background_remote' ], CC.FLAGS_VCENTER )
-            hbox.AddF( self._gui_colours[ 'thumb_background_remote_selected' ], CC.FLAGS_VCENTER )
-            
-            rows.append( ( 'thumbnail background (local: normal/selected, remote: normal/selected): ', hbox ) )
-            
-            hbox = wx.BoxSizer( wx.HORIZONTAL )
-            
-            hbox.AddF( self._gui_colours[ 'thumb_border' ], CC.FLAGS_VCENTER )
-            hbox.AddF( self._gui_colours[ 'thumb_border_selected' ], CC.FLAGS_VCENTER )
-            hbox.AddF( self._gui_colours[ 'thumb_border_remote' ], CC.FLAGS_VCENTER )
-            hbox.AddF( self._gui_colours[ 'thumb_border_remote_selected' ], CC.FLAGS_VCENTER )
-            
-            rows.append( ( 'thumbnail border (local: normal/selected, remote: normal/selected): ', hbox ) )
-            
-            rows.append( ( 'thumbnail grid background: ', self._gui_colours[ 'thumbgrid_background' ] ) )
-            rows.append( ( 'autocomplete background: ', self._gui_colours[ 'autocomplete_background' ] ) )
-            rows.append( ( 'media viewer background: ', self._gui_colours[ 'media_background' ] ) )
-            rows.append( ( 'media viewer text: ', self._gui_colours[ 'media_text' ] ) )
-            rows.append( ( 'tags box background: ', self._gui_colours[ 'tags_box' ] ) )
-            
-            gridbox = ClientGUICommon.WrapInGrid( self, rows )
-            
-            vbox.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._namespace_colours, CC.FLAGS_EXPAND_BOTH_WAYS )
-            vbox.AddF( self._new_namespace_colour, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._edit_namespace_colour, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( coloursets_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( namespace_colours_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             self.SetSizer( vbox )
             
@@ -1640,14 +1516,17 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         def UpdateOptions( self ):
             
-            for ( name, ctrl ) in self._gui_colours.items():
+            for colourset in self._gui_colours:
                 
-                colour = ctrl.GetColour()
+                for ( colour_type, ctrl ) in self._gui_colours[ colourset ].items():
+                    
+                    colour = ctrl.GetColour()
+                    
+                    self._new_options.SetColour( colour_type, colourset, colour )
+                    
                 
-                rgb = ( colour.Red(), colour.Green(), colour.Blue() )
-                
-                HC.options[ 'gui_colours' ][ name ] = rgb
-                
+            
+            self._new_options.SetString( 'current_colourset', self._current_colourset.GetChoice() )
             
             HC.options[ 'namespace_colours' ] = self._namespace_colours.GetNamespaceColours()
             
@@ -1659,8 +1538,15 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             wx.Panel.__init__( self, parent )
             
+            general = ClientGUICommon.StaticBox( self, 'general' )
+            
+            self._verify_regular_https = wx.CheckBox( general )
+            
             self._external_host = wx.TextCtrl( self )
-            self._external_host.SetToolTipString( 'If you have trouble parsing your external ip using UPnP, you can force it to be this.' )
+            self._external_host.SetToolTip( 'If you have trouble parsing your external ip using UPnP, you can force it to be this.' )
+            
+            self._network_timeout = wx.SpinCtrl( self, min = 3, max = 300 )
+            self._network_timeout.SetToolTip( 'If a network connection experiences any uninterrupted inactivity for this duration, it will throw an error.' )
             
             proxy_panel = ClientGUICommon.StaticBox( self, 'proxy settings' )
             
@@ -1674,10 +1560,16 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             #
             
+            self._new_options = HG.client_controller.new_options
+            
+            self._verify_regular_https.SetValue( self._new_options.GetBoolean( 'verify_regular_https' ) )
+            
             if HC.options[ 'external_host' ] is not None:
                 
                 self._external_host.SetValue( HC.options[ 'external_host' ] )
                 
+            
+            self._network_timeout.SetValue( self._new_options.GetInteger( 'network_timeout' ) )
             
             self._proxy_type.Append( 'http', 'http' )
             self._proxy_type.Append( 'socks4', 'socks4' )
@@ -1709,13 +1601,21 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             #
             
+            rows = []
+            
+            rows.append( ( 'BUGFIX: verify regular https traffic:', self._verify_regular_https ) )
+            
+            gridbox = ClientGUICommon.WrapInGrid( general, rows )
+            
+            general.Add( gridbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+            
             text = 'You have to restart the client for proxy settings to take effect.'
             text += os.linesep
             text += 'This is in a buggy prototype stage right now, pending a rewrite of the networking engine.'
             text += os.linesep
             text += 'Please send me your feedback.'
             
-            proxy_panel.AddF( wx.StaticText( proxy_panel, label = text ), CC.FLAGS_EXPAND_PERPENDICULAR )
+            proxy_panel.Add( wx.StaticText( proxy_panel, label = text ), CC.FLAGS_EXPAND_PERPENDICULAR )
             
             rows = []
             
@@ -1727,25 +1627,31 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( proxy_panel, rows )
             
-            proxy_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+            proxy_panel.Add( gridbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+            
+            proxy_panel.Hide() # proxy settings no longer in use for new engine
             
             #
             
             rows = []
             
             rows.append( ( 'external ip/host override: ', self._external_host ) )
+            rows.append( ( 'network timeout (seconds): ', self._network_timeout ) )
             
             gridbox = ClientGUICommon.WrapInGrid( self, rows )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            vbox.AddF( proxy_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( general, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            vbox.Add( proxy_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             self.SetSizer( vbox )
             
         
         def UpdateOptions( self ):
+            
+            self._new_options.SetBoolean( 'verify_regular_https', self._verify_regular_https.GetValue() )
             
             if self._proxy_address.GetValue() == '':
                 
@@ -1774,6 +1680,8 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             HC.options[ 'external_host' ] = external_host
             
+            self._new_options.SetInteger( 'network_timeout', self._network_timeout.GetValue() )
+            
         
     
     class _DownloadingPanel( wx.Panel ):
@@ -1784,14 +1692,6 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._new_options = new_options
             
-            general = ClientGUICommon.StaticBox( self, 'general' )
-            
-            self._website_download_polite_wait = wx.SpinCtrl( general, min = 1, max = 30 )
-            
-            self._waiting_politely_text = wx.CheckBox( general )
-            
-            self._verify_regular_https = wx.CheckBox( general )
-            
             #
             
             gallery_downloader = ClientGUICommon.StaticBox( self, 'gallery downloader' )
@@ -1800,74 +1700,291 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             #
             
-            thread_checker = ClientGUICommon.StaticBox( self, 'thread checker' )
+            subscriptions = ClientGUICommon.StaticBox( self, 'subscriptions' )
             
-            self._thread_times_to_check = wx.SpinCtrl( thread_checker, min = 0, max = 65536 )
-            self._thread_times_to_check.SetToolTipString( 'how many times the thread checker will check' )
-            
-            self._thread_check_period = ClientGUICommon.TimeDeltaButton( thread_checker, min = 30, days = True, hours = True, minutes = True, seconds = True )
-            self._thread_check_period.SetToolTipString( 'how long the checker will wait between checks' )
+            self._process_subs_in_random_order = wx.CheckBox( subscriptions )
+            self._process_subs_in_random_order.SetToolTip( 'Processing in random order is useful whenever bandwidth is tight, as it stops an \'aardvark\' subscription from always getting first whack at what is available. Otherwise, they will be processed in alphabetical order.' )
             
             #
             
-            self._website_download_polite_wait.SetValue( HC.options[ 'website_download_polite_wait' ] )
-            self._waiting_politely_text.SetValue( self._new_options.GetBoolean( 'waiting_politely_text' ) )
+            thread_checker = ClientGUICommon.StaticBox( self, 'thread checker' )
             
-            self._verify_regular_https.SetValue( self._new_options.GetBoolean( 'verify_regular_https' ) )
+            self._permit_watchers_to_name_their_pages = wx.CheckBox( thread_checker )
+            
+            self._thread_watcher_not_found_page_string = ClientGUICommon.NoneableTextCtrl( thread_checker, none_phrase = 'do not show' )
+            self._thread_watcher_dead_page_string = ClientGUICommon.NoneableTextCtrl( thread_checker, none_phrase = 'do not show' )
+            self._thread_watcher_paused_page_string = ClientGUICommon.NoneableTextCtrl( thread_checker, none_phrase = 'do not show' )
+            
+            checker_options = self._new_options.GetDefaultThreadCheckerOptions()
+            
+            self._thread_checker_options = ClientGUITime.EditCheckerOptions( thread_checker, checker_options )
+            
+            #
+            
+            self._process_subs_in_random_order.SetValue( self._new_options.GetBoolean( 'process_subs_in_random_order' ) )
             
             self._gallery_file_limit.SetValue( HC.options[ 'gallery_file_limit' ] )
             
-            ( times_to_check, check_period ) = HC.options[ 'thread_checker_timings' ]
+            self._permit_watchers_to_name_their_pages.SetValue( self._new_options.GetBoolean( 'permit_watchers_to_name_their_pages' ) )
             
-            self._thread_times_to_check.SetValue( times_to_check )
+            self._thread_watcher_not_found_page_string.SetValue( self._new_options.GetNoneableString( 'thread_watcher_not_found_page_string' ) )
+            self._thread_watcher_dead_page_string.SetValue( self._new_options.GetNoneableString( 'thread_watcher_dead_page_string' ) )
+            self._thread_watcher_paused_page_string.SetValue( self._new_options.GetNoneableString( 'thread_watcher_paused_page_string' ) )
             
-            self._thread_check_period.SetValue( check_period )
+            #
+            
+            gallery_downloader.Add( self._gallery_file_limit, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
             rows = []
             
-            rows.append( ( 'seconds to politely wait between gallery/thread url requests: ', self._website_download_polite_wait ) )
-            rows.append( ( 'instead of the traffic light waiting politely indicator, use text: ', self._waiting_politely_text ) )
-            rows.append( ( 'BUGFIX: verify regular https traffic:', self._verify_regular_https ) )
+            rows.append( ( 'Sync subscriptions in random order:', self._process_subs_in_random_order ) )
             
-            gridbox = ClientGUICommon.WrapInGrid( general, rows )
+            gridbox = ClientGUICommon.WrapInGrid( subscriptions, rows )
             
-            general.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+            subscriptions.Add( gridbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
             
             #
             
-            gallery_downloader.AddF( self._gallery_file_limit, CC.FLAGS_EXPAND_PERPENDICULAR )
-            
-            #
             
             rows = []
             
-            rows.append( ( 'default number of times to check: ', self._thread_times_to_check ) )
-            rows.append( ( 'default wait between checks: ', self._thread_check_period ) )
+            rows.append( ( 'Permit thread checkers to name their own pages:', self._permit_watchers_to_name_their_pages ) )
+            rows.append( ( 'Prepend 404 thread checker page names with this:', self._thread_watcher_not_found_page_string ) )
+            rows.append( ( 'Prepend dead thread checker page names with this:', self._thread_watcher_dead_page_string ) )
+            rows.append( ( 'Prepend paused thread checker page names with this:', self._thread_watcher_paused_page_string ) )
             
             gridbox = ClientGUICommon.WrapInGrid( thread_checker, rows )
             
-            thread_checker.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+            thread_checker.Add( gridbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+            thread_checker.Add( self._thread_checker_options, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( general, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( gallery_downloader, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( thread_checker, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( gallery_downloader, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( subscriptions, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( thread_checker, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             self.SetSizer( vbox )
             
         
         def UpdateOptions( self ):
             
-            HC.options[ 'website_download_polite_wait' ] = self._website_download_polite_wait.GetValue()
-            self._new_options.SetBoolean( 'waiting_politely_text', self._waiting_politely_text.GetValue() )
-            self._new_options.SetBoolean( 'verify_regular_https', self._verify_regular_https.GetValue() )
             HC.options[ 'gallery_file_limit' ] = self._gallery_file_limit.GetValue()
-            HC.options[ 'thread_checker_timings' ] = ( self._thread_times_to_check.GetValue(), self._thread_check_period.GetValue() )
+            
+            self._new_options.SetBoolean( 'process_subs_in_random_order', self._process_subs_in_random_order.GetValue() )
+            
+            self._new_options.SetBoolean( 'permit_watchers_to_name_their_pages', self._permit_watchers_to_name_their_pages.GetValue() )
+            
+            self._new_options.SetDefaultThreadCheckerOptions( self._thread_checker_options.GetValue() )
+            
+            self._new_options.SetNoneableString( 'thread_watcher_not_found_page_string', self._thread_watcher_not_found_page_string.GetValue() )
+            self._new_options.SetNoneableString( 'thread_watcher_dead_page_string', self._thread_watcher_dead_page_string.GetValue() )
+            self._new_options.SetNoneableString( 'thread_watcher_paused_page_string', self._thread_watcher_paused_page_string.GetValue() )
+            
+        
+    
+    class _ImportingPanel( wx.Panel ):
+        
+        def __init__( self, parent, new_options ):
+            
+            wx.Panel.__init__( self, parent )
+            
+            self._new_options = new_options
+            
+            #
+            
+            default_fios = ClientGUICommon.StaticBox( self, 'default file import options' )
+            
+            import ClientGUIImport
+            
+            quiet_file_import_options = self._new_options.GetDefaultFileImportOptions( 'quiet' )
+            
+            self._quiet_fios = ClientGUIImport.FileImportOptionsButton( default_fios, quiet_file_import_options )
+            
+            loud_file_import_options = self._new_options.GetDefaultFileImportOptions( 'loud' )
+            
+            self._loud_fios = ClientGUIImport.FileImportOptionsButton( default_fios, loud_file_import_options )
+            
+            #
+            
+            default_tios = ClientGUICommon.StaticBox( self, 'default tag import options' )
+            
+            self._tag_import_options = wx.ListBox( default_tios )
+            self._tag_import_options.Bind( wx.EVT_LEFT_DCLICK, self.EventEdit )
+            
+            self._add = wx.Button( default_tios, label = 'add' )
+            self._add.Bind( wx.EVT_BUTTON, self.EventAdd )
+            
+            self._edit = wx.Button( default_tios, label = 'edit' )
+            self._edit.Bind( wx.EVT_BUTTON, self.EventEdit )
+            
+            self._delete = wx.Button( default_tios, label = 'delete' )
+            self._delete.Bind( wx.EVT_BUTTON, self.EventDelete )
+            
+            #
+            
+            for ( gallery_identifier, tag_import_options ) in self._new_options.GetDefaultTagImportOptions().items():
+                
+                name = gallery_identifier.ToString()
+                
+                self._tag_import_options.Append( name, ( gallery_identifier, tag_import_options ) )
+                
+            
+            #
+            
+            rows = []
+            
+            rows.append( ( 'For \'quiet\' import contexts like import folders and subscriptions:', self._quiet_fios ) )
+            rows.append( ( 'For import contexts that work on pages:', self._loud_fios ) )
+            
+            gridbox = ClientGUICommon.WrapInGrid( default_fios, rows )
+            
+            default_fios.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            
+            #
+            
+            default_tios.Add( self._tag_import_options, CC.FLAGS_EXPAND_BOTH_WAYS )
+            
+            hbox = wx.BoxSizer( wx.HORIZONTAL )
+            
+            hbox.Add( self._add, CC.FLAGS_VCENTER )
+            hbox.Add( self._edit, CC.FLAGS_VCENTER )
+            hbox.Add( self._delete, CC.FLAGS_VCENTER )
+            
+            default_tios.Add( hbox, CC.FLAGS_BUTTON_SIZER )
+            
+            #
+            
+            vbox = wx.BoxSizer( wx.VERTICAL )
+            
+            vbox.Add( default_fios, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( default_tios, CC.FLAGS_EXPAND_BOTH_WAYS )
+            
+            self.SetSizer( vbox )
+            
+        
+        def EventAdd( self, event ):
+            
+            gallery_identifiers = []
+            
+            for site_type in [ HC.SITE_TYPE_DEFAULT, HC.SITE_TYPE_DEVIANT_ART, HC.SITE_TYPE_HENTAI_FOUNDRY, HC.SITE_TYPE_NEWGROUNDS, HC.SITE_TYPE_PIXIV, HC.SITE_TYPE_TUMBLR, HC.SITE_TYPE_THREAD_WATCHER ]:
+                
+                gallery_identifiers.append( ClientDownloading.GalleryIdentifier( site_type ) )
+                
+            
+            gallery_identifiers.append( ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_BOORU ) )
+            
+            boorus = HG.client_controller.Read( 'remote_boorus' )
+            
+            for booru_name in boorus.keys():
+                
+                gallery_identifiers.append( ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_BOORU, additional_info = booru_name ) )
+                
+            
+            list_of_tuples = [ ( gallery_identifier.ToString(), gallery_identifier ) for gallery_identifier in gallery_identifiers ]
+            
+            with ClientGUIDialogs.DialogSelectFromList( self, 'select tag domain', list_of_tuples ) as dlg:
+                
+                if dlg.ShowModal() == wx.ID_OK:
+                    
+                    gallery_identifier = dlg.GetChoice()
+                    
+                    name = gallery_identifier.ToString()
+                    
+                    for i in range( self._tag_import_options.GetCount() ):
+                        
+                        if name == self._tag_import_options.GetString( i ):
+                            
+                            wx.MessageBox( 'You already have default tag import options set up for that domain!' )
+                            
+                            return
+                            
+                        
+                    
+                    new_options = HG.client_controller.new_options
+                    
+                    tag_import_options = new_options.GetDefaultTagImportOptions( gallery_identifier )
+                    
+                    ( namespaces, search_value ) = ClientDefaults.GetDefaultNamespacesAndSearchValue( gallery_identifier )
+                    
+                    with ClientGUITopLevelWindows.DialogEdit( self, 'edit tag import options' ) as dlg:
+                        
+                        panel = ClientGUIScrolledPanelsEdit.EditTagImportOptionsPanel( dlg, namespaces, tag_import_options )
+                        
+                        dlg.SetPanel( panel )
+                        
+                        if dlg.ShowModal() == wx.ID_OK:
+                            
+                            tag_import_options = panel.GetValue()
+                            
+                            self._tag_import_options.Append( name, ( gallery_identifier, tag_import_options ) )
+                            
+                        
+                    
+                
+            
+        
+        def EventDelete( self, event ):
+            
+            selection = self._tag_import_options.GetSelection()
+            
+            if selection != wx.NOT_FOUND:
+                
+                name = self._tag_import_options.GetString( selection )
+                
+                with ClientGUIDialogs.DialogYesNo( self, 'Delete \'' + name + '\' entry?' ) as dlg:
+                    
+                    if dlg.ShowModal() == wx.ID_YES:
+                        
+                        self._tag_import_options.Delete( selection )
+                        
+                    
+                
+            
+        
+        def EventEdit( self, event ):
+            
+            selection = self._tag_import_options.GetSelection()
+            
+            if selection != wx.NOT_FOUND:
+                
+                name = self._tag_import_options.GetString( selection )
+                
+                ( gallery_identifier, tag_import_options ) = self._tag_import_options.GetClientData( selection )
+                
+                ( namespaces, search_value ) = ClientDefaults.GetDefaultNamespacesAndSearchValue( gallery_identifier )
+                
+                with ClientGUITopLevelWindows.DialogEdit( self, 'edit tag import options' ) as dlg:
+                    
+                    panel = ClientGUIScrolledPanelsEdit.EditTagImportOptionsPanel( dlg, namespaces, tag_import_options )
+                    
+                    dlg.SetPanel( panel )
+                    
+                    if dlg.ShowModal() == wx.ID_OK:
+                        
+                        tag_import_options = panel.GetValue()
+                        
+                        self._tag_import_options.SetClientData( selection, ( gallery_identifier, tag_import_options ) )
+                        
+                    
+                
+            
+        
+        def UpdateOptions( self ):
+            
+            self._new_options.SetDefaultFileImportOptions( 'quiet', self._quiet_fios.GetValue() )
+            self._new_options.SetDefaultFileImportOptions( 'loud', self._loud_fios.GetValue() )
+            
+            self._new_options.ClearDefaultTagImportOptions()
+            
+            for ( gallery_identifier, tag_import_options ) in [ self._tag_import_options.GetClientData( i ) for i in range( self._tag_import_options.GetCount() ) ]:
+                
+                self._new_options.SetDefaultTagImportOptions( gallery_identifier, tag_import_options )
+                
             
         
     
@@ -1877,11 +1994,10 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             wx.Panel.__init__( self, parent )
             
-            self._new_options = HG.client_controller.GetNewOptions()
+            self._new_options = HG.client_controller.new_options
             
             self._jobs_panel = ClientGUICommon.StaticBox( self, 'when to run high cpu jobs' )
             self._maintenance_panel = ClientGUICommon.StaticBox( self, 'maintenance period' )
-            self._processing_panel = ClientGUICommon.StaticBox( self, 'processing' )
             
             self._idle_panel = ClientGUICommon.StaticBox( self._jobs_panel, 'idle' )
             self._shutdown_panel = ClientGUICommon.StaticBox( self._jobs_panel, 'shutdown' )
@@ -1914,11 +2030,6 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             #
             
-            self._processing_phase = wx.SpinCtrl( self._processing_panel, min = 0, max = 100000 )
-            self._processing_phase.SetToolTipString( 'how long this client will delay processing updates after they are due. useful if you have multiple clients and do not want them to process at the same time' )
-            
-            #
-            
             self._idle_normal.SetValue( HC.options[ 'idle_normal' ] )
             self._idle_period.SetValue( HC.options[ 'idle_period' ] )
             self._idle_mouse_period.SetValue( HC.options[ 'idle_mouse_period' ] )
@@ -1928,8 +2039,6 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._idle_shutdown_max_minutes.SetValue( HC.options[ 'idle_shutdown_max_minutes' ] )
             
             self._maintenance_vacuum_period_days.SetValue( self._new_options.GetNoneableInteger( 'maintenance_vacuum_period_days' ) )
-            
-            self._processing_phase.SetValue( HC.options[ 'processing_phase' ] )
             
             #
             
@@ -1942,7 +2051,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( self._idle_panel, rows )
             
-            self._idle_panel.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._idle_panel.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
@@ -1953,25 +2062,31 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( self._shutdown_panel, rows )
             
-            self._shutdown_panel.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._shutdown_panel.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
-            text = 'CPU-heavy jobs like maintenance routines and repository synchronisation processing will stutter or lock up your gui, so they do not normally run when you are searching for and looking at files.'
+            text = '***'
+            text += os.linesep
+            text +='If you are a new user or do not completely understand these options, please do not touch them! Do not set the client to be idle all the time unless you know what you are doing or are testing something and are prepared for potential problems!'
+            text += os.linesep
+            text += '***'
             text += os.linesep * 2
-            text += 'You can set them to run only when the client is idle, or only during shutdown, or neither, or both.'
+            text += 'Sometimes, the client needs to do some heavy maintenance. This could be reformatting the database to keep it running fast or processing a large number of tags from a repository. Typically, these jobs will not allow you to use the gui while they run, and on slower computers--or those with not much memory--they can take a long time to complete.'
             text += os.linesep * 2
-            text += 'If the client switches from idle to not idle, it will try to abandon any jobs it is half way through.'
+            text += 'You can set these jobs to run only when the client is idle, or only during shutdown, or neither, or both. If you leave the client on all the time in the background, focusing on \'idle time\' processing is often ideal. If you have a slow computer, relying on \'shutdown\' processing (which you can manually start when convenient), is often better.'
             text += os.linesep * 2
-            text += 'If the client believes the system is busy, it will not start jobs.'
+            text += 'If the client switches from idle to not idle during a job, it will try to abandon it and give you back control. This is not always possible, and even when it is, it will sometimes take several minutes, particularly on slower machines or those on HDDs rather than SSDs.'
+            text += os.linesep * 2
+            text += 'If the client believes the system is busy, it will generally not start jobs.'
             
             st = wx.StaticText( self._jobs_panel, label = text )
             
             st.Wrap( 550 )
             
-            self._jobs_panel.AddF( st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self._jobs_panel.AddF( self._idle_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self._jobs_panel.AddF( self._shutdown_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._jobs_panel.Add( st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._jobs_panel.Add( self._idle_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._jobs_panel.Add( self._shutdown_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
@@ -1981,25 +2096,14 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( self._maintenance_panel, rows )
             
-            self._maintenance_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            
-            #
-            
-            rows = []
-            
-            rows.append( ( 'Delay repository update processing by (s): ', self._processing_phase ) )
-            
-            gridbox = ClientGUICommon.WrapInGrid( self._processing_panel, rows )
-            
-            self._processing_panel.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            self._maintenance_panel.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
             
             #
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( self._jobs_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._maintenance_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._processing_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._jobs_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._maintenance_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             self.SetSizer( vbox )
             
@@ -2056,8 +2160,6 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             HC.options[ 'idle_shutdown' ] = self._idle_shutdown.GetChoice()
             HC.options[ 'idle_shutdown_max_minutes' ] = self._idle_shutdown_max_minutes.GetValue()
             
-            HC.options[ 'processing_phase' ] = self._processing_phase.GetValue()
-            
             self._new_options.SetNoneableInteger( 'maintenance_vacuum_period_days', self._maintenance_vacuum_period_days.GetValue() )
             
         
@@ -2074,7 +2176,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._filter_inbox_and_archive_predicates.SetValue( self._new_options.GetBoolean( 'filter_inbox_and_archive_predicates' ) )
             
-            self._file_system_predicate_age = ClientGUIPredicates.PanelPredicateSystemAge( self )
+            self._file_system_predicate_age = ClientGUIPredicates.PanelPredicateSystemAgeDelta( self )
             self._file_system_predicate_duration = ClientGUIPredicates.PanelPredicateSystemDuration( self )
             self._file_system_predicate_height = ClientGUIPredicates.PanelPredicateSystemHeight( self )
             self._file_system_predicate_limit = ClientGUIPredicates.PanelPredicateSystemLimit( self )
@@ -2091,20 +2193,20 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( self._filter_inbox_and_archive_predicates, CC.FLAGS_VCENTER )
-            vbox.AddF( ( 20, 20 ), CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_age, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_duration, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_height, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_limit, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_mime, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_num_pixels, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_num_tags, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_num_words, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_ratio, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_similar_to, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_size, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( self._file_system_predicate_width, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._filter_inbox_and_archive_predicates, CC.FLAGS_VCENTER )
+            vbox.Add( ( 20, 20 ), CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_age, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_duration, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_height, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_limit, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_mime, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_num_pixels, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_num_tags, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_num_words, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_ratio, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_similar_to, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_size, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._file_system_predicate_width, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             self.SetSizer( vbox )
             
@@ -2132,7 +2234,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
         
     
-    class _DefaultTagImportOptionsPanel( wx.Panel ):
+    class _TagSummariesPanel( wx.Panel ):
         
         def __init__( self, parent, new_options ):
             
@@ -2140,132 +2242,45 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._new_options = new_options
             
-            self._import_tag_options = wx.ListBox( self )
-            self._import_tag_options.Bind( wx.EVT_LEFT_DCLICK, self.EventDelete )
+            #
             
-            self._add = wx.Button( self, label = 'add' )
-            self._add.Bind( wx.EVT_BUTTON, self.EventAdd )
+            tag_summary_generator = self._new_options.GetTagSummaryGenerator( 'thumbnail_top' )
             
-            self._edit = wx.Button( self, label = 'edit' )
-            self._edit.Bind( wx.EVT_BUTTON, self.EventEdit )
+            self._thumbnail_top = ClientGUIScrolledPanelsEdit.TagSummaryGeneratorButton( self, tag_summary_generator )
             
-            self._delete = wx.Button( self, label = 'delete' )
-            self._delete.Bind( wx.EVT_BUTTON, self.EventDelete )
+            tag_summary_generator = self._new_options.GetTagSummaryGenerator( 'thumbnail_bottom_right' )
+            
+            self._thumbnail_bottom_right = ClientGUIScrolledPanelsEdit.TagSummaryGeneratorButton( self, tag_summary_generator )
+            
+            tag_summary_generator = self._new_options.GetTagSummaryGenerator( 'media_viewer_top' )
+            
+            self._media_viewer_top = ClientGUIScrolledPanelsEdit.TagSummaryGeneratorButton( self, tag_summary_generator )
+            
+            # file export favourites
+            # file dnd
             
             #
             
-            for ( gallery_identifier, import_tag_options ) in self._new_options.GetDefaultImportTagOptions().items():
-                
-                name = gallery_identifier.ToString()
-                
-                self._import_tag_options.Append( name, ( gallery_identifier, import_tag_options ) )
-                
+            rows = []
             
-            #
+            rows.append( ( 'On thumbnail top:', self._thumbnail_top ) )
+            rows.append( ( 'On thumbnail bottom-right:', self._thumbnail_bottom_right ) )
+            rows.append( ( 'On media viewer top:', self._media_viewer_top ) )
+            
+            gridbox = ClientGUICommon.WrapInGrid( self, rows )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( self._import_tag_options, CC.FLAGS_EXPAND_BOTH_WAYS )
-            
-            hbox = wx.BoxSizer( wx.HORIZONTAL )
-            
-            hbox.AddF( self._add, CC.FLAGS_BUTTON_SIZER )
-            hbox.AddF( self._edit, CC.FLAGS_BUTTON_SIZER )
-            hbox.AddF( self._delete, CC.FLAGS_BUTTON_SIZER )
-            
-            vbox.AddF( hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
             
             self.SetSizer( vbox )
             
         
-        def EventAdd( self, event ):
-            
-            gallery_identifiers = []
-            
-            for site_type in [ HC.SITE_TYPE_DEFAULT, HC.SITE_TYPE_DEVIANT_ART, HC.SITE_TYPE_HENTAI_FOUNDRY, HC.SITE_TYPE_NEWGROUNDS, HC.SITE_TYPE_PIXIV, HC.SITE_TYPE_TUMBLR ]:
-                
-                gallery_identifiers.append( ClientDownloading.GalleryIdentifier( site_type ) )
-                
-            
-            gallery_identifiers.append( ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_BOORU ) )
-            
-            boorus = HG.client_controller.Read( 'remote_boorus' )
-            
-            for booru_name in boorus.keys():
-                
-                gallery_identifiers.append( ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_BOORU, additional_info = booru_name ) )
-                
-            
-            list_of_tuples = [ ( gallery_identifier.ToString(), gallery_identifier ) for gallery_identifier in gallery_identifiers ]
-            
-            with ClientGUIDialogs.DialogSelectFromList( self, 'select tag domain', list_of_tuples ) as dlg:
-                
-                if dlg.ShowModal() == wx.ID_OK:
-                    
-                    gallery_identifier = dlg.GetChoice()
-                    
-                    name = gallery_identifier.ToString()
-                    
-                    for i in range( self._import_tag_options.GetCount() ):
-                        
-                        if name == self._import_tag_options.GetString( i ):
-                            
-                            wx.MessageBox( 'You already have default tag import options set up for that domain!' )
-                            
-                            return
-                            
-                        
-                    
-                    with ClientGUIDialogs.DialogInputImportTagOptions( self, name, gallery_identifier ) as ito_dlg:
-                        
-                        if ito_dlg.ShowModal() == wx.ID_OK:
-                            
-                            import_tag_options = ito_dlg.GetImportTagOptions()
-                            
-                            self._import_tag_options.Append( name, ( gallery_identifier, import_tag_options ) )
-                            
-                        
-                    
-                
-            
-        
-        def EventDelete( self, event ):
-            
-            selection = self._import_tag_options.GetSelection()
-            
-            if selection != wx.NOT_FOUND: self._import_tag_options.Delete( selection )
-            
-        
-        def EventEdit( self, event ):
-            
-            selection = self._import_tag_options.GetSelection()
-            
-            if selection != wx.NOT_FOUND:
-                
-                name = self._import_tag_options.GetString( selection )
-                
-                ( gallery_identifier, import_tag_options ) = self._import_tag_options.GetClientData( selection )
-                
-                with ClientGUIDialogs.DialogInputImportTagOptions( self, name, gallery_identifier, import_tag_options ) as dlg:
-                    
-                    if dlg.ShowModal() == wx.ID_OK:
-                        
-                        import_tag_options = dlg.GetImportTagOptions()
-                        
-                        self._import_tag_options.SetClientData( selection, ( gallery_identifier, import_tag_options ) )
-                        
-                    
-                
-            
-        
         def UpdateOptions( self ):
             
-            self._new_options.ClearDefaultImportTagOptions()
-            
-            for ( gallery_identifier, import_tag_options ) in [ self._import_tag_options.GetClientData( i ) for i in range( self._import_tag_options.GetCount() ) ]:
-                
-                self._new_options.SetDefaultImportTagOptions( gallery_identifier, import_tag_options )
-                
+            self._new_options.SetTagSummaryGenerator( 'thumbnail_top', self._thumbnail_top.GetValue() )
+            self._new_options.SetTagSummaryGenerator( 'thumbnail_bottom_right', self._thumbnail_bottom_right.GetValue() )
+            self._new_options.SetTagSummaryGenerator( 'media_viewer_top', self._media_viewer_top.GetValue() )
             
         
     
@@ -2278,13 +2293,16 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._export_location = wx.DirPickerCtrl( self, style = wx.DIRP_USE_TEXTCTRL )
             
             self._delete_to_recycle_bin = wx.CheckBox( self, label = '' )
-            self._exclude_deleted_files = wx.CheckBox( self, label = '' )
             
             self._remove_filtered_files = wx.CheckBox( self, label = '' )
             self._remove_trashed_files = wx.CheckBox( self, label = '' )
             
             self._trash_max_age = ClientGUICommon.NoneableSpinCtrl( self, '', none_phrase = 'no age limit', min = 0, max = 8640 )
             self._trash_max_size = ClientGUICommon.NoneableSpinCtrl( self, '', none_phrase = 'no size limit', min = 0, max = 20480 )
+            
+            mime_panel = ClientGUICommon.StaticBox( self, '\'open externally\' launch paths' )
+            
+            self._mime_launch_listctrl = ClientGUIListCtrl.BetterListCtrl( mime_panel, 'mime_launch', 15, 30, [ ( 'mime', 20 ), ( 'launch path', -1 ) ], self._ConvertMimeToListCtrlTuples, activation_callback = self._EditMimeLaunch )
             
             #
             
@@ -2299,11 +2317,21 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
             
             self._delete_to_recycle_bin.SetValue( HC.options[ 'delete_to_recycle_bin' ] )
-            self._exclude_deleted_files.SetValue( HC.options[ 'exclude_deleted_files' ] )
             self._remove_filtered_files.SetValue( HC.options[ 'remove_filtered_files' ] )
             self._remove_trashed_files.SetValue( HC.options[ 'remove_trashed_files' ] )
             self._trash_max_age.SetValue( HC.options[ 'trash_max_age' ] )
             self._trash_max_size.SetValue( HC.options[ 'trash_max_size' ] )
+            
+            self._new_options = HG.client_controller.new_options
+            
+            for mime in HC.SEARCHABLE_MIMES:
+                
+                launch_path = self._new_options.GetMimeLaunch( mime )
+                
+                self._mime_launch_listctrl.AddDatas( [ ( mime, launch_path ) ] )
+                
+            
+            self._mime_launch_listctrl.Sort( 0 )
             
             #
             
@@ -2313,7 +2341,6 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             rows.append( ( 'Default export directory: ', self._export_location ) )
             rows.append( ( 'When deleting files or folders, send them to the OS\'s recycle bin: ', self._delete_to_recycle_bin ) )
-            rows.append( ( 'By default, do not reimport files that have been previously deleted: ', self._exclude_deleted_files ) )
             rows.append( ( 'Remove files from view when they are filtered: ', self._remove_filtered_files ) )
             rows.append( ( 'Remove files from view when they are sent to the trash: ', self._remove_trashed_files ) )
             rows.append( ( 'Number of hours a file can be in the trash before being deleted: ', self._trash_max_age ) )
@@ -2321,12 +2348,83 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( self, rows )
             
+            mime_panel.Add( self._mime_launch_listctrl, CC.FLAGS_EXPAND_BOTH_WAYS )
+            
             text = 'If you set the default export directory blank, the client will use \'hydrus_export\' under the current user\'s home directory.'
             
-            vbox.AddF( ClientGUICommon.BetterStaticText( self, text ), CC.FLAGS_CENTER )
-            vbox.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+            vbox.Add( ClientGUICommon.BetterStaticText( self, text ), CC.FLAGS_CENTER )
+            vbox.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            vbox.Add( mime_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             self.SetSizer( vbox )
+            
+        
+        def _ConvertMimeToListCtrlTuples( self, data ):
+            
+            ( mime, launch_path ) = data
+            
+            pretty_mime = HC.mime_string_lookup[ mime ]
+            
+            if launch_path is None:
+                
+                pretty_launch_path = 'default: ' + HydrusPaths.GetDefaultLaunchPath()
+                
+            else:
+                
+                pretty_launch_path = launch_path
+                
+            
+            display_tuple = ( pretty_mime, pretty_launch_path )
+            sort_tuple = display_tuple
+            
+            return ( display_tuple, sort_tuple )
+            
+        
+        def _EditMimeLaunch( self ):
+            
+            for ( mime, launch_path ) in self._mime_launch_listctrl.GetData( only_selected = True ):
+                
+                message = 'Enter the new launch path for ' + HC.mime_string_lookup[ mime ]
+                message += os.linesep * 2
+                message += 'Hydrus will insert the file\'s full path wherever you put %path%, even multiple times!'
+                message += os.linesep * 2
+                message += 'Set as blank to reset to default.'
+                
+                if launch_path is None:
+                    
+                    default = 'program "%path%"'
+                    
+                else:
+                    
+                    default = launch_path
+                    
+                
+                with ClientGUIDialogs.DialogTextEntry( self, message, default = default, allow_blank = True ) as dlg:
+                    
+                    if dlg.ShowModal() == wx.ID_OK:
+                        
+                        new_launch_path = dlg.GetValue()
+                        
+                        if new_launch_path == '':
+                            
+                            new_launch_path = None
+                            
+                        
+                        if new_launch_path not in ( launch_path, default ):
+                            
+                            self._mime_launch_listctrl.DeleteDatas( [ ( mime, launch_path ) ] )
+                            
+                            self._mime_launch_listctrl.AddDatas( [ ( mime, new_launch_path ) ] )
+                            
+                        
+                    else:
+                        
+                        break
+                        
+                    
+                
+            
+            self._mime_launch_listctrl.Sort()
             
         
         def UpdateOptions( self ):
@@ -2334,11 +2432,15 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             HC.options[ 'export_path' ] = HydrusPaths.ConvertAbsPathToPortablePath( HydrusData.ToUnicode( self._export_location.GetPath() ) )
             
             HC.options[ 'delete_to_recycle_bin' ] = self._delete_to_recycle_bin.GetValue()
-            HC.options[ 'exclude_deleted_files' ] = self._exclude_deleted_files.GetValue()
             HC.options[ 'remove_filtered_files' ] = self._remove_filtered_files.GetValue()
             HC.options[ 'remove_trashed_files' ] = self._remove_trashed_files.GetValue()
             HC.options[ 'trash_max_age' ] = self._trash_max_age.GetValue()
             HC.options[ 'trash_max_size' ] = self._trash_max_size.GetValue()
+            
+            for ( mime, launch_path ) in self._mime_launch_listctrl.GetData():
+                
+                self._new_options.SetMimeLaunch( mime, launch_path )
+                
             
         
     
@@ -2352,6 +2454,8 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._default_gui_session = wx.Choice( self )
             
+            self._last_session_save_period_minutes = wx.SpinCtrl( self, min = 1, max = 1440 )
+            
             self._default_new_page_goes = ClientGUICommon.BetterChoice( self )
             
             for value in [ CC.NEW_PAGE_GOES_FAR_LEFT, CC.NEW_PAGE_GOES_LEFT_OF_CURRENT, CC.NEW_PAGE_GOES_RIGHT_OF_CURRENT, CC.NEW_PAGE_GOES_FAR_RIGHT ]:
@@ -2363,44 +2467,78 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._confirm_trash = wx.CheckBox( self )
             self._confirm_archive = wx.CheckBox( self )
             
-            self._always_embed_autocompletes = wx.CheckBox( self )
+            self._max_page_name_chars = wx.SpinCtrl( self, min = 1, max = 256 )
             
-            self._gui_capitalisation = wx.CheckBox( self )
+            self._page_file_count_display = ClientGUICommon.BetterChoice( self )
+            
+            for display_type in ( CC.PAGE_FILE_COUNT_DISPLAY_ALL, CC.PAGE_FILE_COUNT_DISPLAY_ONLY_IMPORTERS, CC.PAGE_FILE_COUNT_DISPLAY_NONE ):
+                
+                self._page_file_count_display.Append( CC.page_file_count_display_string_lookup[ display_type ], display_type )
+                
+            
+            self._total_pages_warning = wx.SpinCtrl( self, min = 5, max = 200 )
+            
+            self._reverse_page_shift_drag_behaviour = wx.CheckBox( self )
+            self._reverse_page_shift_drag_behaviour.SetToolTip( 'By default, holding down shift when you drop off a page tab means the client will not \'chase\' the page tab. This makes this behaviour default, with shift-drop meaning to chase.' )
+            
+            self._always_embed_autocompletes = wx.CheckBox( self )
             
             self._hide_preview = wx.CheckBox( self )
             
-            self._show_thumbnail_title_banner = wx.CheckBox( self )
-            self._show_thumbnail_page = wx.CheckBox( self )
+            self._thumbnail_fill = wx.CheckBox( self )
+            
+            self._thumbnail_visibility_scroll_percent = wx.SpinCtrl( self, min = 1, max = 99 )
+            self._thumbnail_visibility_scroll_percent.SetToolTip( 'Lower numbers will cause fewer scrolls, higher numbers more.' )
+            
+            self._discord_dnd_fix = wx.CheckBox( self )
+            self._discord_dnd_fix.SetToolTip( 'This makes small file drag-and-drops a little laggier in exchange for discord support.' )
+            
+            self._always_show_hover_windows = wx.CheckBox( self )
+            self._always_show_hover_windows.SetToolTip( 'If your window manager doesn\'t like showing the hover windows on mouse-over (typically on some Linux flavours), please try this out and give the dev feedback on this forced size and position accuracy!' )
             
             self._hide_message_manager_on_gui_iconise = wx.CheckBox( self )
-            self._hide_message_manager_on_gui_iconise.SetToolTipString( 'If your message manager does not automatically minimise with your main gui, try this. It can lead to unusual show and positioning behaviour on window managers that do not support it, however.' )
+            self._hide_message_manager_on_gui_iconise.SetToolTip( 'If your message manager does not automatically minimise with your main gui, try this. It can lead to unusual show and positioning behaviour on window managers that do not support it, however.' )
             
             self._hide_message_manager_on_gui_deactive = wx.CheckBox( self )
-            self._hide_message_manager_on_gui_deactive.SetToolTipString( 'If your message manager stays up after you minimise the program to the system tray using a custom window manager, try this out! It hides the popup messages as soon as the main gui loses focus.' )
+            self._hide_message_manager_on_gui_deactive.SetToolTip( 'If your message manager stays up after you minimise the program to the system tray using a custom window manager, try this out! It hides the popup messages as soon as the main gui loses focus.' )
             
             frame_locations_panel = ClientGUICommon.StaticBox( self, 'frame locations' )
             
-            self._frame_locations = ClientGUICommon.SaneListCtrl( frame_locations_panel, 200, [ ( 'name', -1 ), ( 'remember size', 90 ), ( 'remember position', 90 ), ( 'last size', 90 ), ( 'last position', 90 ), ( 'default gravity', 90 ), ( 'default position', 90 ), ( 'maximised', 90 ), ( 'fullscreen', 90 ) ], activation_callback = self.EditFrameLocations )
+            self._frame_locations = ClientGUIListCtrl.SaneListCtrl( frame_locations_panel, 200, [ ( 'name', -1 ), ( 'remember size', 90 ), ( 'remember position', 90 ), ( 'last size', 90 ), ( 'last position', 90 ), ( 'default gravity', 90 ), ( 'default position', 90 ), ( 'maximised', 90 ), ( 'fullscreen', 90 ) ], activation_callback = self.EditFrameLocations )
             
             self._frame_locations_edit_button = wx.Button( frame_locations_panel, label = 'edit' )
             self._frame_locations_edit_button.Bind( wx.EVT_BUTTON, self.EventEditFrameLocation )
             
             #
             
-            self._new_options = HG.client_controller.GetNewOptions()
+            self._new_options = HG.client_controller.new_options
             
             self._main_gui_title.SetValue( self._new_options.GetString( 'main_gui_title' ) )
             
             gui_session_names = HG.client_controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_GUI_SESSION )
             
-            if 'last session' not in gui_session_names: gui_session_names.insert( 0, 'last session' )
+            if 'last session' not in gui_session_names:
+                
+                gui_session_names.insert( 0, 'last session' )
+                
             
             self._default_gui_session.Append( 'just a blank page', None )
             
-            for name in gui_session_names: self._default_gui_session.Append( name, name )
+            for name in gui_session_names:
+                
+                self._default_gui_session.Append( name, name )
+                
             
-            try: self._default_gui_session.SetStringSelection( HC.options[ 'default_gui_session' ] )
-            except: self._default_gui_session.SetSelection( 0 )
+            try:
+                
+                self._default_gui_session.SetStringSelection( HC.options[ 'default_gui_session' ] )
+                
+            except:
+                
+                self._default_gui_session.SetSelection( 0 )
+                
+            
+            self._last_session_save_period_minutes.SetValue( self._new_options.GetInteger( 'last_session_save_period_minutes' ) )
             
             self._default_new_page_goes.SelectClientData( self._new_options.GetInteger( 'default_new_page_goes' ) )
             
@@ -2410,15 +2548,25 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._confirm_archive.SetValue( HC.options[ 'confirm_archive' ] )
             
-            self._always_embed_autocompletes.SetValue( HC.options[ 'always_embed_autocompletes' ] )
+            self._max_page_name_chars.SetValue( self._new_options.GetInteger( 'max_page_name_chars' ) )
             
-            self._gui_capitalisation.SetValue( HC.options[ 'gui_capitalisation' ] )
+            self._page_file_count_display.SelectClientData( self._new_options.GetInteger( 'page_file_count_display' ) )
+            
+            self._total_pages_warning.SetValue( self._new_options.GetInteger( 'total_pages_warning' ) )
+            
+            self._reverse_page_shift_drag_behaviour.SetValue( self._new_options.GetBoolean( 'reverse_page_shift_drag_behaviour' ) )
+            
+            self._always_embed_autocompletes.SetValue( HC.options[ 'always_embed_autocompletes' ] )
             
             self._hide_preview.SetValue( HC.options[ 'hide_preview' ] )
             
-            self._show_thumbnail_title_banner.SetValue( self._new_options.GetBoolean( 'show_thumbnail_title_banner' ) )
+            self._thumbnail_fill.SetValue( self._new_options.GetBoolean( 'thumbnail_fill' ) )
             
-            self._show_thumbnail_page.SetValue( self._new_options.GetBoolean( 'show_thumbnail_page' ) )
+            self._thumbnail_visibility_scroll_percent.SetValue( self._new_options.GetInteger( 'thumbnail_visibility_scroll_percent' ) )
+            
+            self._discord_dnd_fix.SetValue( self._new_options.GetBoolean( 'discord_dnd_fix' ) )
+            
+            self._always_show_hover_windows.SetValue( self._new_options.GetBoolean( 'always_show_hover_windows' ) )
             
             self._hide_message_manager_on_gui_iconise.SetValue( self._new_options.GetBoolean( 'hide_message_manager_on_gui_iconise' ) )
             self._hide_message_manager_on_gui_deactive.SetValue( self._new_options.GetBoolean( 'hide_message_manager_on_gui_deactive' ) )
@@ -2432,7 +2580,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 self._frame_locations.Append( pretty_listctrl_list, listctrl_list )
                 
             
-            self._frame_locations.SortListItems( col = 0 )
+            #self._frame_locations.SortListItems( col = 0 )
             
             #
             
@@ -2440,15 +2588,21 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             rows.append( ( 'Main gui title: ', self._main_gui_title ) )
             rows.append( ( 'Default session on startup: ', self._default_gui_session ) )
+            rows.append( ( 'If \'last session\' above, autosave it how often (minutes)?', self._last_session_save_period_minutes ) )
             rows.append( ( 'By default, new page tabs: ', self._default_new_page_goes ) )
             rows.append( ( 'Confirm client exit: ', self._confirm_client_exit ) )
             rows.append( ( 'Confirm sending files to trash: ', self._confirm_trash ) )
             rows.append( ( 'Confirm sending more than one file to archive or inbox: ', self._confirm_archive ) )
+            rows.append( ( 'Max characters to display in a page name: ', self._max_page_name_chars ) )
+            rows.append( ( 'Show page file count after its name: ', self._page_file_count_display ) )
+            rows.append( ( 'Warn at this many total pages: ', self._total_pages_warning ) )
+            rows.append( ( 'Reverse page tab shift-drag behaviour: ', self._reverse_page_shift_drag_behaviour ) )
             rows.append( ( 'Always embed autocomplete dropdown results window: ', self._always_embed_autocompletes ) )
-            rows.append( ( 'Capitalise gui: ', self._gui_capitalisation ) )
             rows.append( ( 'Hide the preview window: ', self._hide_preview ) )
-            rows.append( ( 'Show \'title\' banner on thumbnails: ', self._show_thumbnail_title_banner ) )
-            rows.append( ( 'Show volume/chapter/page number on thumbnails: ', self._show_thumbnail_page ) )
+            rows.append( ( 'Zoom thumbnails so they \'fill\' their space (experimental): ', self._thumbnail_fill ) )
+            rows.append( ( 'Do not scroll down on key navigation if thumbnail at least this % visible: ', self._thumbnail_visibility_scroll_percent ) )
+            rows.append( ( 'BUGFIX: Discord file drag-and-drop fix (works for <=10, <50MB file DnDs): ', self._discord_dnd_fix ) )
+            rows.append( ( 'BUGFIX: Always show media viewer hover windows: ', self._always_show_hover_windows ) )
             rows.append( ( 'BUGFIX: Hide the popup message manager when the main gui is minimised: ', self._hide_message_manager_on_gui_iconise ) )
             rows.append( ( 'BUGFIX: Hide the popup message manager when the main gui loses focus: ', self._hide_message_manager_on_gui_deactive ) )
             
@@ -2458,14 +2612,14 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             text += os.linesep
             text += 'This is an advanced control. If you aren\'t confident of what you are doing here, come back later!'
             
-            frame_locations_panel.AddF( wx.StaticText( frame_locations_panel, label = text ), CC.FLAGS_EXPAND_PERPENDICULAR )
-            frame_locations_panel.AddF( self._frame_locations, CC.FLAGS_EXPAND_BOTH_WAYS )
-            frame_locations_panel.AddF( self._frame_locations_edit_button, CC.FLAGS_LONE_BUTTON )
+            frame_locations_panel.Add( wx.StaticText( frame_locations_panel, label = text ), CC.FLAGS_EXPAND_PERPENDICULAR )
+            frame_locations_panel.Add( self._frame_locations, CC.FLAGS_EXPAND_BOTH_WAYS )
+            frame_locations_panel.Add( self._frame_locations_edit_button, CC.FLAGS_LONE_BUTTON )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( frame_locations_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( frame_locations_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             self.SetSizer( vbox )
             
@@ -2519,7 +2673,6 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             HC.options[ 'confirm_trash' ] = self._confirm_trash.GetValue()
             HC.options[ 'confirm_archive' ] = self._confirm_archive.GetValue()
             HC.options[ 'always_embed_autocompletes' ] = self._always_embed_autocompletes.GetValue()
-            HC.options[ 'gui_capitalisation' ] = self._gui_capitalisation.GetValue()
             
             HC.options[ 'hide_preview' ] = self._hide_preview.GetValue()
             
@@ -2527,13 +2680,26 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._new_options.SetString( 'main_gui_title', title )
             
+            self._new_options.SetInteger( 'last_session_save_period_minutes', self._last_session_save_period_minutes.GetValue() )
+            
             self._new_options.SetInteger( 'default_new_page_goes', self._default_new_page_goes.GetChoice() )
+            
+            self._new_options.SetInteger( 'max_page_name_chars', self._max_page_name_chars.GetValue() )
+            
+            self._new_options.SetInteger( 'page_file_count_display', self._page_file_count_display.GetChoice() )
+            
+            self._new_options.SetInteger( 'total_pages_warning', self._total_pages_warning.GetValue() )
+            
+            self._new_options.SetBoolean( 'reverse_page_shift_drag_behaviour', self._reverse_page_shift_drag_behaviour.GetValue() )
             
             HG.client_controller.pub( 'main_gui_title', title )
             
-            self._new_options.SetBoolean( 'show_thumbnail_title_banner', self._show_thumbnail_title_banner.GetValue() )
-            self._new_options.SetBoolean( 'show_thumbnail_page', self._show_thumbnail_page.GetValue() )
+            self._new_options.SetBoolean( 'thumbnail_fill', self._thumbnail_fill.GetValue() )
             
+            self._new_options.SetInteger( 'thumbnail_visibility_scroll_percent', self._thumbnail_visibility_scroll_percent.GetValue() )
+            
+            self._new_options.SetBoolean( 'discord_dnd_fix', self._discord_dnd_fix.GetValue() )
+            self._new_options.SetBoolean( 'always_show_hover_windows', self._always_show_hover_windows.GetValue() )
             self._new_options.SetBoolean( 'hide_message_manager_on_gui_iconise', self._hide_message_manager_on_gui_iconise.GetValue() )
             self._new_options.SetBoolean( 'hide_message_manager_on_gui_deactive', self._hide_message_manager_on_gui_deactive.GetValue() )
             
@@ -2552,25 +2718,27 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             wx.Panel.__init__( self, parent )
             
-            self._new_options = HG.client_controller.GetNewOptions()
+            self._new_options = HG.client_controller.new_options
             
             self._animation_start_position = wx.SpinCtrl( self, min = 0, max = 100 )
             
             self._disable_cv_for_gifs = wx.CheckBox( self )
-            self._disable_cv_for_gifs.SetToolTipString( 'OpenCV is good at rendering gifs, but if you have problems with it and your graphics card, check this and the less reliable and slower PIL will be used instead.' )
+            self._disable_cv_for_gifs.SetToolTip( 'OpenCV is good at rendering gifs, but if you have problems with it and your graphics card, check this and the less reliable and slower PIL will be used instead. EDIT: OpenCV is much better these days--this is mostly not needed.' )
             
             self._load_images_with_pil = wx.CheckBox( self )
-            self._load_images_with_pil.SetToolTipString( 'OpenCV is much faster than PIL, but the current release crashes on certain images. You can try turning this off, but switch it back on if you have any problems.' )
+            self._load_images_with_pil.SetToolTip( 'OpenCV is much faster than PIL, but it is sometimes less reliable. Switch this on if you experience crashes or other unusual problems while importing or viewing certain images. EDIT: OpenCV is much better these days--this is mostly not needed.' )
             
             self._use_system_ffmpeg = wx.CheckBox( self )
-            self._use_system_ffmpeg.SetToolTipString( 'Check this to always default to the system ffmpeg in your path, rather than using the static ffmpeg in hydrus\'s bin directory. (requires restart)' )
+            self._use_system_ffmpeg.SetToolTip( 'Check this to always default to the system ffmpeg in your path, rather than using the static ffmpeg in hydrus\'s bin directory. (requires restart)' )
+            
+            self._anchor_and_hide_canvas_drags = wx.CheckBox( self )
             
             self._media_zooms = wx.TextCtrl( self )
             self._media_zooms.Bind( wx.EVT_TEXT, self.EventZoomsChanged )
             
             self._media_viewer_panel = ClientGUICommon.StaticBox( self, 'media viewer mime handling' )
             
-            self._media_viewer_options = ClientGUICommon.SaneListCtrlForSingleObject( self._media_viewer_panel, 300, [ ( 'mime', 150 ), ( 'media show action', 140 ), ( 'preview show action', 140 ), ( 'zoom info', -1 ) ], activation_callback = self.EditMediaViewerOptions )
+            self._media_viewer_options = ClientGUIListCtrl.SaneListCtrlForSingleObject( self._media_viewer_panel, 300, [ ( 'mime', 150 ), ( 'media show action', 140 ), ( 'preview show action', 140 ), ( 'zoom info', -1 ) ], activation_callback = self.EditMediaViewerOptions )
             
             self._media_viewer_edit_button = wx.Button( self._media_viewer_panel, label = 'edit' )
             self._media_viewer_edit_button.Bind( wx.EVT_BUTTON, self.EventEditMediaViewerOptions )
@@ -2581,12 +2749,13 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._disable_cv_for_gifs.SetValue( self._new_options.GetBoolean( 'disable_cv_for_gifs' ) )
             self._load_images_with_pil.SetValue( self._new_options.GetBoolean( 'load_images_with_pil' ) )
             self._use_system_ffmpeg.SetValue( self._new_options.GetBoolean( 'use_system_ffmpeg' ) )
+            self._anchor_and_hide_canvas_drags.SetValue( self._new_options.GetBoolean( 'anchor_and_hide_canvas_drags' ) )
             
             media_zooms = self._new_options.GetMediaZooms()
             
             self._media_zooms.SetValue( ','.join( ( str( media_zoom ) for media_zoom in media_zooms ) ) )
             
-            mimes_in_correct_order = ( HC.IMAGE_JPEG, HC.IMAGE_PNG, HC.IMAGE_APNG, HC.IMAGE_GIF, HC.APPLICATION_FLASH, HC.APPLICATION_PDF, HC.APPLICATION_HYDRUS_UPDATE_CONTENT, HC.APPLICATION_HYDRUS_UPDATE_DEFINITIONS, HC.VIDEO_AVI, HC.VIDEO_FLV, HC.VIDEO_MOV, HC.VIDEO_MP4, HC.VIDEO_MKV, HC.VIDEO_MPEG, HC.VIDEO_WEBM, HC.VIDEO_WMV, HC.AUDIO_MP3, HC.AUDIO_OGG, HC.AUDIO_FLAC, HC.AUDIO_WMA )
+            mimes_in_correct_order = ( HC.IMAGE_JPEG, HC.IMAGE_PNG, HC.IMAGE_APNG, HC.IMAGE_GIF, HC.APPLICATION_FLASH, HC.APPLICATION_PDF, HC.APPLICATION_ZIP, HC.APPLICATION_RAR, HC.APPLICATION_7Z, HC.APPLICATION_HYDRUS_UPDATE_CONTENT, HC.APPLICATION_HYDRUS_UPDATE_DEFINITIONS, HC.VIDEO_AVI, HC.VIDEO_FLV, HC.VIDEO_MOV, HC.VIDEO_MP4, HC.VIDEO_MKV, HC.VIDEO_MPEG, HC.VIDEO_WEBM, HC.VIDEO_WMV, HC.AUDIO_MP3, HC.AUDIO_OGG, HC.AUDIO_FLAC, HC.AUDIO_WMA )
             
             for mime in mimes_in_correct_order:
                 
@@ -2599,7 +2768,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 self._media_viewer_options.Append( display_tuple, sort_tuple, data )
                 
             
-            self._media_viewer_options.SortListItems( col = 0 )
+            #self._media_viewer_options.SortListItems( col = 0 )
             
             #
             
@@ -2608,19 +2777,20 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             rows = []
             
             rows.append( ( 'Start animations this % in: ', self._animation_start_position ) )
-            rows.append( ( 'Disable OpenCV for gifs: ', self._disable_cv_for_gifs ) )
-            rows.append( ( 'Load images with PIL: ', self._load_images_with_pil ) )
             rows.append( ( 'Prefer system FFMPEG: ', self._use_system_ffmpeg ) )
             rows.append( ( 'Media zooms: ', self._media_zooms ) )
+            rows.append( ( 'WINDOWS ONLY: Hide and anchor mouse cursor on slow canvas drags: ', self._anchor_and_hide_canvas_drags ) )
+            rows.append( ( 'BUGFIX: Load images with PIL: ', self._load_images_with_pil ) )
+            rows.append( ( 'BUGFIX: Disable OpenCV for gifs: ', self._disable_cv_for_gifs ) )
             
             gridbox = ClientGUICommon.WrapInGrid( self, rows )
             
-            vbox.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
-            self._media_viewer_panel.AddF( self._media_viewer_options, CC.FLAGS_EXPAND_BOTH_WAYS )
-            self._media_viewer_panel.AddF( self._media_viewer_edit_button, CC.FLAGS_LONE_BUTTON )
+            self._media_viewer_panel.Add( self._media_viewer_options, CC.FLAGS_EXPAND_BOTH_WAYS )
+            self._media_viewer_panel.Add( self._media_viewer_edit_button, CC.FLAGS_LONE_BUTTON )
             
-            vbox.AddF( self._media_viewer_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( self._media_viewer_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             self.SetSizer( vbox )
             
@@ -2707,10 +2877,13 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._new_options.SetBoolean( 'disable_cv_for_gifs', self._disable_cv_for_gifs.GetValue() )
             self._new_options.SetBoolean( 'load_images_with_pil', self._load_images_with_pil.GetValue() )
             self._new_options.SetBoolean( 'use_system_ffmpeg', self._use_system_ffmpeg.GetValue() )
+            self._new_options.SetBoolean( 'anchor_and_hide_canvas_drags', self._anchor_and_hide_canvas_drags.GetValue() )
             
             try:
                 
                 media_zooms = [ float( media_zoom ) for media_zoom in self._media_zooms.GetValue().split( ',' ) ]
+                
+                media_zooms = [ media_zoom for media_zoom in media_zooms if media_zoom > 0.0 ]
                 
                 if len( media_zooms ) > 0:
                     
@@ -2735,6 +2908,31 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
         
     
+    class _RegexPanel( wx.Panel ):
+        
+        def __init__( self, parent ):
+            
+            wx.Panel.__init__( self, parent )
+            
+            regex_favourites = HC.options[ 'regex_favourites' ]
+            
+            self._regex_panel = ClientGUIScrolledPanelsEdit.EditRegexFavourites( self, regex_favourites )
+            
+            vbox = wx.BoxSizer( wx.VERTICAL )
+            
+            vbox.Add( self._regex_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+            
+            self.SetSizer( vbox )
+            
+        
+        def UpdateOptions( self ):
+            
+            regex_favourites = self._regex_panel.GetValue()
+            
+            HC.options[ 'regex_favourites' ] = regex_favourites
+            
+        
+    
     class _SortCollectPanel( wx.Panel ):
         
         def __init__( self, parent ):
@@ -2743,7 +2941,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._default_sort = ClientGUICommon.ChoiceSort( self )
             
-            self._sort_fallback = ClientGUICommon.ChoiceSort( self )
+            self._fallback_sort = ClientGUICommon.ChoiceSort( self )
             
             self._default_collect = ClientGUICommon.CheckboxCollect( self )
             
@@ -2755,22 +2953,28 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             #
             
+            self._new_options = HG.client_controller.new_options
+            
             try:
                 
-                self._default_sort.SetSelection( HC.options[ 'default_sort' ] )
+                self._default_sort.SetSort( self._new_options.GetDefaultSort() )
                 
             except:
                 
-                self._default_sort.SetSelection( 0 )
+                media_sort = ClientMedia.MediaSort( ( 'system', CC.SORT_FILES_BY_FILESIZE ), CC.SORT_ASC )
+                
+                self._default_sort.SetSort( media_sort )
                 
             
             try:
                 
-                self._sort_fallback.SetSelection( HC.options[ 'sort_fallback' ] )
+                self._fallback_sort.SetSort( self._new_options.GetFallbackSort() )
                 
             except:
                 
-                self._sort_fallback.SetSelection( 0 )
+                media_sort = ClientMedia.MediaSort( ( 'system', CC.SORT_FILES_BY_IMPORT_TIME ), CC.SORT_ASC )
+                
+                self._fallback_sort.SetSort( media_sort )
                 
             
             for ( sort_by_type, sort_by ) in HC.options[ 'sort_by' ]:
@@ -2783,7 +2987,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             rows = []
             
             rows.append( ( 'Default sort: ', self._default_sort ) )
-            rows.append( ( 'Secondary sort (when primary gives two equal values): ', self._sort_fallback ) )
+            rows.append( ( 'Secondary sort (when primary gives two equal values): ', self._fallback_sort ) )
             rows.append( ( 'Default collect: ', self._default_collect ) )
             
             gridbox = ClientGUICommon.WrapInGrid( self, rows )
@@ -2796,10 +3000,10 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             sort_by_text += os.linesep
             sort_by_text += 'Any changes will be shown in the sort-by dropdowns of any new pages you open.'
             
-            vbox.AddF( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            vbox.AddF( ClientGUICommon.BetterStaticText( self, sort_by_text ), CC.FLAGS_VCENTER )
-            vbox.AddF( self._sort_by, CC.FLAGS_EXPAND_BOTH_WAYS )
-            vbox.AddF( self._new_sort_by, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            vbox.Add( ClientGUICommon.BetterStaticText( self, sort_by_text ), CC.FLAGS_VCENTER )
+            vbox.Add( self._sort_by, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( self._new_sort_by, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             self.SetSizer( vbox )
             
@@ -2842,8 +3046,8 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         def UpdateOptions( self ):
             
-            HC.options[ 'default_sort' ] = self._default_sort.GetSelection() 
-            HC.options[ 'sort_fallback' ] = self._sort_fallback.GetSelection()
+            self._new_options.SetDefaultSort( self._default_sort.GetSort() )
+            self._new_options.SetFallbackSort( self._fallback_sort.GetSort() )
             HC.options[ 'default_collect' ] = self._default_collect.GetChoice()
             
             sort_by_choices = []
@@ -2870,7 +3074,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( self._play_dumper_noises, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( self._play_dumper_noises, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             self.SetSizer( vbox )
             
@@ -2891,11 +3095,16 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             disk_panel = ClientGUICommon.StaticBox( self, 'disk cache' )
             
-            self._disk_cache_init_period = ClientGUICommon.NoneableSpinCtrl( disk_panel, 'max disk cache init period', none_phrase = 'do not run', min = 1, max = 120 )
-            self._disk_cache_init_period.SetToolTipString( 'When the client boots, it can speed up operation by reading the front of the database into memory. This sets the max number of seconds it can spend doing that.' )
+            disk_cache_help_button = ClientGUICommon.BetterBitmapButton( disk_panel, CC.GlobalBMPs.help, self._ShowDiskCacheHelp )
+            disk_cache_help_button.SetToolTip( 'Show help regarding the disk cache.' )
             
-            self._disk_cache_maintenance_mb = ClientGUICommon.NoneableSpinCtrl( disk_panel, 'disk cache maintenance (MB)', none_phrase = 'do not keep db cached', min = 32, max = 65536 )
-            self._disk_cache_maintenance_mb.SetToolTipString( 'The client can regularly check the front of its database is cached in memory. This represents how many megabytes it will ensure are cached.' )
+            help_hbox = ClientGUICommon.WrapInText( disk_cache_help_button, disk_panel, 'help for this panel -->', wx.Colour( 0, 0, 255 ) )
+            
+            self._disk_cache_init_period = ClientGUICommon.NoneableSpinCtrl( disk_panel, 'run disk cache on boot for this long', unit = 's', none_phrase = 'do not run', min = 1, max = 120 )
+            self._disk_cache_init_period.SetToolTip( 'When the client boots, it can speed up operation by reading the front of the database into memory. This sets the max number of seconds it can spend doing that.' )
+            
+            self._disk_cache_maintenance_mb = ClientGUICommon.NoneableSpinCtrl( disk_panel, 'disk cache maintenance', unit = 'MB', none_phrase = 'do not keep db cached', min = 32, max = 65536 )
+            self._disk_cache_maintenance_mb.SetToolTip( 'The client can regularly check the front of its database is cached in memory. This represents how many megabytes it will ensure are cached.' )
             
             #
             
@@ -2931,19 +3140,19 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             ac_panel = ClientGUICommon.StaticBox( self, 'tag autocomplete' )
             
             self._num_autocomplete_chars = wx.SpinCtrl( ac_panel, min = 1, max = 100 )
-            self._num_autocomplete_chars.SetToolTipString( 'how many characters you enter before the gui fetches autocomplete results from the db. (otherwise, it will only fetch exact matches)' + os.linesep + 'increase this if you find autocomplete results are slow' )
+            self._num_autocomplete_chars.SetToolTip( 'how many characters you enter before the gui fetches autocomplete results from the db. (otherwise, it will only fetch exact matches)' + os.linesep + 'increase this if you find autocomplete results are slow' )
             
             self._fetch_ac_results_automatically = wx.CheckBox( ac_panel )
             self._fetch_ac_results_automatically.Bind( wx.EVT_CHECKBOX, self.EventFetchAuto )
             
             self._autocomplete_long_wait = wx.SpinCtrl( ac_panel, min = 0, max = 10000 )
-            self._autocomplete_long_wait.SetToolTipString( 'how long the gui will typically wait, after you enter a character, before it queries the db with what you have entered so far' )
+            self._autocomplete_long_wait.SetToolTip( 'how long the gui will typically wait, after you enter a character, before it queries the db with what you have entered so far' )
             
             self._autocomplete_short_wait_chars = wx.SpinCtrl( ac_panel, min = 1, max = 100 )
-            self._autocomplete_short_wait_chars.SetToolTipString( 'how many characters you enter before the gui starts waiting the short time before querying the db' )
+            self._autocomplete_short_wait_chars.SetToolTip( 'how many characters you enter before the gui starts waiting the short time before querying the db' )
             
             self._autocomplete_short_wait = wx.SpinCtrl( ac_panel, min = 0, max = 10000 )
-            self._autocomplete_short_wait.SetToolTipString( 'how long the gui will typically wait, after you enter a lot of characters, before it queries the db with what you have entered so far' )
+            self._autocomplete_short_wait.SetToolTip( 'how long the gui will typically wait, after you enter a lot of characters, before it queries the db with what you have entered so far' )
             
             #
             
@@ -2986,27 +3195,28 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            disk_panel.AddF( self._disk_cache_init_period, CC.FLAGS_EXPAND_PERPENDICULAR )
-            disk_panel.AddF( self._disk_cache_maintenance_mb, CC.FLAGS_EXPAND_PERPENDICULAR )
+            disk_panel.Add( help_hbox, CC.FLAGS_BUTTON_SIZER )
+            disk_panel.Add( self._disk_cache_init_period, CC.FLAGS_EXPAND_PERPENDICULAR )
+            disk_panel.Add( self._disk_cache_maintenance_mb, CC.FLAGS_EXPAND_PERPENDICULAR )
             
-            vbox.AddF( disk_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( disk_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
             thumbnails_sizer = wx.BoxSizer( wx.HORIZONTAL )
             
-            thumbnails_sizer.AddF( self._thumbnail_cache_size, CC.FLAGS_VCENTER )
-            thumbnails_sizer.AddF( self._estimated_number_thumbnails, CC.FLAGS_VCENTER )
+            thumbnails_sizer.Add( self._thumbnail_cache_size, CC.FLAGS_VCENTER )
+            thumbnails_sizer.Add( self._estimated_number_thumbnails, CC.FLAGS_VCENTER )
             
             fullscreens_sizer = wx.BoxSizer( wx.HORIZONTAL )
             
-            fullscreens_sizer.AddF( self._fullscreen_cache_size, CC.FLAGS_VCENTER )
-            fullscreens_sizer.AddF( self._estimated_number_fullscreens, CC.FLAGS_VCENTER )
+            fullscreens_sizer.Add( self._fullscreen_cache_size, CC.FLAGS_VCENTER )
+            fullscreens_sizer.Add( self._estimated_number_fullscreens, CC.FLAGS_VCENTER )
             
             video_buffer_sizer = wx.BoxSizer( wx.HORIZONTAL )
             
-            video_buffer_sizer.AddF( self._video_buffer_size_mb, CC.FLAGS_VCENTER )
-            video_buffer_sizer.AddF( self._estimated_number_video_frames, CC.FLAGS_VCENTER )
+            video_buffer_sizer.Add( self._video_buffer_size_mb, CC.FLAGS_VCENTER )
+            video_buffer_sizer.Add( self._estimated_number_video_frames, CC.FLAGS_VCENTER )
             
             rows = []
             
@@ -3017,9 +3227,9 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( media_panel, rows )
             
-            media_panel.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            media_panel.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
-            vbox.AddF( media_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( media_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
@@ -3029,7 +3239,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             text += os.linesep
             text += 'If the video buffer can hold an entire video, it only needs to be rendered once and will loop smoothly.'
             
-            buffer_panel.AddF( wx.StaticText( buffer_panel, label = text ), CC.FLAGS_VCENTER )
+            buffer_panel.Add( wx.StaticText( buffer_panel, label = text ), CC.FLAGS_VCENTER )
             
             rows = []
             
@@ -3037,15 +3247,15 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( buffer_panel, rows )
             
-            buffer_panel.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            buffer_panel.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
-            vbox.AddF( buffer_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( buffer_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
             text = 'If you disable automatic autocomplete results fetching, use Ctrl+Space to fetch results manually.'
             
-            ac_panel.AddF( wx.StaticText( ac_panel, label = text ), CC.FLAGS_EXPAND_PERPENDICULAR )
+            ac_panel.Add( wx.StaticText( ac_panel, label = text ), CC.FLAGS_EXPAND_PERPENDICULAR )
             
             rows = []
             
@@ -3057,9 +3267,9 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( ac_panel, rows )
             
-            ac_panel.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            ac_panel.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
-            vbox.AddF( ac_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( ac_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
@@ -3069,9 +3279,9 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( misc_panel, rows )
             
-            misc_panel.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            misc_panel.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
-            vbox.AddF( misc_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( misc_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
@@ -3085,6 +3295,21 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self.EventVideoBufferUpdate( None )
             
             wx.CallAfter( self.Layout ) # draws the static texts correctly
+            
+        
+        def _ShowDiskCacheHelp( self ):
+            
+            message = 'The hydrus database runs best on a drive with fast random access latency. Important and heavy read and write operations can function up to 100 times faster when started raw from an SSD rather than an HDD.'
+            message += os.linesep * 2
+            message += 'To get around this, the client populates a pre-boot and ongoing disk cache. By contiguously frontloading the database into memory, the most important functions do not need to wait on your disk for most of their work.'
+            message += os.linesep * 2
+            message += 'If you tend to leave your client on in the background and have a slow drive but a lot of ram, you might like to pump these numbers up. 15s boot cache and 2048MB ongoing can really make a difference on, for instance, a slow laptop drive.'
+            message += os.linesep * 2
+            message += 'If you run the database from an SSD, you can reduce or entirely eliminate these values, as the benefit is not so stark. 2s and 256MB is fine.'
+            message += os.linesep * 2
+            message += 'Unless you are testing, do not go crazy with this stuff. You can set 8192MB if you like, but there are diminishing returns.'
+            
+            wx.MessageBox( message )
             
         
         def EventFetchAuto( self, event ):
@@ -3183,6 +3408,8 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._show_all_tags_in_autocomplete = wx.CheckBox( general_panel )
             
+            self._ac_select_first_with_count = wx.CheckBox( general_panel )
+            
             self._apply_all_parents_to_all_services = wx.CheckBox( general_panel )
             self._apply_all_siblings_to_all_services = wx.CheckBox( general_panel )
             
@@ -3254,7 +3481,9 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._favourite_file_lookup_script = ClientGUICommon.BetterChoice( suggested_tags_file_lookup_script_panel )
             
-            script_names = HG.client_controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_PARSE_ROOT_FILE_LOOKUP )
+            script_names = list( HG.client_controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_PARSE_ROOT_FILE_LOOKUP ) )
+            
+            script_names.sort()
             
             for name in script_names:
                 
@@ -3296,6 +3525,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._default_tag_service_search_page.SelectClientData( new_options.GetKey( 'default_tag_service_search_page' ) )
             
             self._show_all_tags_in_autocomplete.SetValue( HC.options[ 'show_all_tags_in_autocomplete' ] )
+            self._ac_select_first_with_count.SetValue( self._new_options.GetBoolean( 'ac_select_first_with_count' ) )
             
             self._apply_all_parents_to_all_services.SetValue( self._new_options.GetBoolean( 'apply_all_parents_to_all_services' ) )
             self._apply_all_siblings_to_all_services.SetValue( self._new_options.GetBoolean( 'apply_all_siblings_to_all_services' ) )
@@ -3335,14 +3565,15 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             rows.append( ( 'Default tag service in search pages: ', self._default_tag_service_search_page ) )
             rows.append( ( 'Default tag sort: ', self._default_tag_sort ) )
             rows.append( ( 'By default, search non-local tags in write-autocomplete: ', self._show_all_tags_in_autocomplete ) )
+            rows.append( ( 'By default, select the first tag result with actual count in write-autocomplete: ', self._ac_select_first_with_count ) )
             rows.append( ( 'Suggest all parents for all services: ', self._apply_all_parents_to_all_services ) )
             rows.append( ( 'Apply all siblings to all services (local siblings have precedence): ', self._apply_all_siblings_to_all_services ) )
             
             gridbox = ClientGUICommon.WrapInGrid( general_panel, rows )
             
-            general_panel.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            general_panel.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
-            vbox.AddF( general_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( general_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
@@ -3353,18 +3584,18 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( render_panel, rows )
             
-            render_panel.AddF( render_st, CC.FLAGS_EXPAND_PERPENDICULAR )
-            render_panel.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            render_panel.Add( render_st, CC.FLAGS_EXPAND_PERPENDICULAR )
+            render_panel.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
-            vbox.AddF( render_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( render_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             #
             
             panel_vbox = wx.BoxSizer( wx.VERTICAL )
             
-            panel_vbox.AddF( self._suggested_favourites_services, CC.FLAGS_EXPAND_PERPENDICULAR )
-            panel_vbox.AddF( self._suggested_favourites, CC.FLAGS_EXPAND_BOTH_WAYS )
-            panel_vbox.AddF( self._suggested_favourites_input, CC.FLAGS_EXPAND_PERPENDICULAR )
+            panel_vbox.Add( self._suggested_favourites_services, CC.FLAGS_EXPAND_PERPENDICULAR )
+            panel_vbox.Add( self._suggested_favourites, CC.FLAGS_EXPAND_BOTH_WAYS )
+            panel_vbox.Add( self._suggested_favourites_input, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             suggested_tags_favourites_panel.SetSizer( panel_vbox )
             
@@ -3381,7 +3612,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( suggested_tags_related_panel, rows )
             
-            panel_vbox.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            panel_vbox.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             suggested_tags_related_panel.SetSizer( panel_vbox )
             
@@ -3396,7 +3627,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( suggested_tags_file_lookup_script_panel, rows )
             
-            panel_vbox.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            panel_vbox.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             suggested_tags_file_lookup_script_panel.SetSizer( panel_vbox )
             
@@ -3404,7 +3635,7 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             panel_vbox = wx.BoxSizer( wx.VERTICAL )
             
-            panel_vbox.AddF( self._num_recent_tags, CC.FLAGS_EXPAND_PERPENDICULAR )
+            panel_vbox.Add( self._num_recent_tags, CC.FLAGS_EXPAND_PERPENDICULAR )
             
             suggested_tags_recent_panel.SetSizer( panel_vbox )
             
@@ -3424,10 +3655,10 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             gridbox = ClientGUICommon.WrapInGrid( suggested_tags_panel, rows )
             
-            suggested_tags_panel.AddF( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
-            suggested_tags_panel.AddF( suggest_tags_panel_notebook, CC.FLAGS_EXPAND_BOTH_WAYS )
+            suggested_tags_panel.Add( gridbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            suggested_tags_panel.Add( suggest_tags_panel_notebook, CC.FLAGS_EXPAND_BOTH_WAYS )
             
-            vbox.AddF( suggested_tags_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( suggested_tags_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
             
             #
             
@@ -3473,6 +3704,8 @@ class ManageOptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
             HC.options[ 'default_tag_repository' ] = self._default_tag_repository.GetChoice()
             HC.options[ 'default_tag_sort' ] = self._default_tag_sort.GetClientData( self._default_tag_sort.GetSelection() )
             HC.options[ 'show_all_tags_in_autocomplete' ] = self._show_all_tags_in_autocomplete.GetValue()
+            
+            self._new_options.SetBoolean( 'ac_select_first_with_count', self._ac_select_first_with_count.GetValue() )
             
             self._new_options.SetKey( 'default_tag_service_search_page', self._default_tag_service_search_page.GetChoice() )
             
@@ -3536,7 +3769,7 @@ class ManageServerServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         columns = [ ( 'port', 80 ), ( 'name', -1 ), ( 'type', 220 ) ]
         
-        self._services_listctrl = ClientGUICommon.SaneListCtrlForSingleObject( self, 120, columns, delete_key_callback = self._Delete, activation_callback = self._Edit )
+        self._services_listctrl = ClientGUIListCtrl.SaneListCtrlForSingleObject( self, 120, columns, delete_key_callback = self._Delete, activation_callback = self._Edit )
         
         menu_items = []
         
@@ -3562,20 +3795,20 @@ class ManageServerServicesPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._services_listctrl.Append( display_tuple, sort_tuple, serverside_service )
             
         
-        self._services_listctrl.SortListItems( 0 )
+        #self._services_listctrl.SortListItems( 0 )
         
         #
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        hbox.AddF( self._add_button, CC.FLAGS_VCENTER )
-        hbox.AddF( self._edit_button, CC.FLAGS_VCENTER )
-        hbox.AddF( self._delete_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._add_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._edit_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._delete_button, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._services_listctrl, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( hbox, CC.FLAGS_SMALL_INDENT )
+        vbox.Add( self._services_listctrl, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( hbox, CC.FLAGS_SMALL_INDENT )
         
         self.SetSizer( vbox )
         
@@ -3746,11 +3979,11 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
         ClientGUIScrolledPanels.ManagePanel.__init__( self, parent )
         
         help_button = ClientGUICommon.BetterBitmapButton( self, CC.GlobalBMPs.help, self._ShowHelp )
-        help_button.SetToolTipString( 'Show help regarding editing shortcuts.' )
+        help_button.SetToolTip( 'Show help regarding editing shortcuts.' )
         
         reserved_panel = ClientGUICommon.StaticBox( self, 'reserved' )
         
-        self._reserved_shortcuts = ClientGUICommon.SaneListCtrlForSingleObject( reserved_panel, 180, [ ( 'name', -1 ), ( 'size', 100 ) ], activation_callback = self._EditReserved )
+        self._reserved_shortcuts = ClientGUIListCtrl.SaneListCtrlForSingleObject( reserved_panel, 180, [ ( 'name', -1 ), ( 'size', 100 ) ], activation_callback = self._EditReserved )
         
         self._reserved_shortcuts.SetMinSize( ( 320, 200 ) )
         
@@ -3760,7 +3993,7 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         custom_panel = ClientGUICommon.StaticBox( self, 'custom' )
         
-        self._custom_shortcuts = ClientGUICommon.SaneListCtrlForSingleObject( custom_panel, 120, [ ( 'name', -1 ), ( 'size', 100 ) ], delete_key_callback = self._Delete, activation_callback = self._EditCustom )
+        self._custom_shortcuts = ClientGUIListCtrl.SaneListCtrlForSingleObject( custom_panel, 120, [ ( 'name', -1 ), ( 'size', 100 ) ], delete_key_callback = self._Delete, activation_callback = self._EditCustom )
         
         self._add_button = ClientGUICommon.BetterButton( custom_panel, 'add', self._Add )
         self._edit_custom_button = ClientGUICommon.BetterButton( custom_panel, 'edit', self._EditCustom )
@@ -3793,27 +4026,27 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         #
         
-        reserved_panel.AddF( self._reserved_shortcuts, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        reserved_panel.AddF( self._edit_reserved_button, CC.FLAGS_LONE_BUTTON )
+        reserved_panel.Add( self._reserved_shortcuts, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        reserved_panel.Add( self._edit_reserved_button, CC.FLAGS_LONE_BUTTON )
         
         #
         
         button_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        button_hbox.AddF( self._add_button, CC.FLAGS_VCENTER )
-        button_hbox.AddF( self._edit_custom_button, CC.FLAGS_VCENTER )
-        button_hbox.AddF( self._delete_button, CC.FLAGS_VCENTER )
+        button_hbox.Add( self._add_button, CC.FLAGS_VCENTER )
+        button_hbox.Add( self._edit_custom_button, CC.FLAGS_VCENTER )
+        button_hbox.Add( self._delete_button, CC.FLAGS_VCENTER )
         
-        custom_panel.AddF( self._custom_shortcuts, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        custom_panel.AddF( button_hbox, CC.FLAGS_BUTTON_SIZER )
+        custom_panel.Add( self._custom_shortcuts, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        custom_panel.Add( button_hbox, CC.FLAGS_BUTTON_SIZER )
         
         #
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( help_button, CC.FLAGS_LONE_BUTTON )
-        vbox.AddF( reserved_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( custom_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( help_button, CC.FLAGS_LONE_BUTTON )
+        vbox.Add( reserved_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( custom_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
@@ -3973,7 +4206,7 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
             ClientGUIScrolledPanels.EditPanel.__init__( self, parent )
             
             self._name = wx.TextCtrl( self )
-            self._shortcuts = ClientGUICommon.SaneListCtrl( self, 480, [ ( 'shortcut', 150 ), ( 'command', -1 ) ], delete_key_callback = self.RemoveShortcuts, activation_callback = self.EditShortcuts )
+            self._shortcuts = ClientGUIListCtrl.SaneListCtrl( self, 480, [ ( 'shortcut', 150 ), ( 'command', -1 ) ], delete_key_callback = self.RemoveShortcuts, activation_callback = self.EditShortcuts )
             
             self._shortcuts.SetMinSize( ( 360, 480 ) )
             
@@ -4010,21 +4243,21 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 self._shortcuts.Append( pretty_tuple, sort_tuple )
                 
             
-            self._shortcuts.SortListItems( 1 )
+            #self._shortcuts.SortListItems( 1 )
             
             #
             
             action_buttons = wx.BoxSizer( wx.HORIZONTAL )
             
-            action_buttons.AddF( self._add, CC.FLAGS_VCENTER )
-            action_buttons.AddF( self._edit, CC.FLAGS_VCENTER )
-            action_buttons.AddF( self._remove, CC.FLAGS_VCENTER )
+            action_buttons.Add( self._add, CC.FLAGS_VCENTER )
+            action_buttons.Add( self._edit, CC.FLAGS_VCENTER )
+            action_buttons.Add( self._remove, CC.FLAGS_VCENTER )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( ClientGUICommon.WrapInText( self._name, self, 'name: ' ), CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-            vbox.AddF( self._shortcuts, CC.FLAGS_EXPAND_BOTH_WAYS )
-            vbox.AddF( action_buttons, CC.FLAGS_BUTTON_SIZER )
+            vbox.Add( ClientGUICommon.WrapInText( self._name, self, 'name: ' ), CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            vbox.Add( self._shortcuts, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( action_buttons, CC.FLAGS_BUTTON_SIZER )
             
             self.SetSizer( vbox )
             
@@ -4109,9 +4342,7 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             if self._this_is_custom and name in CC.SHORTCUTS_RESERVED_NAMES:
                 
-                wx.MessageBox( 'That name is reserved--please pick another!' )
-                
-                raise HydrusExceptions.VetoException()
+                raise HydrusExceptions.VetoException( 'That name is reserved--please pick another!' )
                 
             
             shortcuts = ClientData.Shortcuts( name )
@@ -4175,7 +4406,16 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 #
                 
-                self._tag_panel = ClientGUICommon.StaticBox( self, 'tag service actions' )
+                self._content_panel = ClientGUICommon.StaticBox( self, 'content actions' )
+                
+                self._flip_or_set_action = ClientGUICommon.BetterChoice( self._content_panel )
+                
+                self._flip_or_set_action.Append( 'set', HC.CONTENT_UPDATE_SET )
+                self._flip_or_set_action.Append( 'flip on and off', HC.CONTENT_UPDATE_FLIP )
+                
+                self._flip_or_set_action.SelectClientData( HC.CONTENT_UPDATE_SET )
+                
+                self._tag_panel = ClientGUICommon.StaticBox( self._content_panel, 'tag service actions' )
                 
                 self._tag_service_keys = wx.Choice( self._tag_panel )
                 self._tag_value = wx.TextCtrl( self._tag_panel, style = wx.TE_READONLY )
@@ -4188,7 +4428,7 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 #
                 
-                self._ratings_like_panel = ClientGUICommon.StaticBox( self, 'like/dislike ratings service actions' )
+                self._ratings_like_panel = ClientGUICommon.StaticBox( self._content_panel, 'like/dislike ratings service actions' )
                 
                 self._ratings_like_service_keys = wx.Choice( self._ratings_like_panel )
                 self._ratings_like_service_keys.Bind( wx.EVT_CHOICE, self.EventRecalcActions )
@@ -4200,7 +4440,7 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 #
                 
-                self._ratings_numerical_panel = ClientGUICommon.StaticBox( self, 'numerical ratings service actions' )
+                self._ratings_numerical_panel = ClientGUICommon.StaticBox( self._content_panel, 'numerical ratings service actions' )
                 
                 self._ratings_numerical_service_keys = wx.Choice( self._ratings_numerical_panel )
                 self._ratings_numerical_service_keys.Bind( wx.EVT_CHOICE, self.EventRecalcActions )
@@ -4249,6 +4489,8 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     service_name = self._service.GetName()
                     service_type = self._service.GetServiceType()
+                    
+                    self._flip_or_set_action.SelectClientData( action )
                     
                     if service_type in HC.TAG_SERVICES:
                         
@@ -4309,53 +4551,56 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 #
                 
-                self._shortcut_panel.AddF( self._shortcut, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self._shortcut_panel.Add( self._shortcut, CC.FLAGS_EXPAND_PERPENDICULAR )
                 
                 none_hbox = wx.BoxSizer( wx.HORIZONTAL )
                 
-                none_hbox.AddF( self._simple_actions, CC.FLAGS_EXPAND_DEPTH_ONLY )
-                none_hbox.AddF( self._set_simple, CC.FLAGS_VCENTER )
+                none_hbox.Add( self._simple_actions, CC.FLAGS_EXPAND_DEPTH_ONLY )
+                none_hbox.Add( self._set_simple, CC.FLAGS_VCENTER )
                 
-                self._none_panel.AddF( none_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+                self._none_panel.Add( none_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
                 
                 tag_sub_vbox = wx.BoxSizer( wx.VERTICAL )
                 
-                tag_sub_vbox.AddF( self._tag_value, CC.FLAGS_EXPAND_PERPENDICULAR )
-                tag_sub_vbox.AddF( self._tag_input, CC.FLAGS_EXPAND_BOTH_WAYS )
+                tag_sub_vbox.Add( self._tag_value, CC.FLAGS_EXPAND_PERPENDICULAR )
+                tag_sub_vbox.Add( self._tag_input, CC.FLAGS_EXPAND_BOTH_WAYS )
                 
                 tag_hbox = wx.BoxSizer( wx.HORIZONTAL )
                 
-                tag_hbox.AddF( self._tag_service_keys, CC.FLAGS_EXPAND_DEPTH_ONLY )
-                tag_hbox.AddF( tag_sub_vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-                tag_hbox.AddF( self._set_tag, CC.FLAGS_VCENTER )
+                tag_hbox.Add( self._tag_service_keys, CC.FLAGS_EXPAND_DEPTH_ONLY )
+                tag_hbox.Add( tag_sub_vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+                tag_hbox.Add( self._set_tag, CC.FLAGS_VCENTER )
                 
-                self._tag_panel.AddF( tag_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+                self._tag_panel.Add( tag_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
                 
                 ratings_like_hbox = wx.BoxSizer( wx.HORIZONTAL )
                 
-                ratings_like_hbox.AddF( self._ratings_like_service_keys, CC.FLAGS_EXPAND_DEPTH_ONLY )
-                ratings_like_hbox.AddF( self._ratings_like_like, CC.FLAGS_VCENTER )
-                ratings_like_hbox.AddF( self._ratings_like_dislike, CC.FLAGS_VCENTER )
-                ratings_like_hbox.AddF( self._ratings_like_remove, CC.FLAGS_VCENTER )
-                ratings_like_hbox.AddF( self._set_ratings_like, CC.FLAGS_VCENTER )
+                ratings_like_hbox.Add( self._ratings_like_service_keys, CC.FLAGS_EXPAND_DEPTH_ONLY )
+                ratings_like_hbox.Add( self._ratings_like_like, CC.FLAGS_VCENTER )
+                ratings_like_hbox.Add( self._ratings_like_dislike, CC.FLAGS_VCENTER )
+                ratings_like_hbox.Add( self._ratings_like_remove, CC.FLAGS_VCENTER )
+                ratings_like_hbox.Add( self._set_ratings_like, CC.FLAGS_VCENTER )
                 
-                self._ratings_like_panel.AddF( ratings_like_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+                self._ratings_like_panel.Add( ratings_like_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
                 
                 ratings_numerical_hbox = wx.BoxSizer( wx.HORIZONTAL )
                 
-                ratings_numerical_hbox.AddF( self._ratings_numerical_service_keys, CC.FLAGS_EXPAND_DEPTH_ONLY )
-                ratings_numerical_hbox.AddF( self._ratings_numerical_slider, CC.FLAGS_VCENTER )
-                ratings_numerical_hbox.AddF( self._ratings_numerical_remove, CC.FLAGS_VCENTER )
-                ratings_numerical_hbox.AddF( self._set_ratings_numerical, CC.FLAGS_VCENTER )
+                ratings_numerical_hbox.Add( self._ratings_numerical_service_keys, CC.FLAGS_EXPAND_DEPTH_ONLY )
+                ratings_numerical_hbox.Add( self._ratings_numerical_slider, CC.FLAGS_VCENTER )
+                ratings_numerical_hbox.Add( self._ratings_numerical_remove, CC.FLAGS_VCENTER )
+                ratings_numerical_hbox.Add( self._set_ratings_numerical, CC.FLAGS_VCENTER )
                 
-                self._ratings_numerical_panel.AddF( ratings_numerical_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+                self._ratings_numerical_panel.Add( ratings_numerical_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+                
+                self._content_panel.Add( self._flip_or_set_action, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self._content_panel.Add( self._tag_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self._content_panel.Add( self._ratings_like_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+                self._content_panel.Add( self._ratings_numerical_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
                 
                 vbox = wx.BoxSizer( wx.VERTICAL )
                 
-                vbox.AddF( self._none_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-                vbox.AddF( self._tag_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-                vbox.AddF( self._ratings_like_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-                vbox.AddF( self._ratings_numerical_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+                vbox.Add( self._none_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+                vbox.Add( self._content_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
                 
                 is_custom_or_media = shortcuts_name not in CC.SHORTCUTS_RESERVED_NAMES or shortcuts_name == 'media'
                 
@@ -4363,16 +4608,14 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     self._set_simple.Hide()
                     
-                    self._tag_panel.Hide()
-                    self._ratings_like_panel.Hide()
-                    self._ratings_numerical_panel.Hide()
+                    self._content_panel.Hide()
                     
                 
                 hbox = wx.BoxSizer( wx.HORIZONTAL )
                 
-                hbox.AddF( self._shortcut_panel, CC.FLAGS_VCENTER )
-                hbox.AddF( ClientGUICommon.BetterStaticText( self, u'\u2192' ), CC.FLAGS_VCENTER )
-                hbox.AddF( vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+                hbox.Add( self._shortcut_panel, CC.FLAGS_VCENTER )
+                hbox.Add( ClientGUICommon.BetterStaticText( self, u'\u2192' ), CC.FLAGS_VCENTER )
+                hbox.Add( vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
                 
                 self.SetSizer( hbox )
                 
@@ -4411,9 +4654,7 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 if action == '':
                     
-                    wx.MessageBox( 'Please select an action!' )
-                    
-                    raise HydrusExceptions.VetoException()
+                    raise HydrusExceptions.VetoException( 'Please select an action!' )
                     
                 else:
                     
@@ -4429,6 +4670,8 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     service_key = self._ratings_like_service_keys.GetClientData( selection )
                     
+                    action = self._flip_or_set_action.GetChoice()
+                    
                     if self._ratings_like_like.GetValue():
                         
                         value = 1.0
@@ -4442,13 +4685,11 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                         value = None
                         
                     
-                    return ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_CONTENT, ( service_key, HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_FLIP, value ) )
+                    return ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_CONTENT, ( service_key, HC.CONTENT_TYPE_RATINGS, action, value ) )
                     
                 else:
                     
-                    wx.MessageBox( 'Please select a rating service!' )
-                    
-                    raise HydrusExceptions.VetoException()
+                    raise HydrusExceptions.VetoException( 'Please select a rating service!' )
                     
                 
             
@@ -4459,6 +4700,8 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 if selection != wx.NOT_FOUND:
                     
                     service_key = self._ratings_numerical_service_keys.GetClientData( selection )
+                    
+                    action = self._flip_or_set_action.GetChoice()
                     
                     if self._ratings_numerical_remove.GetValue():
                         
@@ -4481,13 +4724,11 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                             
                         
                     
-                    return ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_CONTENT, ( service_key, HC.CONTENT_TYPE_RATINGS, HC.CONTENT_UPDATE_FLIP, value ) )
+                    return ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_CONTENT, ( service_key, HC.CONTENT_TYPE_RATINGS, action, value ) )
                     
                 else:
                     
-                    wx.MessageBox( 'Please select a rating service!' )
-                    
-                    raise HydrusExceptions.VetoException()
+                    raise HydrusExceptions.VetoException( 'Please select a rating service!' )
                     
                 
             
@@ -4499,22 +4740,20 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                     service_key = self._tag_service_keys.GetClientData( selection )
                     
+                    action = self._flip_or_set_action.GetChoice()
+                    
                     value = self._tag_value.GetValue()
                     
                     if value == '':
                         
-                        wx.MessageBox( 'Please enter a tag!' )
-                        
-                        raise HydrusExceptions.VetoException()
+                        raise HydrusExceptions.VetoException( 'Please enter a tag!' )
                         
                     
-                    return ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_CONTENT, ( service_key, HC.CONTENT_TYPE_MAPPINGS, HC.CONTENT_UPDATE_FLIP, value ) )
+                    return ClientData.ApplicationCommand( CC.APPLICATION_COMMAND_TYPE_CONTENT, ( service_key, HC.CONTENT_TYPE_MAPPINGS, action, value ) )
                     
                 else:
                     
-                    wx.MessageBox( 'Please select a tag service!' )
-                    
-                    raise HydrusExceptions.VetoException()
+                    raise HydrusExceptions.VetoException( 'Please select a tag service!' )
                     
                 
             
@@ -4628,453 +4867,6 @@ class ManageShortcutsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
         
     
-class ManageSubscriptionsPanel( ClientGUIScrolledPanels.ManagePanel ):
-    
-    def __init__( self, parent ):
-        
-        ClientGUIScrolledPanels.ManagePanel.__init__( self, parent )
-        
-        subscriptions = HG.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION )
-        
-        #
-        
-        columns = [ ( 'name', -1 ), ( 'site', 80 ), ( 'period', 80 ), ( 'last checked', 100 ), ( 'recent error?', 100 ), ( 'urls', 60 ), ( 'failures', 60 ), ( 'paused', 80 ), ( 'check now?', 100 ) ]
-        
-        self._subscriptions = ClientGUICommon.SaneListCtrlForSingleObject( self, 300, columns, delete_key_callback = self.Delete, activation_callback = self.Edit )
-        
-        self._add = ClientGUICommon.BetterButton( self, 'add', self.Add )
-        
-        menu_items = []
-        
-        menu_items.append( ( 'normal', 'to clipboard', 'Serialise the script and put it on your clipboard.', self.ExportToClipboard ) )
-        menu_items.append( ( 'normal', 'to png', 'Serialise the script and encode it to an image file you can easily share with other hydrus users.', self.ExportToPng ) )
-        
-        self._export = ClientGUICommon.MenuButton( self, 'export', menu_items )
-        
-        menu_items = []
-        
-        menu_items.append( ( 'normal', 'from clipboard', 'Load a script from text in your clipboard.', self.ImportFromClipboard ) )
-        menu_items.append( ( 'normal', 'from png', 'Load a script from an encoded png.', self.ImportFromPng ) )
-        
-        self._import = ClientGUICommon.MenuButton( self, 'import', menu_items )
-        
-        self._duplicate = ClientGUICommon.BetterButton( self, 'duplicate', self.Duplicate )
-        self._edit = ClientGUICommon.BetterButton( self, 'edit', self.Edit )
-        self._delete = ClientGUICommon.BetterButton( self, 'delete', self.Delete )
-        
-        self._retry_failures = ClientGUICommon.BetterButton( self, 'retry failures', self.RetryFailures )
-        self._pause_resume = ClientGUICommon.BetterButton( self, 'pause/resume', self.PauseResume )
-        self._check_now = ClientGUICommon.BetterButton( self, 'check now', self.CheckNow )
-        self._reset = ClientGUICommon.BetterButton( self, 'reset', self.Reset )
-        
-        #
-        
-        for subscription in subscriptions:
-            
-            ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
-            
-            self._subscriptions.Append( display_tuple, sort_tuple, subscription )
-            
-        
-        #
-        
-        text_hbox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        text_hbox.AddF( ClientGUICommon.BetterStaticText( self, 'For more information about subscriptions, please check' ), CC.FLAGS_VCENTER )
-        text_hbox.AddF( wx.HyperlinkCtrl( self, id = -1, label = 'here', url = 'file://' + HC.HELP_DIR + '/getting_started_subscriptions.html' ), CC.FLAGS_VCENTER )
-        
-        action_box = wx.BoxSizer( wx.HORIZONTAL )
-        
-        action_box.AddF( self._retry_failures, CC.FLAGS_VCENTER )
-        action_box.AddF( self._pause_resume, CC.FLAGS_VCENTER )
-        action_box.AddF( self._check_now, CC.FLAGS_VCENTER )
-        action_box.AddF( self._reset, CC.FLAGS_VCENTER )
-        
-        button_box = wx.BoxSizer( wx.HORIZONTAL )
-        
-        button_box.AddF( self._add, CC.FLAGS_VCENTER )
-        button_box.AddF( self._export, CC.FLAGS_VCENTER )
-        button_box.AddF( self._import, CC.FLAGS_VCENTER )
-        button_box.AddF( self._duplicate, CC.FLAGS_VCENTER )
-        button_box.AddF( self._edit, CC.FLAGS_VCENTER )
-        button_box.AddF( self._delete, CC.FLAGS_VCENTER )
-        
-        vbox = wx.BoxSizer( wx.VERTICAL )
-        
-        vbox.AddF( text_hbox, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._subscriptions, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( action_box, CC.FLAGS_BUTTON_SIZER )
-        vbox.AddF( button_box, CC.FLAGS_BUTTON_SIZER )
-        
-        self.SetSizer( vbox )
-        
-    
-    def _ConvertSubscriptionToTuples( self, subscription ):
-        
-        ( name, gallery_identifier, gallery_stream_identifiers, query, period, get_tags_if_url_known_and_file_redundant, initial_file_limit, periodic_file_limit, paused, import_file_options, import_tag_options, last_checked, last_error, check_now, seed_cache ) = subscription.ToTuple()
-        
-        pretty_site = gallery_identifier.ToString()
-        
-        pretty_last_checked = HydrusData.ConvertTimestampToPrettySync( last_checked )
-        
-        pretty_period = HydrusData.ConvertTimeDeltaToPrettyString( period )
-        
-        error_next_check_time = last_error + HC.UPDATE_DURATION
-        
-        if HydrusData.TimeHasPassed( error_next_check_time ):
-            
-            pretty_error = ''
-            
-        else:
-            
-            pretty_error = 'yes'
-            
-        
-        num_urls = seed_cache.GetSeedCount()
-        pretty_urls = HydrusData.ConvertIntToPrettyString( num_urls )
-        
-        num_failures = seed_cache.GetSeedCount( CC.STATUS_FAILED )
-        pretty_failures = HydrusData.ConvertIntToPrettyString( num_failures )
-        
-        if paused:
-            
-            pretty_paused = 'yes'
-            
-        else:
-            
-            pretty_paused = ''
-            
-        
-        if check_now:
-            
-            pretty_check_now = 'yes'
-            
-        else:
-            
-            pretty_check_now = ''
-            
-        
-        display_tuple = ( name, pretty_site, pretty_period, pretty_last_checked, pretty_error, pretty_urls, pretty_failures, pretty_paused, pretty_check_now )
-        sort_tuple = ( name, pretty_site, period, last_checked, pretty_error, num_urls, num_failures, paused, check_now )
-        
-        return ( display_tuple, sort_tuple )
-        
-    
-    def _GetExportObject( self ):
-        
-        to_export = HydrusSerialisable.SerialisableList()
-        
-        for subscription in self._subscriptions.GetObjects( only_selected = True ):
-            
-            to_export.append( subscription )
-            
-        
-        if len( to_export ) == 0:
-            
-            return None
-            
-        elif len( to_export ) == 1:
-            
-            return to_export[0]
-            
-        else:
-            
-            return to_export
-            
-        
-    
-    def _ImportObject( self, obj ):
-        
-        if isinstance( obj, HydrusSerialisable.SerialisableList ):
-            
-            for sub_obj in obj:
-                
-                self._ImportObject( sub_obj )
-                
-            
-        else:
-            
-            if isinstance( obj, ClientImporting.Subscription ):
-                
-                subscription = obj
-                
-                self._subscriptions.SetNonDupeName( subscription )
-                
-                ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
-                
-                self._subscriptions.Append( display_tuple, sort_tuple, subscription )
-                
-            else:
-                
-                wx.MessageBox( 'That was not a script--it was a: ' + type( obj ).__name__ )
-                
-            
-        
-    
-    def Add( self ):
-        
-        empty_subscription = ClientImporting.Subscription( 'new subscription' )
-        
-        with ClientGUITopLevelWindows.DialogEdit( self, 'edit subscription' ) as dlg_edit:
-            
-            panel = ClientGUIScrolledPanelsEdit.EditSubscriptionPanel( dlg_edit, empty_subscription )
-            
-            dlg_edit.SetPanel( panel )
-            
-            if dlg_edit.ShowModal() == wx.ID_OK:
-                
-                new_subscription = panel.GetValue()
-                
-                self._subscriptions.SetNonDupeName( new_subscription )
-                
-                ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( new_subscription )
-                
-                self._subscriptions.Append( display_tuple, sort_tuple, new_subscription )
-                
-            
-        
-    
-    def CheckNow( self ):
-        
-        for i in self._subscriptions.GetAllSelected():
-            
-            subscription = self._subscriptions.GetObject( i )
-            
-            subscription.CheckNow()
-            
-            ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
-            
-            self._subscriptions.UpdateRow( i, display_tuple, sort_tuple, subscription )
-            
-        
-    
-    def CommitChanges( self ):
-        
-        subscriptions = self._subscriptions.GetObjects()
-        
-        HG.client_controller.Write( 'serialisables_overwrite', [ HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION ], subscriptions )
-        
-        # we pubsub changes outside, so it happens even on cancel
-        
-    
-    def Delete( self ):
-        
-        with ClientGUIDialogs.DialogYesNo( self, 'Remove all selected?' ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_YES:
-                
-                self._subscriptions.RemoveAllSelected()
-                
-            
-        
-    
-    def Duplicate( self ):
-        
-        subs_to_dupe = []
-        
-        for subscription in self._subscriptions.GetObjects( only_selected = True ):
-            
-            subs_to_dupe.append( subscription )
-            
-        
-        for subscription in subs_to_dupe:
-            
-            dupe_subscription = subscription.Duplicate()
-            
-            self._subscriptions.SetNonDupeName( dupe_subscription )
-            
-            ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( dupe_subscription )
-            
-            self._subscriptions.Append( display_tuple, sort_tuple, dupe_subscription )
-            
-        
-    
-    def Edit( self ):
-        
-        for index in self._subscriptions.GetAllSelected():
-            
-            subscription = self._subscriptions.GetObject( index )
-            
-            with ClientGUITopLevelWindows.DialogEdit( self, 'edit subscription' ) as dlg:
-                
-                original_name = subscription.GetName()
-                
-                panel = ClientGUIScrolledPanelsEdit.EditSubscriptionPanel( dlg, subscription )
-                
-                dlg.SetPanel( panel )
-                
-                result = dlg.ShowModal()
-                
-                if result == wx.ID_OK:
-                    
-                    edited_subscription = panel.GetValue()
-                    
-                    if edited_subscription.GetName() != original_name:
-                        
-                        self._subscriptions.SetNonDupeName( edited_subscription )
-                        
-                    
-                    ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( edited_subscription )
-                    
-                    self._subscriptions.UpdateRow( index, display_tuple, sort_tuple, edited_subscription )
-                    
-                elif result == wx.ID_CANCEL:
-                    
-                    break
-                    
-                
-                
-            
-        
-    
-    def ExportToClipboard( self ):
-        
-        export_object = self._GetExportObject()
-        
-        if export_object is not None:
-            
-            json = export_object.DumpToString()
-            
-            HG.client_controller.pub( 'clipboard', 'text', json )
-            
-        
-    
-    def ExportToPng( self ):
-        
-        export_object = self._GetExportObject()
-        
-        if export_object is not None:
-            
-            with ClientGUITopLevelWindows.DialogNullipotent( self, 'export to png' ) as dlg:
-                
-                panel = ClientGUISerialisable.PngExportPanel( dlg, export_object )
-                
-                dlg.SetPanel( panel )
-                
-                dlg.ShowModal()
-                
-            
-        
-    
-    def ImportFromClipboard( self ):
-        
-        if wx.TheClipboard.Open():
-            
-            data = wx.TextDataObject()
-            
-            wx.TheClipboard.GetData( data )
-            
-            wx.TheClipboard.Close()
-            
-            raw_text = data.GetText()
-            
-            try:
-                
-                obj = HydrusSerialisable.CreateFromString( raw_text )
-                
-                self._ImportObject( obj )
-                
-            except Exception as e:
-                
-                wx.MessageBox( 'I could not understand what was in the clipboard' )
-                
-            
-        else:
-            
-            wx.MessageBox( 'I could not get permission to access the clipboard.' )
-            
-        
-    
-    def ImportFromPng( self ):
-        
-        with wx.FileDialog( self, 'select the png with the encoded script', wildcard = 'PNG (*.png)|*.png' ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_OK:
-                
-                path = HydrusData.ToUnicode( dlg.GetPath() )
-                
-                try:
-                    
-                    payload = ClientSerialisable.LoadFromPng( path )
-                    
-                except Exception as e:
-                    
-                    wx.MessageBox( HydrusData.ToUnicode( e ) )
-                    
-                    return
-                    
-                
-                try:
-                    
-                    obj = HydrusSerialisable.CreateFromNetworkString( payload )
-                    
-                    self._ImportObject( obj )
-                    
-                except:
-                    
-                    wx.MessageBox( 'I could not understand what was encoded in the png!' )
-                    
-                
-            
-        
-    
-    def PauseResume( self ):
-        
-        for i in self._subscriptions.GetAllSelected():
-            
-            subscription = self._subscriptions.GetObject( i )
-            
-            subscription.PauseResume()
-            
-            ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
-            
-            self._subscriptions.UpdateRow( i, display_tuple, sort_tuple, subscription )
-            
-        
-    
-    def Reset( self ):
-        
-        message = '''Resetting these subscriptions will delete all their remembered urls, meaning when they next run, they will try to download them all over again. This may be expensive in time and data. Only do it if you are willing to wait. Do you want to do it?'''
-        
-        with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
-            
-            if dlg.ShowModal() == wx.ID_YES:
-                
-                for i in self._subscriptions.GetAllSelected():
-                    
-                    subscription = self._subscriptions.GetObject( i )
-                    
-                    subscription.Reset()
-                    
-                    ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
-                    
-                    self._subscriptions.UpdateRow( i, display_tuple, sort_tuple, subscription )
-                    
-                
-            
-        
-    
-    def RetryFailures( self ):
-        
-        for i in self._subscriptions.GetAllSelected():
-            
-            subscription = self._subscriptions.GetObject( i )
-            
-            seed_cache = subscription.GetSeedCache()
-            
-            failed_seeds = seed_cache.GetSeeds( CC.STATUS_FAILED )
-            
-            for seed in failed_seeds:
-                
-                seed_cache.UpdateSeedStatus( seed, CC.STATUS_UNKNOWN )
-                
-                ( display_tuple, sort_tuple ) = self._ConvertSubscriptionToTuples( subscription )
-                
-                self._subscriptions.UpdateRow( i, display_tuple, sort_tuple, subscription )
-                
-            
-        
-    
 class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
     
     def __init__( self, parent, file_service_key, media, immediate_commit = False, canvas_key = None ):
@@ -5085,8 +4877,6 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         self._immediate_commit = immediate_commit
         self._canvas_key = canvas_key
-        
-        self._media_shortcuts = HG.client_controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SHORTCUTS, 'media' )
         
         media = ClientMedia.FlattenMedia( media )
         
@@ -5124,69 +4914,39 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._tag_repositories, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( self._tag_repositories, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
-        self.Bind( wx.EVT_MENU, self.EventMenu )
-        self.Bind( wx.EVT_CHAR_HOOK, self.EventCharHook )
+        self.Bind( ClientGUIACDropdown.EVT_SELECT_UP, self.EventSelectUp )
+        self.Bind( ClientGUIACDropdown.EVT_SELECT_DOWN, self.EventSelectDown )
+        
+        self.Bind( ClientGUIACDropdown.EVT_SHOW_PREVIOUS, self.EventShowPrevious )
+        self.Bind( ClientGUIACDropdown.EVT_SHOW_NEXT, self.EventShowNext )
         
         if self._canvas_key is not None:
             
             HG.client_controller.sub( self, 'CanvasHasNewMedia', 'canvas_new_display_media' )
             
         
-    
-    def _OKParent( self ):
-        
-        wx.PostEvent( self.GetParent(), wx.CommandEvent( commandType = wx.wxEVT_COMMAND_MENU_SELECTED, winid = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'ok' ) ) )
+        self._my_shortcut_handler = ClientGUIShortcuts.ShortcutsHandler( self, [ 'media', 'main_gui' ] )
         
     
-    def _ProcessApplicationCommand( self, command ):
+    def _GetServiceKeysToContentUpdates( self ):
         
-        command_processed = True
+        service_keys_to_content_updates = {}
         
-        command_type = command.GetCommandType()
-        data = command.GetData()
-        
-        if command_type == CC.APPLICATION_COMMAND_TYPE_SIMPLE:
+        for page in self._tag_repositories.GetActivePages():
             
-            action = data
+            ( service_key, content_updates ) = page.GetContentUpdates()
             
-            if action == 'manage_file_tags':
+            if len( content_updates ) > 0:
                 
-                self._OKParent()
-                
-            else:
-                
-                command_processed = False
-                
-            
-        else:
-            
-            command_processed = False
-            
-        
-        return command_processed
-        
-    
-    def _ProcessShortcut( self, shortcut ):
-        
-        shortcut_processed = False
-        
-        command = self._media_shortcuts.GetCommand( shortcut )
-        
-        if command is not None:
-            
-            command_processed = self._ProcessApplicationCommand( command )
-            
-            if command_processed:
-                
-                shortcut_processed = True
+                service_keys_to_content_updates[ service_key ] = content_updates
                 
             
         
-        return shortcut_processed
+        return service_keys_to_content_updates
         
     
     def _SetSearchFocus( self ):
@@ -5212,19 +4972,29 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
         
     
+    def CanCancel( self ):
+        
+        service_keys_to_content_updates = self._GetServiceKeysToContentUpdates()
+        
+        if len( service_keys_to_content_updates ) > 0:
+            
+            message = 'Are you sure you want to cancel? You have uncommitted changes that will be lost.'
+            
+            with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
+                
+                if dlg.ShowModal() != wx.ID_YES:
+                    
+                    return False
+                    
+                
+            
+        
+        return True
+        
+    
     def CommitChanges( self ):
         
-        service_keys_to_content_updates = {}
-        
-        for page in self._tag_repositories.GetActivePages():
-            
-            ( service_key, content_updates ) = page.GetContentUpdates()
-            
-            if len( content_updates ) > 0:
-                
-                service_keys_to_content_updates[ service_key ] = content_updates
-                
-            
+        service_keys_to_content_updates = self._GetServiceKeysToContentUpdates()
         
         if len( service_keys_to_content_updates ) > 0:
             
@@ -5232,57 +5002,29 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
         
     
-    def EventCharHook( self, event ):
+    def EventSelectDown( self, event ):
         
-        shortcut = ClientData.ConvertKeyEventToShortcut( event )
-        
-        if shortcut is not None:
-            
-            shortcut_processed = self._ProcessShortcut( shortcut )
-            
-            if shortcut_processed:
-                
-                return
-                
-            
-        
-        event.Skip()
+        self._tag_repositories.SelectDown()
         
     
-    def EventMenu( self, event ):
+    def EventSelectUp( self, event ):
         
-        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
+        self._tag_repositories.SelectUp()
         
-        if action is not None:
+    
+    def EventShowNext( self, event ):
+        
+        if self._canvas_key is not None:
             
-            ( command, data ) = action
+            HG.client_controller.pub( 'canvas_show_next', self._canvas_key )
             
-            if command == 'manage_file_tags':
-                
-                self._OKParent()
-                
-            elif command == 'set_search_focus':
-                
-                self._SetSearchFocus()
-                
-            elif command == 'canvas_show_next':
-                
-                if self._canvas_key is not None:
-                    
-                    HG.client_controller.pub( 'canvas_show_next', self._canvas_key )
-                    
-                
-            elif command == 'canvas_show_previous':
-                
-                if self._canvas_key is not None:
-                    
-                    HG.client_controller.pub( 'canvas_show_previous', self._canvas_key )
-                    
-                
-            else:
-                
-                event.Skip()
-                
+        
+    
+    def EventShowPrevious( self, event ):
+        
+        if self._canvas_key is not None:
+            
+            HG.client_controller.pub( 'canvas_show_previous', self._canvas_key )
             
         
     
@@ -5294,6 +5036,38 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             wx.CallAfter( page.SetTagBoxFocus )
             
+        
+    
+    def ProcessApplicationCommand( self, command ):
+        
+        command_processed = True
+        
+        command_type = command.GetCommandType()
+        data = command.GetData()
+        
+        if command_type == CC.APPLICATION_COMMAND_TYPE_SIMPLE:
+            
+            action = data
+            
+            if action == 'manage_file_tags':
+                
+                self._OKParent()
+                
+            elif action == 'set_search_focus':
+                
+                self._SetSearchFocus()
+                
+            else:
+                
+                command_processed = False
+                
+            
+        else:
+            
+            command_processed = False
+            
+        
+        return command_processed
         
     
     class _Panel( wx.Panel ):
@@ -5322,7 +5096,7 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             self._tags_box_sorter.SetTagsBox( self._tags_box )
             
-            self._new_options = HG.client_controller.GetNewOptions()
+            self._new_options = HG.client_controller.new_options
             
             self._add_parents_checkbox = wx.CheckBox( self._tags_box_sorter, label = 'auto-add entered tags\' parents' )
             self._add_parents_checkbox.SetValue( self._new_options.GetBoolean( 'add_parents_on_manage_tags' ) )
@@ -5335,9 +5109,9 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._show_deleted_checkbox = wx.CheckBox( self._tags_box_sorter, label = 'show deleted' )
             self._show_deleted_checkbox.Bind( wx.EVT_CHECKBOX, self.EventShowDeleted )
             
-            self._tags_box_sorter.AddF( self._add_parents_checkbox, CC.FLAGS_LONE_BUTTON )
-            self._tags_box_sorter.AddF( self._collapse_siblings_checkbox, CC.FLAGS_LONE_BUTTON )
-            self._tags_box_sorter.AddF( self._show_deleted_checkbox, CC.FLAGS_LONE_BUTTON )
+            self._tags_box_sorter.Add( self._add_parents_checkbox, CC.FLAGS_LONE_BUTTON )
+            self._tags_box_sorter.Add( self._collapse_siblings_checkbox, CC.FLAGS_LONE_BUTTON )
+            self._tags_box_sorter.Add( self._show_deleted_checkbox, CC.FLAGS_LONE_BUTTON )
             
             expand_parents = True
             
@@ -5392,28 +5166,28 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
             
             copy_paste_hbox = wx.BoxSizer( wx.HORIZONTAL )
             
-            copy_paste_hbox.AddF( self._copy_tags, CC.FLAGS_VCENTER )
-            copy_paste_hbox.AddF( self._paste_tags, CC.FLAGS_VCENTER )
+            copy_paste_hbox.Add( self._copy_tags, CC.FLAGS_VCENTER )
+            copy_paste_hbox.Add( self._paste_tags, CC.FLAGS_VCENTER )
             
             advanced_hbox = wx.BoxSizer( wx.HORIZONTAL )
             
-            advanced_hbox.AddF( self._remove_tags, CC.FLAGS_VCENTER )
-            advanced_hbox.AddF( self._advanced_content_update_button, CC.FLAGS_VCENTER )
+            advanced_hbox.Add( self._remove_tags, CC.FLAGS_VCENTER )
+            advanced_hbox.Add( self._advanced_content_update_button, CC.FLAGS_VCENTER )
             
             vbox = wx.BoxSizer( wx.VERTICAL )
             
-            vbox.AddF( self._tags_box_sorter, CC.FLAGS_EXPAND_BOTH_WAYS )
-            vbox.AddF( self._add_tag_box, CC.FLAGS_EXPAND_PERPENDICULAR )
-            vbox.AddF( copy_paste_hbox, CC.FLAGS_BUTTON_SIZER )
-            vbox.AddF( advanced_hbox, CC.FLAGS_BUTTON_SIZER )
-            vbox.AddF( self._modify_mappers, CC.FLAGS_LONE_BUTTON )
+            vbox.Add( self._tags_box_sorter, CC.FLAGS_EXPAND_BOTH_WAYS )
+            vbox.Add( self._add_tag_box, CC.FLAGS_EXPAND_PERPENDICULAR )
+            vbox.Add( copy_paste_hbox, CC.FLAGS_BUTTON_SIZER )
+            vbox.Add( advanced_hbox, CC.FLAGS_BUTTON_SIZER )
+            vbox.Add( self._modify_mappers, CC.FLAGS_LONE_BUTTON )
             
             #
             
             hbox = wx.BoxSizer( wx.HORIZONTAL )
             
-            hbox.AddF( self._suggested_tags, CC.FLAGS_EXPAND_PERPENDICULAR )
-            hbox.AddF( vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+            hbox.Add( self._suggested_tags, CC.FLAGS_EXPAND_PERPENDICULAR )
+            hbox.Add( vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
             
             #
             
@@ -5675,7 +5449,7 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
                     
                 
             
-            if len( recent_tags ) > 0 and HG.client_controller.GetNewOptions().GetNoneableInteger( 'num_recent_tags' ) is not None:
+            if len( recent_tags ) > 0 and HG.client_controller.new_options.GetNoneableInteger( 'num_recent_tags' ) is not None:
                 
                 HG.client_controller.Write( 'push_recent_tags', self._tag_service_key, recent_tags )
                 
@@ -5802,27 +5576,20 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         def EventPasteTags( self, event ):
             
-            if wx.TheClipboard.Open():
+            text = HG.client_controller.GetClipboardText()
+            
+            try:
                 
-                data = wx.TextDataObject()
+                tags = HydrusText.DeserialiseNewlinedTexts( text )
                 
-                wx.TheClipboard.GetData( data )
+                tags = HydrusTags.CleanTags( tags )
                 
-                wx.TheClipboard.Close()
+                self.EnterTags( tags, only_add = True )
                 
-                text = data.GetText()
+            except:
                 
-                try:
-                    
-                    tags = HydrusData.DeserialisePrettyTags( text )
-                    
-                    tags = HydrusTags.CleanTags( tags )
-                    
-                    self.EnterTags( tags, only_add = True )
-                    
-                except: wx.MessageBox( 'I could not understand what was in the clipboard' )
+                wx.MessageBox( 'I could not understand what was in the clipboard' )
                 
-            else: wx.MessageBox( 'I could not get permission to access the clipboard.' )
             
         
         def EventRemoveTags( self, event ):
@@ -5854,7 +5621,7 @@ class ManageTagsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         def OK( self ):
             
-            wx.PostEvent( self, wx.CommandEvent( commandType = wx.wxEVT_COMMAND_MENU_SELECTED, winid = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetTemporaryId( 'ok' ) ) )
+            wx.QueueEvent( self.GetEventHandler(), ClientGUITopLevelWindows.OKEvent( -1 ) )
             
         
         def ProcessContentUpdates( self, service_keys_to_content_updates ):
@@ -5913,12 +5680,15 @@ class ManageURLsPanel( ClientGUIScrolledPanels.ManagePanel ):
         self._urls_listbox = wx.ListBox( self, style = wx.LB_SORT | wx.LB_SINGLE )
         self._urls_listbox.Bind( wx.EVT_LISTBOX_DCLICK, self.EventListDoubleClick )
         
-        ideal_size = ClientData.ConvertTextToPixels( self._urls_listbox, ( 120, 10 ) )
+        ( width, height ) = ClientData.ConvertTextToPixels( self._urls_listbox, ( 120, 10 ) )
         
-        self._urls_listbox.SetBestFittingSize( ideal_size )
+        self._urls_listbox.SetInitialSize( ( width, height ) )
         
         self._url_input = wx.TextCtrl( self, style = wx.TE_PROCESS_ENTER )
         self._url_input.Bind( wx.EVT_CHAR_HOOK, self.EventInputCharHook )
+        
+        self._copy_button = ClientGUICommon.BetterButton( self, 'copy all', self._Copy )
+        self._paste_button = ClientGUICommon.BetterButton( self, 'paste', self._Paste )
         
         self._urls_to_add = set()
         self._urls_to_remove = set()
@@ -5938,19 +5708,41 @@ class ManageURLsPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         #
         
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
+        
+        hbox.Add( self._copy_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._paste_button, CC.FLAGS_VCENTER )
+        
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._urls_listbox, CC.FLAGS_EXPAND_BOTH_WAYS )
-        vbox.AddF( self._url_input, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._urls_listbox, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( self._url_input, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( hbox, CC.FLAGS_BUTTON_SIZER )
         
         self.SetSizer( vbox )
         
         wx.CallAfter( self._url_input.SetFocus )
         
     
-    def _EnterURL( self, url ):
+    def _Copy( self ):
+        
+        urls = list( self._current_urls )
+        
+        urls.sort()
+        
+        text = os.linesep.join( urls )
+        
+        HG.client_controller.pub( 'clipboard', 'text', text )
+        
+    
+    def _EnterURL( self, url, only_add = False ):
         
         if url in self._current_urls:
+            
+            if only_add:
+                
+                return
+                
             
             for index in range( self._urls_listbox.GetCount() ):
                 
@@ -5974,6 +5766,26 @@ class ManageURLsPanel( ClientGUIScrolledPanels.ManagePanel ):
                 
                 self._urls_to_add.add( url )
                 
+            
+        
+    
+    def _Paste( self ):
+        
+        raw_text = HG.client_controller.GetClipboardText()
+        
+        try:
+            
+            for url in HydrusText.DeserialiseNewlinedTexts( raw_text ):
+                
+                if url != '':
+                    
+                    self._EnterURL( url, only_add = True )
+                    
+                
+            
+        except:
+            
+            wx.MessageBox( 'I could not understand what was in the clipboard' )
             
         
     
@@ -6071,19 +5883,35 @@ class RepairFileSystemPanel( ClientGUIScrolledPanels.ManagePanel ):
         
         ClientGUIScrolledPanels.ManagePanel.__init__( self, parent )
         
+        self._only_thumbs = True
+        
+        for ( incorrect_location, prefix ) in missing_locations:
+            
+            if prefix.startswith( 'f' ):
+                
+                self._only_thumbs = False
+                
+            
+        
         text = 'This dialog has launched because some expected file storage directories were not found. This is a serious error. You have two options:'
         text += os.linesep * 2
         text += '1) If you know what these should be (e.g. you recently remapped their external drive to another location), update the paths here manually. For most users, this will likely be a simple ctrl+a->correct, but if you have a more complicated system or store your thumbnails different to your files, make sure you skim the whole list. Check everything reports _ok!_'
         text += os.linesep * 2
-        text += 'Then hit \'apply\', and the client will launch. You should double-check your \'preferred\' file storage locations under options->file storage locations immediately.'
+        text += 'Then hit \'apply\', and the client will launch. You should double-check your \'preferred\' file storage locations under database->migrate database immediately.'
         text += os.linesep * 2
         text += '2) If the locations are not available, or you do not know what they should be, or you wish to fix this outside of the program, hit \'cancel\' to gracefully cancel client boot. Feel free to contact hydrus dev for help.'
+        
+        if self._only_thumbs:
+            
+            text += os.linesep * 2
+            text += 'SPECIAL NOTE FOR YOUR SITUATION: The only paths missing are thumbnail paths. If you cannot recover these folders, you can hit apply to create empty paths at the original or corrected locations and then run a maintenance routine to regenerate the thumbnails from their originals.'
+            
         
         st = ClientGUICommon.BetterStaticText( self, text )
         
         st.Wrap( 640 )
         
-        self._locations = ClientGUICommon.SaneListCtrl( self, 400, [ ( 'missing location', -1 ), ( 'expected subdirectory', 120 ), ( 'correct location', 240 ), ( 'now ok?', 120 ) ], activation_callback = self._SetLocations )
+        self._locations = ClientGUIListCtrl.SaneListCtrl( self, 400, [ ( 'missing location', -1 ), ( 'expected subdirectory', 120 ), ( 'correct location', 240 ), ( 'now ok?', 120 ) ], activation_callback = self._SetLocations )
         
         self._set_button = ClientGUICommon.BetterButton( self, 'set correct location', self._SetLocations )
         
@@ -6098,16 +5926,18 @@ class RepairFileSystemPanel( ClientGUIScrolledPanels.ManagePanel ):
             self._locations.Append( t, t )
             
         
-        self._locations.SortListItems( 1 ) # subdirs secondary
-        self._locations.SortListItems( 0 ) # missing location primary
+        # sort by prefix
+        
+        #self._locations.SortListItems( 1 ) # subdirs secondary
+        #self._locations.SortListItems( 0 ) # missing location primary
         
         #
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( st, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._locations, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._set_button, CC.FLAGS_LONE_BUTTON )
+        vbox.Add( st, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._locations, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._set_button, CC.FLAGS_LONE_BUTTON )
         
         self.SetSizer( vbox )
         
@@ -6148,29 +5978,64 @@ class RepairFileSystemPanel( ClientGUIScrolledPanels.ManagePanel ):
     
     def CommitChanges( self ):
         
-        user_was_warned = False
-        
         correct_rows = []
         
-        for ( incorrect_location, prefix, correct_location, ok ) in self._locations.GetClientData():
+        if self._only_thumbs:
             
-            if correct_location == '':
+            problems = False
+            
+            for ( incorrect_location, prefix, correct_location, ok ) in self._locations.GetClientData():
                 
-                wx.MessageBox( 'You did not correct all the locations!' )
-                
-                raise HydrusExceptions.VetoException()
-                
-            elif ok != 'ok!':
-                
-                wx.MessageBox( 'You did not find all the correct locations!' )
-                
-                raise HydrusExceptions.VetoException()
-                
-            else:
+                if correct_location == '':
+                    
+                    problems = True
+                    
+                    correct_location = incorrect_location
+                    
+                elif ok != 'ok!':
+                    
+                    problems = True
+                    
                 
                 correct_rows.append( ( incorrect_location, prefix, correct_location ) )
+                
+            
+            if problems:
+                
+                message = 'Some or all of your incorrect paths have not been corrected, but they are all thumbnail paths.'
+                message += os.linesep * 2
+                message += 'Would you like instead to create new empty folders at the previous (or corrected, if you have entered them) locations?'
+                message += os.linesep * 2
+                message += 'You can run database->regenerate->all thumbnails to fill them up again.'
+                
+                with ClientGUIDialogs.DialogYesNo( self, message ) as dlg:
+                    
+                    if dlg.ShowModal() != wx.ID_YES:
+                        
+                        raise HydrusExceptions.VetoException()
+                        
+                    
+                
+            
+        else:
+            
+            for ( incorrect_location, prefix, correct_location, ok ) in self._locations.GetClientData():
+                
+                if correct_location == '':
+                    
+                    raise HydrusExceptions.VetoException( 'You did not correct all the locations!' )
+                    
+                elif ok != 'ok!':
+                    
+                    raise HydrusExceptions.VetoException( 'You did not find all the correct locations!' )
+                    
+                else:
+                    
+                    correct_rows.append( ( incorrect_location, prefix, correct_location ) )
+                    
                 
             
         
         HG.client_controller.WriteSynchronous( 'repair_client_files', correct_rows )
         
+    

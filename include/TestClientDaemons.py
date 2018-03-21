@@ -21,11 +21,11 @@ class TestDaemons( unittest.TestCase ):
     
     def test_import_folders_daemon( self ):
         
-        test_dir = tempfile.mkdtemp()
+        test_dir = HydrusPaths.GetTempDir()
         
         try:
             
-            HG.test_controller.SetRead( 'hash_status', CC.STATUS_NEW )
+            HG.test_controller.SetRead( 'hash_status', ( CC.STATUS_NEW, None, '' ) )
             
             HydrusPaths.MakeSureDirectoryExists( test_dir )
             
@@ -40,9 +40,17 @@ class TestDaemons( unittest.TestCase ):
             
             #
             
-            import_folder = ClientImporting.ImportFolder( 'imp', path = test_dir )
+            actions = {}
             
-            HG.test_controller.SetRead( 'serialisable_named', [ import_folder ] )
+            actions[ CC.STATUS_SUCCESSFUL ] = CC.IMPORT_FOLDER_DELETE
+            actions[ CC.STATUS_REDUNDANT ] = CC.IMPORT_FOLDER_DELETE
+            actions[ CC.STATUS_DELETED ] = CC.IMPORT_FOLDER_DELETE
+            actions[ CC.STATUS_FAILED ] = CC.IMPORT_FOLDER_IGNORE
+            
+            import_folder = ClientImporting.ImportFolder( 'imp', path = test_dir, actions = actions )
+            
+            HG.test_controller.SetRead( 'serialisable_names', [ 'imp' ] )
+            HG.test_controller.SetRead( 'serialisable_named', import_folder )
             
             ClientDaemons.DAEMONCheckImportFolders( HG.test_controller )
             

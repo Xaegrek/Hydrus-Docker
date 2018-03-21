@@ -108,6 +108,8 @@ class HydrusDB( object ):
     READ_WRITE_ACTIONS = []
     UPDATE_WAIT = 2
     
+    TRANSACTION_COMMIT_TIME = 10
+    
     def __init__( self, controller, db_dir, db_name, no_wal = False ):
         
         self._controller = controller
@@ -224,9 +226,11 @@ class HydrusDB( object ):
             ( version, ) = self._c.execute( 'SELECT version FROM version;' ).fetchone()
             
         
+        self._RepairDB()
+        
         self._CloseDBCursor()
         
-        threading.Thread( target = self.MainLoop, name = 'Database Main Loop' ).start()
+        self._controller.CallToThreadLongRunning( self.MainLoop )
         
         while not self._ready_to_serve_requests:
             
@@ -338,6 +342,15 @@ class HydrusDB( object ):
         statement = create_phrase + index_name + on_phrase
         
         self._c.execute( statement )
+        
+    
+    def _DisplayCatastrophicError( self, text ):
+        
+        message = 'The db encountered a serious error! This is going to be written to the log as well, but here it is for a screenshot:'
+        message += os.linesep * 2
+        message += text
+        
+        HydrusData.DebugPrint( message )
         
     
     def _GetRowCount( self ):
@@ -525,7 +538,7 @@ class HydrusDB( object ):
                 result = self._Write( action, *args, **kwargs )
                 
             
-            if self._transaction_contains_writes and HydrusData.TimeHasPassed( self._transaction_started + 10 ):
+            if self._transaction_contains_writes and HydrusData.TimeHasPassed( self._transaction_started + self.TRANSACTION_COMMIT_TIME ):
                 
                 self._current_status = 'db committing'
                 
@@ -552,18 +565,24 @@ class HydrusDB( object ):
             
         except Exception as e:
             
+            self._ManageDBError( job, e )
+            
             try:
                 
                 self._Rollback()
                 
             except Exception as rollback_e:
                 
-                HydrusData.Print( 'When the transaction failed, attempting to rollback the database failed.' )
+                HydrusData.Print( 'When the transaction failed, attempting to rollback the database failed. Please restart the client as soon as is convenient.' )
+                
+                self._in_transaction = False
+                
+                self._CloseDBCursor()
+                
+                self._InitDBCursor()
                 
                 HydrusData.PrintException( rollback_e )
                 
-            
-            self._ManageDBError( job, e )
             
         finally:
             
@@ -578,6 +597,11 @@ class HydrusDB( object ):
     def _Read( self, action, *args, **kwargs ):
         
         raise NotImplementedError()
+        
+    
+    def _RepairDB( self ):
+        
+        pass
         
     
     def _ReportStatus( self, text ):
@@ -744,7 +768,7 @@ class HydrusDB( object ):
             
         except:
             
-            HydrusData.Print( traceback.format_exc() )
+            self._DisplayCatastrophicError( traceback.format_exc() )
             
             self._could_not_initialise = True
             
@@ -759,7 +783,7 @@ class HydrusDB( object ):
             
             try:
                 
-                ( priority, job ) = self._jobs.get( timeout = 0.5 )
+                ( priority, job ) = self._jobs.get( timeout = 1 )
                 
                 self._currently_doing_job = True
                 self._current_job_name = job.ToString()
@@ -787,7 +811,10 @@ class HydrusDB( object ):
                     
                     error_count += 1
                     
-                    if error_count > 5: raise
+                    if error_count > 5:
+                        
+                        raise
+                        
                     
                     self._jobs.put( ( priority, job ) ) # couldn't lock db; put job back on queue
                     
@@ -801,7 +828,12 @@ class HydrusDB( object ):
                 
             except Queue.Empty:
                 
-                pass # no jobs in the past little while; let's just check if we should shutdown
+                if self._transaction_contains_writes and HydrusData.TimeHasPassed( self._transaction_started + self.TRANSACTION_COMMIT_TIME ):
+                    
+                    self._Commit()
+                    
+                    self._BeginImmediate()
+                    
                 
             
             if HydrusData.TimeHasPassed( self._connection_timestamp + CONNECTION_REFRESH_TIME ): # just to clear out the journal files

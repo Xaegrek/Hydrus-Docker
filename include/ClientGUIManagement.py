@@ -1,5 +1,4 @@
 import HydrusConstants as HC
-import HydrusAudioHandling
 import ClientDownloading
 import HydrusExceptions
 import HydrusPaths
@@ -12,42 +11,42 @@ import ClientCaches
 import ClientFiles
 import ClientGUIACDropdown
 import ClientGUICanvas
-import ClientGUICollapsible
 import ClientGUICommon
 import ClientGUIControls
 import ClientGUIDialogs
+import ClientGUIImport
 import ClientGUIListBoxes
 import ClientGUIMedia
 import ClientGUIMenus
 import ClientGUIScrolledPanelsEdit
 import ClientGUISeedCache
+import ClientGUITime
 import ClientGUITopLevelWindows
 import ClientImporting
 import ClientMedia
 import ClientRendering
+import ClientSearch
 import ClientThreading
+import HydrusData
+import HydrusGlobals as HG
+import HydrusText
+import HydrusThreading
 import json
 import multipart
 import os
 import threading
 import time
 import traceback
-import urllib
 import urlparse
 import webbrowser
 import wx
 import wx.lib.scrolledpanel
-import HydrusData
-import ClientSearch
-import HydrusGlobals as HG
 
 CAPTCHA_FETCH_EVENT_TYPE = wx.NewEventType()
 CAPTCHA_FETCH_EVENT = wx.PyEventBinder( CAPTCHA_FETCH_EVENT_TYPE )
 
 ID_TIMER_CAPTCHA = wx.NewId()
 ID_TIMER_DUMP = wx.NewId()
-ID_TIMER_UPDATE = wx.NewId()
-ID_TIMER_IMPORT_UPDATE = wx.NewId()
 
 MANAGEMENT_TYPE_DUMPER = 0
 MANAGEMENT_TYPE_IMPORT_GALLERY = 1
@@ -61,27 +60,26 @@ MANAGEMENT_TYPE_DUPLICATE_FILTER = 8
 
 management_panel_types_to_classes = {}
 
-def CreateManagementController( management_type, file_service_key = None ):
+def CreateManagementController( page_name, management_type, file_service_key = None ):
     
     if file_service_key is None:
         
         file_service_key = CC.COMBINED_LOCAL_FILE_SERVICE_KEY
         
     
-    management_controller = ManagementController()
+    new_options = HG.client_controller.new_options
     
-    # sort
-    # collect
-    # nah, these are only valid for types with regular file lists
+    management_controller = ManagementController( page_name )
     
     management_controller.SetType( management_type )
     management_controller.SetKey( 'file_service', file_service_key )
+    management_controller.SetVariable( 'media_sort', new_options.GetDefaultSort() )
     
     return management_controller
     
 def CreateManagementControllerDuplicateFilter():
     
-    management_controller = CreateManagementController( MANAGEMENT_TYPE_DUPLICATE_FILTER )
+    management_controller = CreateManagementController( 'duplicates', MANAGEMENT_TYPE_DUPLICATE_FILTER )
     
     management_controller.SetKey( 'duplicate_filter_file_domain', CC.LOCAL_FILE_SERVICE_KEY )
     
@@ -89,7 +87,9 @@ def CreateManagementControllerDuplicateFilter():
     
 def CreateManagementControllerImportGallery( gallery_identifier ):
     
-    management_controller = CreateManagementController( MANAGEMENT_TYPE_IMPORT_GALLERY )
+    page_name = gallery_identifier.ToString()
+    
+    management_controller = CreateManagementController( page_name, MANAGEMENT_TYPE_IMPORT_GALLERY )
     
     gallery_import = ClientImporting.GalleryImport( gallery_identifier = gallery_identifier )
     
@@ -99,7 +99,7 @@ def CreateManagementControllerImportGallery( gallery_identifier ):
     
 def CreateManagementControllerImportPageOfImages():
     
-    management_controller = CreateManagementController( MANAGEMENT_TYPE_IMPORT_PAGE_OF_IMAGES )
+    management_controller = CreateManagementController( 'page download', MANAGEMENT_TYPE_IMPORT_PAGE_OF_IMAGES )
     
     page_of_images_import = ClientImporting.PageOfImagesImport()
     
@@ -107,21 +107,28 @@ def CreateManagementControllerImportPageOfImages():
     
     return management_controller
     
-def CreateManagementControllerImportHDD( paths, import_file_options, paths_to_tags, delete_after_success ):
+def CreateManagementControllerImportHDD( paths, file_import_options, paths_to_tags, delete_after_success ):
     
-    management_controller = CreateManagementController( MANAGEMENT_TYPE_IMPORT_HDD )
+    management_controller = CreateManagementController( 'import', MANAGEMENT_TYPE_IMPORT_HDD )
     
-    hdd_import = ClientImporting.HDDImport( paths = paths, import_file_options = import_file_options, paths_to_tags = paths_to_tags, delete_after_success = delete_after_success )
+    hdd_import = ClientImporting.HDDImport( paths = paths, file_import_options = file_import_options, paths_to_tags = paths_to_tags, delete_after_success = delete_after_success )
     
     management_controller.SetVariable( 'hdd_import', hdd_import )
     
     return management_controller
     
-def CreateManagementControllerImportThreadWatcher():
+def CreateManagementControllerImportThreadWatcher( thread_url = None ):
     
-    management_controller = CreateManagementController( MANAGEMENT_TYPE_IMPORT_THREAD_WATCHER )
+    if thread_url is None:
+        
+        thread_url = ''
+        
+    
+    management_controller = CreateManagementController( 'thread watcher', MANAGEMENT_TYPE_IMPORT_THREAD_WATCHER )
     
     thread_watcher_import = ClientImporting.ThreadWatcherImport()
+    
+    thread_watcher_import.SetThreadURL( thread_url )
     
     management_controller.SetVariable( 'thread_watcher_import', thread_watcher_import )
     
@@ -129,7 +136,7 @@ def CreateManagementControllerImportThreadWatcher():
     
 def CreateManagementControllerImportURLs():
     
-    management_controller = CreateManagementController( MANAGEMENT_TYPE_IMPORT_URLS )
+    management_controller = CreateManagementController( 'url import', MANAGEMENT_TYPE_IMPORT_URLS )
     
     urls_import = ClientImporting.URLsImport()
     
@@ -141,20 +148,28 @@ def CreateManagementControllerPetitions( petition_service_key ):
     
     petition_service = HG.client_controller.services_manager.GetService( petition_service_key )
     
+    page_name = petition_service.GetName() + ' petitions'
+    
     petition_service_type = petition_service.GetServiceType()
     
-    if petition_service_type in HC.LOCAL_FILE_SERVICES or petition_service_type == HC.FILE_REPOSITORY: file_service_key = petition_service_key
-    else: file_service_key = CC.COMBINED_FILE_SERVICE_KEY
+    if petition_service_type in HC.LOCAL_FILE_SERVICES or petition_service_type == HC.FILE_REPOSITORY:
+        
+        file_service_key = petition_service_key
+        
+    else:
+        
+        file_service_key = CC.COMBINED_FILE_SERVICE_KEY
+        
     
-    management_controller = CreateManagementController( MANAGEMENT_TYPE_PETITIONS, file_service_key = file_service_key )
+    management_controller = CreateManagementController( page_name, MANAGEMENT_TYPE_PETITIONS, file_service_key = file_service_key )
     
     management_controller.SetKey( 'petition_service', petition_service_key )
     
     return management_controller
     
-def CreateManagementControllerQuery( file_service_key, file_search_context, search_enabled ):
+def CreateManagementControllerQuery( page_name, file_service_key, file_search_context, search_enabled ):
     
-    management_controller = CreateManagementController( MANAGEMENT_TYPE_QUERY, file_service_key = file_service_key )
+    management_controller = CreateManagementController( page_name, MANAGEMENT_TYPE_QUERY, file_service_key = file_service_key )
     
     management_controller.SetVariable( 'file_search_context', file_search_context )
     management_controller.SetVariable( 'search_enabled', search_enabled )
@@ -178,7 +193,10 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
     
     for ( name, field_type, value ) in fields:
         
-        if field_type in ( CC.FIELD_TEXT, CC.FIELD_COMMENT, CC.FIELD_PASSWORD, CC.FIELD_VERIFICATION_RECAPTCHA, CC.FIELD_THREAD_ID ): m.field( name, HydrusData.ToByteString( value ) )
+        if field_type in ( CC.FIELD_TEXT, CC.FIELD_COMMENT, CC.FIELD_PASSWORD, CC.FIELD_VERIFICATION_RECAPTCHA, CC.FIELD_THREAD_ID ):
+            
+            m.field( name, HydrusData.ToByteString( value ) )
+            
         elif field_type == CC.FIELD_CHECKBOX:
             
             if value:
@@ -211,7 +229,7 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
         
         self._captcha_challenge = None
         self._captcha_runs_out = 0
-        self._bitmap = wx.EmptyBitmap( 20, 20, 24 )
+        self._bitmap = wx.Bitmap( 20, 20, 24 )
         
         self._timer = wx.Timer( self, ID_TIMER_CAPTCHA )
         self.Bind( wx.EVT_TIMER, self.TIMEREvent, id = ID_TIMER_CAPTCHA )
@@ -234,25 +252,25 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
         
         sub_vbox = wx.BoxSizer( wx.VERTICAL )
         
-        sub_vbox.AddF( self._refresh_button, CC.FLAGS_EXPAND_BOTH_WAYS )
-        sub_vbox.AddF( self._captcha_time_left, CC.FLAGS_SMALL_INDENT )
+        sub_vbox.Add( self._refresh_button, CC.FLAGS_EXPAND_BOTH_WAYS )
+        sub_vbox.Add( self._captcha_time_left, CC.FLAGS_SMALL_INDENT )
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        hbox.AddF( self._captcha_panel, CC.FLAGS_NONE )
-        hbox.AddF( sub_vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        hbox.Add( self._captcha_panel, CC.FLAGS_NONE )
+        hbox.Add( sub_vbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
         
         hbox2 = wx.BoxSizer( wx.HORIZONTAL )
         
-        hbox2.AddF( self._captcha_entry, CC.FLAGS_EXPAND_BOTH_WAYS )
-        hbox2.AddF( self._ready_button, CC.FLAGS_VCENTER )
+        hbox2.Add( self._captcha_entry, CC.FLAGS_EXPAND_BOTH_WAYS )
+        hbox2.Add( self._ready_button, CC.FLAGS_VCENTER )
         
-        self._captcha_box_panel.AddF( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        self._captcha_box_panel.AddF( hbox2, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._captcha_box_panel.Add( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._captcha_box_panel.Add( hbox2, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._captcha_box_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( self._captcha_box_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
@@ -286,7 +304,7 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
             
             event = wx.NotifyEvent( CAPTCHA_FETCH_EVENT_TYPE )
             
-            self.ProcessEvent( event )
+            wx.QueueEvent( self.GetEventHandler(), event )
             
             if event.IsAllowed():
                 
@@ -346,7 +364,7 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
         
         self._captcha_challenge = None
         self._captcha_runs_out = 0
-        self._bitmap = wx.EmptyBitmap( 20, 20, 24 )
+        self._bitmap = wx.Bitmap( 20, 20, 24 )
         
         self._DrawMain()
         self._DrawEntry()
@@ -359,7 +377,7 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
         
         self._captcha_challenge = ''
         self._captcha_runs_out = 0
-        self._bitmap = wx.EmptyBitmap( 20, 20, 24 )
+        self._bitmap = wx.Bitmap( 20, 20, 24 )
         
         self._DrawMain()
         self._DrawEntry()
@@ -411,7 +429,7 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
             
             with open( temp_path, 'wb' ) as f: f.write( jpeg )
             
-            self._bitmap = ClientRendering.GenerateHydrusBitmap( temp_path )
+            self._bitmap = ClientRendering.GenerateHydrusBitmap( temp_path, HC.IMAGE_JPEG )
             
         finally:
             
@@ -443,10 +461,6 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
                 self._DrawMain()
                 
             
-        except wx.PyDeadObjectError:
-            
-            self._timer.Stop()
-            
         except:
             
             self._timer.Stop()
@@ -471,12 +485,12 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
         self._comment_append = ClientGUICommon.SaneMultilineTextCtrl( self._comment_panel, style = wx.TE_PROCESS_ENTER )
         self._comment_append.Bind( wx.EVT_KEY_UP, self.EventKeyDown )
         
-        self._comment_panel.AddF( self._comment, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._comment_panel.AddF( self._comment_append, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._comment_panel.Add( self._comment, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._comment_panel.Add( self._comment_append, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._comment_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( self._comment_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self.SetSizer( vbox )
         
@@ -523,11 +537,14 @@ def GenerateDumpMultipartFormDataCTAndBody( fields ):
 class ManagementController( HydrusSerialisable.SerialisableBase ):
     
     SERIALISABLE_TYPE = HydrusSerialisable.SERIALISABLE_TYPE_MANAGEMENT_CONTROLLER
-    SERIALISABLE_VERSION = 2
+    SERIALISABLE_NAME = 'Client Page Management Controller'
+    SERIALISABLE_VERSION = 3
     
-    def __init__( self ):
+    def __init__( self, page_name = 'page' ):
         
         HydrusSerialisable.SerialisableBase.__init__( self )
+        
+        self._page_name = page_name
         
         self._management_type = None
         
@@ -544,10 +561,12 @@ class ManagementController( HydrusSerialisable.SerialisableBase ):
         
         serialisable_serialisables = { name : value.GetSerialisableTuple() for ( name, value ) in self._serialisables.items() }
         
-        return ( self._management_type, serialisable_keys, serialisable_simples, serialisable_serialisables )
+        return ( self._page_name, self._management_type, serialisable_keys, serialisable_simples, serialisable_serialisables )
         
     
     def _InitialiseDefaults( self ):
+        
+        self._serialisables[ 'media_sort' ] = ClientMedia.MediaSort( ( 'system', CC.SORT_FILES_BY_FILESIZE ), CC.SORT_ASC )
         
         if self._management_type == MANAGEMENT_TYPE_DUPLICATE_FILTER:
             
@@ -557,7 +576,7 @@ class ManagementController( HydrusSerialisable.SerialisableBase ):
     
     def _InitialiseFromSerialisableInfo( self, serialisable_info ):
         
-        ( self._management_type, serialisable_keys, serialisable_simples, serialisables ) = serialisable_info
+        ( self._page_name, self._management_type, serialisable_keys, serialisable_simples, serialisables ) = serialisable_info
         
         self._InitialiseDefaults()
         
@@ -591,16 +610,24 @@ class ManagementController( HydrusSerialisable.SerialisableBase ):
                 
                 paths = [ path_info for ( path_type, path_info ) in paths_info if path_type != 'zip' ]
                 
-                automatic_archive = advanced_import_options[ 'automatic_archive' ]
                 exclude_deleted = advanced_import_options[ 'exclude_deleted' ]
+                allow_decompression_bombs = False
                 min_size = advanced_import_options[ 'min_size' ]
+                max_size = None
+                max_gif_size = None
                 min_resolution = advanced_import_options[ 'min_resolution' ]
+                max_resolution = None
                 
-                import_file_options = ClientData.ImportFileOptions( automatic_archive = automatic_archive, exclude_deleted = exclude_deleted, min_size = min_size, min_resolution = min_resolution )
+                automatic_archive = advanced_import_options[ 'automatic_archive' ]
+                
+                file_import_options = ClientImporting.FileImportOptions()
+                
+                file_import_options.SetPreImportOptions( exclude_deleted, allow_decompression_bombs, min_size, max_size, max_gif_size, min_resolution, max_resolution )
+                file_import_options.SetPostImportOptions( automatic_archive )
                 
                 paths_to_tags = { path : { service_key.decode( 'hex' ) : tags for ( service_key, tags ) in service_keys_to_tags } for ( path, service_keys_to_tags ) in paths_to_tags.items() }
                 
-                hdd_import = ClientImporting.HDDImport( paths = paths, import_file_options = import_file_options, paths_to_tags = paths_to_tags, delete_after_success = delete_after_success )
+                hdd_import = ClientImporting.HDDImport( paths = paths, file_import_options = file_import_options, paths_to_tags = paths_to_tags, delete_after_success = delete_after_success )
                 
                 serialisable_serialisables[ 'hdd_import' ] = hdd_import.GetSerialisableTuple()
                 
@@ -615,10 +642,26 @@ class ManagementController( HydrusSerialisable.SerialisableBase ):
             return ( 2, new_serialisable_info )
             
         
+        if version == 2:
+            
+            ( management_type, serialisable_keys, serialisable_simples, serialisable_serialisables ) = old_serialisable_info
+            
+            page_name = 'page'
+            
+            new_serialisable_info = ( page_name, management_type, serialisable_keys, serialisable_simples, serialisable_serialisables )
+            
+            return ( 3, new_serialisable_info )
+            
+        
     
     def GetKey( self, name ):
         
         return self._keys[ name ]
+        
+    
+    def GetPageName( self ):
+        
+        return self._page_name
         
     
     def GetType( self ):
@@ -638,9 +681,24 @@ class ManagementController( HydrusSerialisable.SerialisableBase ):
             
         
     
+    def HasVariable( self, name ):
+        
+        return name in self._simples or name in self._serialisables
+        
+    
+    def IsImporter( self ):
+        
+        return self._management_type in ( MANAGEMENT_TYPE_IMPORT_GALLERY, MANAGEMENT_TYPE_IMPORT_HDD, MANAGEMENT_TYPE_IMPORT_PAGE_OF_IMAGES, MANAGEMENT_TYPE_IMPORT_THREAD_WATCHER, MANAGEMENT_TYPE_IMPORT_URLS )
+        
+    
     def SetKey( self, name, key ):
         
         self._keys[ name ] = key
+        
+    
+    def SetPageName( self, name ):
+        
+        self._page_name = name
         
     
     def SetType( self, management_type ):
@@ -680,16 +738,7 @@ class ManagementPanel( wx.lib.scrolledpanel.ScrolledPanel ):
         self._page = page
         self._page_key = self._management_controller.GetKey( 'page' )
         
-        self._sort_by = ClientGUICommon.ChoiceSort( self, self._page_key )
-        
-        try:
-            
-            self._sort_by.SetSelection( HC.options[ 'default_sort' ] )
-            
-        except:
-            
-            self._sort_by.SetSelection( 0 )
-            
+        self._sort_by = ClientGUICommon.ChoiceSort( self, management_controller = self._management_controller )
         
         self._collect_by = ClientGUICommon.CheckboxCollect( self, self._page_key )
         
@@ -704,10 +753,20 @@ class ManagementPanel( wx.lib.scrolledpanel.ScrolledPanel ):
         
         tags_box.SetTagsBox( t )
         
-        sizer.AddF( tags_box, CC.FLAGS_EXPAND_BOTH_WAYS )
+        sizer.Add( tags_box, CC.FLAGS_EXPAND_BOTH_WAYS )
         
     
     def CleanBeforeDestroy( self ):
+        
+        pass
+        
+    
+    def PageHidden( self ):
+        
+        pass
+        
+    
+    def PageShown( self ):
         
         pass
         
@@ -723,6 +782,11 @@ class ManagementPanel( wx.lib.scrolledpanel.ScrolledPanel ):
         
     
     def TestAbleToClose( self ):
+        
+        pass
+        
+    
+    def TIMERPageUpdate( self ):
         
         pass
         
@@ -795,7 +859,7 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         self._file_domain_button = ClientGUICommon.BetterButton( self._filtering_panel, 'file domain', self._FileDomainButtonHit )
         self._num_unknown_duplicates = ClientGUICommon.BetterStaticText( self._filtering_panel )
         self._num_better_duplicates = ClientGUICommon.BetterStaticText( self._filtering_panel )
-        self._num_better_duplicates.SetToolTipString( 'If this stays at 0, it is likely because your \'worse\' files are being deleted and so are leaving this file domain!' )
+        self._num_better_duplicates.SetToolTip( 'If this stays at 0, it is likely because your \'worse\' files are being deleted and so are leaving this file domain!' )
         self._num_same_quality_duplicates = ClientGUICommon.BetterStaticText( self._filtering_panel )
         self._num_alternate_duplicates = ClientGUICommon.BetterStaticText( self._filtering_panel )
         self._show_some_dupes = ClientGUICommon.BetterButton( self._filtering_panel, 'show some random pairs', self._ShowSomeDupes )
@@ -803,78 +867,75 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         
         #
         
-        new_options = self._controller.GetNewOptions()
+        new_options = self._controller.new_options
         
         self._search_distance_spinctrl.SetValue( new_options.GetInteger( 'similar_files_duplicate_pairs_search_distance' ) )
         
         duplicate_filter_file_domain = management_controller.GetKey( 'duplicate_filter_file_domain' )
         
-        self._SetFileDomain( duplicate_filter_file_domain ) # this spawns a refreshandupdatestatus
+        wx.CallAfter( self._SetFileDomain, duplicate_filter_file_domain ) # this spawns a refreshandupdatestatus
         
         #
         
         self._sort_by.Hide()
         self._collect_by.Hide()
         
-        gridbox_1 = wx.FlexGridSizer( 0, 3 )
+        gridbox_1 = wx.FlexGridSizer( 3 )
         
         gridbox_1.AddGrowableCol( 0, 1 )
         
-        gridbox_1.AddF( self._num_phashes_to_regen, CC.FLAGS_VCENTER )
-        gridbox_1.AddF( ( 10, 10 ), CC.FLAGS_EXPAND_PERPENDICULAR )
-        gridbox_1.AddF( self._phashes_button, CC.FLAGS_VCENTER )
-        gridbox_1.AddF( self._num_branches_to_regen, CC.FLAGS_VCENTER )
-        gridbox_1.AddF( ( 10, 10 ), CC.FLAGS_EXPAND_PERPENDICULAR )
-        gridbox_1.AddF( self._branches_button, CC.FLAGS_VCENTER )
+        gridbox_1.Add( self._num_phashes_to_regen, CC.FLAGS_VCENTER )
+        gridbox_1.Add( ( 10, 10 ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        gridbox_1.Add( self._phashes_button, CC.FLAGS_VCENTER )
+        gridbox_1.Add( self._num_branches_to_regen, CC.FLAGS_VCENTER )
+        gridbox_1.Add( ( 10, 10 ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        gridbox_1.Add( self._branches_button, CC.FLAGS_VCENTER )
         
-        self._preparing_panel.AddF( gridbox_1, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._preparing_panel.Add( gridbox_1, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         #
         
         distance_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        distance_hbox.AddF( ClientGUICommon.BetterStaticText( self._searching_panel, label = 'search distance: ' ), CC.FLAGS_VCENTER )
-        distance_hbox.AddF( self._search_distance_button, CC.FLAGS_EXPAND_BOTH_WAYS )
-        distance_hbox.AddF( self._search_distance_spinctrl, CC.FLAGS_VCENTER )
+        distance_hbox.Add( ClientGUICommon.BetterStaticText( self._searching_panel, label = 'search distance: ' ), CC.FLAGS_VCENTER )
+        distance_hbox.Add( self._search_distance_button, CC.FLAGS_EXPAND_BOTH_WAYS )
+        distance_hbox.Add( self._search_distance_spinctrl, CC.FLAGS_VCENTER )
         
-        gridbox_2 = wx.FlexGridSizer( 0, 2 )
+        gridbox_2 = wx.FlexGridSizer( 2 )
         
         gridbox_2.AddGrowableCol( 0, 1 )
         
-        gridbox_2.AddF( self._num_searched, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        gridbox_2.AddF( self._search_button, CC.FLAGS_VCENTER )
+        gridbox_2.Add( self._num_searched, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        gridbox_2.Add( self._search_button, CC.FLAGS_VCENTER )
         
-        self._searching_panel.AddF( distance_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        self._searching_panel.AddF( gridbox_2, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._searching_panel.Add( distance_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._searching_panel.Add( gridbox_2, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         #
         
-        self._filtering_panel.AddF( self._file_domain_button, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._filtering_panel.AddF( self._num_unknown_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._filtering_panel.AddF( self._num_better_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._filtering_panel.AddF( self._num_same_quality_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._filtering_panel.AddF( self._num_alternate_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._filtering_panel.AddF( self._show_some_dupes, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._filtering_panel.AddF( self._launch_filter, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.Add( self._file_domain_button, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.Add( self._num_unknown_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.Add( self._num_better_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.Add( self._num_same_quality_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.Add( self._num_alternate_duplicates, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.Add( self._show_some_dupes, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._filtering_panel.Add( self._launch_filter, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         #
         
         hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        hbox.AddF( self._cog_button, CC.FLAGS_VCENTER )
-        hbox.AddF( self._help_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._cog_button, CC.FLAGS_VCENTER )
+        hbox.Add( self._help_button, CC.FLAGS_VCENTER )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( hbox, CC.FLAGS_BUTTON_SIZER )
-        vbox.AddF( self._preparing_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._searching_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._filtering_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( hbox, CC.FLAGS_BUTTON_SIZER )
+        vbox.Add( self._preparing_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._searching_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._filtering_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         self.SetSizer( vbox )
-        
-        self.Bind( wx.EVT_TIMER, self.TIMEREventUpdateDBJob, id = ID_TIMER_UPDATE )
-        self._update_db_job_timer = wx.Timer( self, id = ID_TIMER_UPDATE )
         
         HG.client_controller.sub( self, 'RefreshAndUpdateStatus', 'refresh_dupe_numbers' )
         
@@ -914,9 +975,13 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
     
     def _RebalanceTree( self ):
         
-        self._job = 'branches'
+        job_key = ClientThreading.JobKey( cancellable = True )
         
-        self._StartStopDBJob()
+        self._controller.Write( 'maintain_similar_files_tree', job_key = job_key )
+        
+        self._controller.pub( 'modal_message', job_key )
+        
+        self._controller.CallToThread( self._THREADWaitOnJob, job_key )
         
     
     def _RefreshAndUpdateStatus( self ):
@@ -930,9 +995,13 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
     
     def _RegeneratePhashes( self ):
         
-        self._job = 'phashes'
+        job_key = ClientThreading.JobKey( cancellable = True )
         
-        self._StartStopDBJob()
+        self._controller.Write( 'maintain_similar_files_phashes', job_key = job_key )
+        
+        self._controller.pub( 'modal_message', job_key )
+        
+        self._controller.CallToThread( self._THREADWaitOnJob, job_key )
         
     
     def _ResetUnknown( self ):
@@ -953,9 +1022,15 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
     
     def _SearchForDuplicates( self ):
         
-        self._job = 'search'
+        job_key = ClientThreading.JobKey( cancellable = True )
         
-        self._StartStopDBJob()
+        search_distance = self._search_distance_spinctrl.GetValue()
+        
+        self._controller.Write( 'maintain_similar_files_duplicate_pairs', search_distance, job_key = job_key )
+        
+        self._controller.pub( 'modal_message', job_key )
+        
+        self._controller.CallToThread( self._THREADWaitOnJob, job_key )
         
     
     def _SetFileDomain( self, service_key ):
@@ -990,7 +1065,7 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         message += os.linesep
         message += '3 - Walking through the pairs or groups of potential duplicates and telling the client how they are related.'
         message += os.linesep * 2
-        message += 'For the first two steps, you likely just want to click the play buttons and wait for them to complete. They are very CPU intensive and lock the database heavily as they work. If you want to use the client for anything else while they are running, pause them first. You can also set them to run in idle time from the cog icon. For the search \'distance\', start at the fast and limited \'exact match\', or 0 \'hamming distance\' search and slowly expand it as you gain experience with the system.'
+        message += 'For the first two steps, you likely just want to click the play buttons and wait for them to complete. They are CPU intensive and lock the client as they work. You can also set them to run in idle time from the cog icon. For the search \'distance\', start at the fast and limited \'exact match\' (0 \'hamming distance\') and slowly expand it as you gain experience with the system.'
         message += os.linesep * 2
         message += 'Once you have found some potential pairs, you can either show some random groups as thumbnails (and process them manually however you prefer), or you can launch the specialised duplicate filter, which lets you quickly assign duplicate status to pairs of files and will automatically merge files and tags between dupes however you prefer.'
         message += os.linesep * 2
@@ -1025,126 +1100,7 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         
         panel = ClientGUIMedia.MediaPanelThumbnails( self._page, self._page_key, CC.COMBINED_LOCAL_FILE_SERVICE_KEY, media_results )
         
-        self._controller.pub( 'swap_media_panel', self._page_key, panel )
-        
-    
-    def _StartStopDBJob( self ):
-        
-        if self._job_key is None:
-            
-            self._cog_button.Disable()
-            self._phashes_button.Disable()
-            self._branches_button.Disable()
-            self._search_button.Disable()
-            self._search_distance_button.Disable()
-            self._search_distance_spinctrl.Disable()
-            self._show_some_dupes.Disable()
-            self._launch_filter.Disable()
-            
-            self._job_key = ClientThreading.JobKey( cancellable = True )
-            
-            if self._job == 'phashes':
-                
-                self._phashes_button.Enable()
-                self._phashes_button.SetBitmap( CC.GlobalBMPs.stop )
-                
-                self._controller.Write( 'maintain_similar_files_phashes', job_key = self._job_key )
-                
-            elif self._job == 'branches':
-                
-                self._branches_button.Enable()
-                self._branches_button.SetBitmap( CC.GlobalBMPs.stop )
-                
-                self._controller.Write( 'maintain_similar_files_tree', job_key = self._job_key )
-                
-            elif self._job == 'search':
-                
-                self._search_button.Enable()
-                self._search_button.SetBitmap( CC.GlobalBMPs.stop )
-                
-                search_distance = self._search_distance_spinctrl.GetValue()
-                
-                self._controller.Write( 'maintain_similar_files_duplicate_pairs', search_distance, job_key = self._job_key )
-                
-            
-            self._update_db_job_timer.Start( 250, wx.TIMER_CONTINUOUS )
-            
-        else:
-            
-            self._job_key.Cancel()
-            
-        
-    
-    def _UpdateJob( self ):
-        
-        if self._in_break:
-            
-            if HG.client_controller.DBCurrentlyDoingJob():
-                
-                return
-                
-            else:
-                
-                self._in_break = False
-                
-                self._StartStopDBJob()
-                
-                return
-                
-            
-        
-        if self._job_key.TimeRunning() > 10:
-            
-            self._job_key.Cancel()
-            
-            self._job_key = None
-            
-            self._in_break = True
-            
-            return
-            
-        
-        if self._job_key.IsDone():
-            
-            self._job_key = None
-            
-            self._update_db_job_timer.Stop()
-            
-            self._RefreshAndUpdateStatus()
-            
-            return
-            
-        
-        if self._job == 'phashes':
-            
-            text = self._job_key.GetIfHasVariable( 'popup_text_1' )
-            
-            if text is not None:
-                
-                self._num_phashes_to_regen.SetLabelText( text )
-                
-            
-        elif self._job == 'branches':
-            
-            text = self._job_key.GetIfHasVariable( 'popup_text_1' )
-            
-            if text is not None:
-                
-                self._num_branches_to_regen.SetLabelText( text )
-                
-            
-        elif self._job == 'search':
-            
-            text = self._job_key.GetIfHasVariable( 'popup_text_1' )
-            gauge = self._job_key.GetIfHasVariable( 'popup_gauge_1' )
-            
-            if text is not None and gauge is not None:
-                
-                ( value, range ) = gauge
-                
-                self._num_searched.SetValue( text, value, range )
-                
-            
+        self._page.SwapMediaPanel( panel )
         
     
     def _UpdateStatus( self ):
@@ -1153,11 +1109,11 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         
         self._cog_button.Enable()
         
-        self._phashes_button.SetBitmap( CC.GlobalBMPs.play )
-        self._branches_button.SetBitmap( CC.GlobalBMPs.play )
-        self._search_button.SetBitmap( CC.GlobalBMPs.play )
+        ClientGUICommon.SetBitmapButtonBitmap( self._phashes_button, CC.GlobalBMPs.play )
+        ClientGUICommon.SetBitmapButtonBitmap( self._branches_button, CC.GlobalBMPs.play )
+        ClientGUICommon.SetBitmapButtonBitmap( self._search_button, CC.GlobalBMPs.play )
         
-        total_num_files = sum( searched_distances_to_count.values() )
+        total_num_files = max( num_phashes_to_regen, sum( searched_distances_to_count.values() ) )
         
         if num_phashes_to_regen == 0:
             
@@ -1192,7 +1148,7 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         
         search_distance = self._search_distance_spinctrl.GetValue()
         
-        new_options = self._controller.GetNewOptions()
+        new_options = self._controller.new_options
         
         new_options.SetInteger( 'similar_files_duplicate_pairs_search_distance', search_distance )
         
@@ -1248,6 +1204,31 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
             
         
     
+    def _THREADWaitOnJob( self, job_key ):
+        
+        def wx_done():
+            
+            if not self:
+                
+                return
+                
+            
+            self._RefreshAndUpdateStatus()
+            
+        
+        while not job_key.IsDone():
+            
+            if HydrusThreading.IsThreadShuttingDown():
+                
+                return
+                
+            
+            time.sleep( 0.25 )
+            
+        
+        wx.CallAfter( wx_done )
+        
+    
     def EventSearchDistanceChanged( self, event ):
         
         self._UpdateStatus()
@@ -1258,11 +1239,6 @@ class ManagementPanelDuplicateFilter( ManagementPanel ):
         self._RefreshAndUpdateStatus()
         
     
-    def TIMEREventUpdateDBJob( self, event ):
-        
-        self._UpdateJob()
-        
-    
 management_panel_types_to_classes[ MANAGEMENT_TYPE_DUPLICATE_FILTER ] = ManagementPanelDuplicateFilter
 
 class ManagementPanelImporter( ManagementPanel ):
@@ -1271,10 +1247,7 @@ class ManagementPanelImporter( ManagementPanel ):
         
         ManagementPanel.__init__( self, parent, page, controller, management_controller )
         
-        self.Bind( wx.EVT_TIMER, self.TIMEREventImportUpdate, id = ID_TIMER_UPDATE )
-        self._import_update_timer = wx.Timer( self, id = ID_TIMER_UPDATE )
-        
-        self._import_update_timer.Start( 250, wx.TIMER_CONTINUOUS )
+        self._controller.sub( self, 'RefreshSort', 'refresh_query' )
         
     
     def _UpdateStatus( self ):
@@ -1282,12 +1255,29 @@ class ManagementPanelImporter( ManagementPanel ):
         raise NotImplementedError()
         
     
-    def TIMEREventImportUpdate( self, event ):
+    def PageHidden( self ):
         
-        if self._controller.gui.IsCurrentPage( self._page_key ):
+        ManagementPanel.PageHidden( self )
+        
+    
+    def PageShown( self ):
+        
+        ManagementPanel.PageShown( self )
+        
+        self._UpdateStatus()
+        
+    
+    def RefreshSort( self, page_key ):
+        
+        if page_key == self._page_key:
             
-            self._UpdateStatus()
+            self._sort_by.BroadcastSort()
             
+        
+    
+    def TIMERPageUpdate( self ):
+        
+        self._UpdateStatus()
         
     
 class ManagementPanelImporterGallery( ManagementPanelImporter ):
@@ -1306,8 +1296,6 @@ class ManagementPanelImporterGallery( ManagementPanelImporter ):
         self._seed_cache_control = ClientGUISeedCache.SeedCacheStatusControl( self._import_queue_panel, self._controller )
         self._file_download_control = ClientGUIControls.NetworkJobControl( self._import_queue_panel )
         
-        self._waiting_politely_indicator = ClientGUICommon.GetWaitingPolitelyControl( self._import_queue_panel, self._page_key )
-        
         self._files_pause_button = wx.BitmapButton( self._import_queue_panel, bitmap = CC.GlobalBMPs.pause )
         self._files_pause_button.Bind( wx.EVT_BUTTON, self.EventFilesPause )
         
@@ -1325,7 +1313,7 @@ class ManagementPanelImporterGallery( ManagementPanelImporter ):
         
         self._pending_queries_panel = ClientGUICommon.StaticBox( self._gallery_downloader_panel, 'pending queries' )
         
-        self._pending_queries_listbox = wx.ListBox( self._pending_queries_panel, size = ( -1, 100 ) )
+        self._pending_queries_listbox = wx.ListBox( self._pending_queries_panel, size = ( -1, 100 ), style = wx.LB_EXTENDED )
         
         self._advance_button = wx.Button( self._pending_queries_panel, label = u'\u2191' )
         self._advance_button.Bind( wx.EVT_BUTTON, self.EventAdvance )
@@ -1336,97 +1324,73 @@ class ManagementPanelImporterGallery( ManagementPanelImporter ):
         self._delay_button = wx.Button( self._pending_queries_panel, label = u'\u2193' )
         self._delay_button.Bind( wx.EVT_BUTTON, self.EventDelay )
         
-        self._query_input = wx.TextCtrl( self._pending_queries_panel, style = wx.TE_PROCESS_ENTER )
-        self._query_input.Bind( wx.EVT_KEY_DOWN, self.EventKeyDown )
-        
-        self._query_paste = wx.Button( self._pending_queries_panel, label = 'paste queries' )
-        self._query_paste.Bind( wx.EVT_BUTTON, self.EventPaste )
-        
-        menu_items = []
-        
-        invert_call = self._gallery_import.InvertGetTagsIfURLKnownAndFileRedundant
-        value_call = self._gallery_import.GetTagsIfURLKnownAndFileRedundant
-        
-        check_manager = ClientGUICommon.CheckboxManagerCalls( invert_call, value_call )
-        
-        menu_items.append( ( 'check', 'get tags even if url is known and file is already in db (this downloader)', 'If this is selected, the client will fetch the tags from a file\'s page even if it has the file and already previously downloaded it from that location.', check_manager ) )
-        
-        menu_items.append( ( 'separator', 0, 0, 0 ) )
-        
-        check_manager = ClientGUICommon.CheckboxManagerOptions( 'get_tags_if_url_known_and_file_redundant' )
-        
-        menu_items.append( ( 'check', 'get tags even if url is known and file is already in db (default)', 'Set the default for this value.', check_manager ) )
-        
-        self._cog_button = ClientGUICommon.MenuBitmapButton( self._gallery_downloader_panel, CC.GlobalBMPs.cog, menu_items )
+        self._query_input = ClientGUICommon.TextAndPasteCtrl( self._pending_queries_panel, self._PendQueries )
         
         self._file_limit = ClientGUICommon.NoneableSpinCtrl( self._gallery_downloader_panel, 'stop after this many files', min = 1, none_phrase = 'no limit' )
         self._file_limit.Bind( wx.EVT_SPINCTRL, self.EventFileLimit )
-        self._file_limit.SetToolTipString( 'per query, stop searching the gallery once this many files has been reached' )
+        self._file_limit.SetToolTip( 'per query, stop searching the gallery once this many files has been reached' )
         
-        self._import_file_options = ClientGUICollapsible.CollapsibleOptionsImportFiles( self._gallery_downloader_panel )
-        self._import_tag_options = ClientGUICollapsible.CollapsibleOptionsTags( self._gallery_downloader_panel )
+        self._gallery_import.SetDownloadControls( self._file_download_control, self._gallery_download_control )
+        
+        ( file_import_options, tag_import_options, file_limit ) = self._gallery_import.GetOptions()
+        
+        gallery_identifier = self._gallery_import.GetGalleryIdentifier()
+        
+        ( namespaces, search_value ) = ClientDefaults.GetDefaultNamespacesAndSearchValue( gallery_identifier )
+        
+        self._file_import_options = ClientGUIImport.FileImportOptionsButton( self._gallery_downloader_panel, file_import_options, self._gallery_import.SetFileImportOptions )
+        self._tag_import_options = ClientGUIImport.TagImportOptionsButton( self._gallery_downloader_panel, namespaces, tag_import_options, self._gallery_import.SetTagImportOptions )
         
         #
         
         button_sizer = wx.BoxSizer( wx.HORIZONTAL )
         
-        button_sizer.AddF( self._gallery_pause_button, CC.FLAGS_VCENTER )
-        button_sizer.AddF( self._gallery_cancel_button, CC.FLAGS_VCENTER )
+        button_sizer.Add( self._gallery_pause_button, CC.FLAGS_VCENTER )
+        button_sizer.Add( self._gallery_cancel_button, CC.FLAGS_VCENTER )
         
-        self._gallery_panel.AddF( self._gallery_status, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._gallery_panel.AddF( self._gallery_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._gallery_panel.AddF( button_sizer, CC.FLAGS_LONE_BUTTON )
+        self._gallery_panel.Add( self._gallery_status, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._gallery_panel.Add( self._gallery_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._gallery_panel.Add( button_sizer, CC.FLAGS_LONE_BUTTON )
         
         #
         
         queue_buttons_vbox = wx.BoxSizer( wx.VERTICAL )
         
-        queue_buttons_vbox.AddF( self._advance_button, CC.FLAGS_VCENTER )
-        queue_buttons_vbox.AddF( self._delete_button, CC.FLAGS_VCENTER )
-        queue_buttons_vbox.AddF( self._delay_button, CC.FLAGS_VCENTER )
+        queue_buttons_vbox.Add( self._advance_button, CC.FLAGS_VCENTER )
+        queue_buttons_vbox.Add( self._delete_button, CC.FLAGS_VCENTER )
+        queue_buttons_vbox.Add( self._delay_button, CC.FLAGS_VCENTER )
         
         queue_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        queue_hbox.AddF( self._pending_queries_listbox, CC.FLAGS_EXPAND_BOTH_WAYS )
-        queue_hbox.AddF( queue_buttons_vbox, CC.FLAGS_VCENTER )
+        queue_hbox.Add( self._pending_queries_listbox, CC.FLAGS_EXPAND_BOTH_WAYS )
+        queue_hbox.Add( queue_buttons_vbox, CC.FLAGS_VCENTER )
         
-        input_hbox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        input_hbox.AddF( self._query_input, CC.FLAGS_EXPAND_BOTH_WAYS )
-        input_hbox.AddF( self._query_paste, CC.FLAGS_VCENTER )
-        
-        self._pending_queries_panel.AddF( queue_hbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        self._pending_queries_panel.AddF( input_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._pending_queries_panel.Add( queue_hbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        self._pending_queries_panel.Add( self._query_input, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         #
         
-        button_sizer = wx.BoxSizer( wx.HORIZONTAL )
+        self._import_queue_panel.Add( self._current_action, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._import_queue_panel.Add( self._seed_cache_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._import_queue_panel.Add( self._file_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._import_queue_panel.Add( self._files_pause_button, CC.FLAGS_LONE_BUTTON )
         
-        button_sizer.AddF( self._waiting_politely_indicator, CC.FLAGS_VCENTER )
-        button_sizer.AddF( self._files_pause_button, CC.FLAGS_VCENTER )
-        
-        self._import_queue_panel.AddF( self._current_action, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._import_queue_panel.AddF( self._seed_cache_control, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._import_queue_panel.AddF( self._file_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._import_queue_panel.AddF( button_sizer, CC.FLAGS_BUTTON_SIZER )
-        
-        self._gallery_downloader_panel.AddF( self._import_queue_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._gallery_downloader_panel.AddF( self._gallery_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._gallery_downloader_panel.AddF( self._pending_queries_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._gallery_downloader_panel.AddF( self._cog_button, CC.FLAGS_LONE_BUTTON )
-        self._gallery_downloader_panel.AddF( self._file_limit, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._gallery_downloader_panel.AddF( self._import_file_options, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._gallery_downloader_panel.AddF( self._import_tag_options, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._gallery_downloader_panel.Add( self._import_queue_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._gallery_downloader_panel.Add( self._gallery_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._gallery_downloader_panel.Add( self._pending_queries_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._gallery_downloader_panel.Add( self._file_limit, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._gallery_downloader_panel.Add( self._file_import_options, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._gallery_downloader_panel.Add( self._tag_import_options, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         #
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._sort_by, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._sort_by, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         self._collect_by.Hide()
         
-        vbox.AddF( self._gallery_downloader_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._gallery_downloader_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         self._MakeCurrentSelectionTagsBox( vbox )
         
@@ -1434,27 +1398,23 @@ class ManagementPanelImporterGallery( ManagementPanelImporter ):
         
         #
         
-        self.Bind( wx.EVT_MENU, self.EventMenu )
-        
-        gallery_identifier = self._gallery_import.GetGalleryIdentifier()
-        
-        ( namespaces, search_value ) = ClientDefaults.GetDefaultNamespacesAndSearchValue( gallery_identifier )
-        
         seed_cache = self._gallery_import.GetSeedCache()
         
         self._seed_cache_control.SetSeedCache( seed_cache )
         
-        self._import_tag_options.SetNamespaces( namespaces )
         self._query_input.SetValue( search_value )
         
-        self._gallery_import.SetDownloadControls( self._file_download_control, self._gallery_download_control )
-        
-        ( import_file_options, import_tag_options, file_limit ) = self._gallery_import.GetOptions()
-        
-        self._import_file_options.SetOptions( import_file_options )
-        self._import_tag_options.SetOptions( import_tag_options )
-        
         self._file_limit.SetValue( file_limit )
+        
+        self._UpdateStatus()
+        
+    
+    def _PendQueries( self, queries ):
+        
+        for query in queries:
+            
+            self._gallery_import.PendQuery( query )
+            
         
         self._UpdateStatus()
         
@@ -1479,46 +1439,39 @@ class ManagementPanelImporterGallery( ManagementPanelImporter ):
         
         if self._pending_queries_listbox.GetStrings() != pending_queries:
             
-            selected_string = self._pending_queries_listbox.GetStringSelection()
+            selected_indices = self._pending_queries_listbox.GetSelections()
+            
+            selected_strings = [ self._pending_queries_listbox.GetString( i ) for i in selected_indices ]
             
             self._pending_queries_listbox.SetItems( pending_queries )
             
-            selection_index = self._pending_queries_listbox.FindString( selected_string )
-            
-            if selection_index != wx.NOT_FOUND:
+            for selected_string in selected_strings:
                 
-                self._pending_queries_listbox.Select( selection_index )
+                selection_index = self._pending_queries_listbox.FindString( selected_string )
+                
+                if selection_index != wx.NOT_FOUND:
+                    
+                    self._pending_queries_listbox.Select( selection_index )
+                    
                 
             
         
         if files_paused:
             
-            if self._files_pause_button.GetBitmap() != CC.GlobalBMPs.play:
-                
-                self._files_pause_button.SetBitmap( CC.GlobalBMPs.play )
-                
+            ClientGUICommon.SetBitmapButtonBitmap( self._files_pause_button, CC.GlobalBMPs.play )
             
         else:
             
-            if self._files_pause_button.GetBitmap() != CC.GlobalBMPs.pause:
-                
-                self._files_pause_button.SetBitmap( CC.GlobalBMPs.pause )
-                
+            ClientGUICommon.SetBitmapButtonBitmap( self._files_pause_button, CC.GlobalBMPs.pause )
             
         
         if gallery_paused:
             
-            if self._gallery_pause_button.GetBitmap() != CC.GlobalBMPs.play:
-                
-                self._gallery_pause_button.SetBitmap( CC.GlobalBMPs.play )
-                
+            ClientGUICommon.SetBitmapButtonBitmap( self._gallery_pause_button, CC.GlobalBMPs.play )
             
         else:
             
-            if self._gallery_pause_button.GetBitmap() != CC.GlobalBMPs.pause:
-                
-                self._gallery_pause_button.SetBitmap( CC.GlobalBMPs.pause )
-                
+            ClientGUICommon.SetBitmapButtonBitmap( self._gallery_pause_button, CC.GlobalBMPs.pause )
             
         
         if gallery_cancellable:
@@ -1561,13 +1514,13 @@ class ManagementPanelImporterGallery( ManagementPanelImporter ):
     
     def EventAdvance( self, event ):
         
-        selection = self._pending_queries_listbox.GetSelection()
+        selected_indices = self._pending_queries_listbox.GetSelections()
         
-        if selection != wx.NOT_FOUND:
+        selected_strings = [ self._pending_queries_listbox.GetString( i ) for i in selected_indices ]
+        
+        if len( selected_strings ) > 0:
             
-            query = self._pending_queries_listbox.GetString( selection )
-            
-            self._gallery_import.AdvanceQuery( query )
+            self._gallery_import.AdvanceQueries( selected_strings )
             
             self._UpdateStatus()
             
@@ -1575,13 +1528,13 @@ class ManagementPanelImporterGallery( ManagementPanelImporter ):
     
     def EventDelay( self, event ):
         
-        selection = self._pending_queries_listbox.GetSelection()
+        selected_indices = self._pending_queries_listbox.GetSelections()
         
-        if selection != wx.NOT_FOUND:
+        selected_strings = [ self._pending_queries_listbox.GetString( i ) for i in selected_indices ]
+        
+        if len( selected_strings ) > 0:
             
-            query = self._pending_queries_listbox.GetString( selection )
-            
-            self._gallery_import.DelayQuery( query )
+            self._gallery_import.DelayQueries( selected_strings )
             
             self._UpdateStatus()
             
@@ -1589,13 +1542,13 @@ class ManagementPanelImporterGallery( ManagementPanelImporter ):
     
     def EventDelete( self, event ):
         
-        selection = self._pending_queries_listbox.GetSelection()
+        selected_indices = self._pending_queries_listbox.GetSelections()
         
-        if selection != wx.NOT_FOUND:
+        selected_strings = [ self._pending_queries_listbox.GetString( i ) for i in selected_indices ]
+        
+        if len( selected_strings ) > 0:
             
-            query = self._pending_queries_listbox.GetString( selection )
-            
-            self._gallery_import.DeleteQuery( query )
+            self._gallery_import.DeleteQueries( selected_strings )
             
             self._UpdateStatus()
             
@@ -1629,91 +1582,6 @@ class ManagementPanelImporterGallery( ManagementPanelImporter ):
         self._UpdateStatus()
         
     
-    def EventKeyDown( self, event ):
-        
-        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
-        
-        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
-            
-            query = self._query_input.GetValue()
-            
-            if query != '':
-                
-                self._gallery_import.PendQuery( query )
-                
-            
-            self._query_input.SetValue( '' )
-            
-            self._UpdateStatus()
-            
-        else:
-            
-            event.Skip()
-            
-        
-    
-    def EventMenu( self, event ):
-        
-        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
-        
-        if action is not None:
-            
-            ( command, data ) = action
-            
-            if command == 'import_file_options_changed':
-                
-                import_file_options = self._import_file_options.GetOptions()
-                
-                self._gallery_import.SetImportFileOptions( import_file_options )
-                
-            if command == 'import_tag_options_changed':
-                
-                import_tag_options = self._import_tag_options.GetOptions()
-                
-                self._gallery_import.SetImportTagOptions( import_tag_options )
-                
-            else:
-                
-                event.Skip()
-                
-            
-        
-    
-    def EventPaste( self, event ):
-        
-        if wx.TheClipboard.Open():
-            
-            data = wx.TextDataObject()
-            
-            wx.TheClipboard.GetData( data )
-            
-            wx.TheClipboard.Close()
-            
-            raw_text = data.GetText()
-            
-            try:
-                
-                for query in HydrusData.SplitByLinesep( raw_text ):
-                    
-                    if query != '':
-                        
-                        self._gallery_import.PendQuery( query )
-                        
-                    
-                
-                self._UpdateStatus()
-                
-            except:
-                
-                wx.MessageBox( 'I could not understand what was in the clipboard' )
-                
-            
-        else:
-            
-            wx.MessageBox( 'I could not get permission to access the clipboard.' )
-            
-        
-    
     def SetSearchFocus( self, page_key ):
         
         if page_key == self._page_key:
@@ -1727,6 +1595,20 @@ class ManagementPanelImporterGallery( ManagementPanelImporter ):
         self._gallery_import.Start( self._page_key )
         
     
+    def TestAbleToClose( self ):
+        
+        if self._gallery_import.CurrentlyWorking():
+            
+            with ClientGUIDialogs.DialogYesNo( self, 'This page is still importing. Are you sure you want to close it?' ) as dlg:
+                
+                if dlg.ShowModal() == wx.ID_NO:
+                    
+                    raise HydrusExceptions.PermissionException()
+                    
+                
+            
+        
+    
 management_panel_types_to_classes[ MANAGEMENT_TYPE_IMPORT_GALLERY ] = ManagementPanelImporterGallery
 
 class ManagementPanelImporterHDD( ManagementPanelImporter ):
@@ -1737,35 +1619,32 @@ class ManagementPanelImporterHDD( ManagementPanelImporter ):
         
         self._import_queue_panel = ClientGUICommon.StaticBox( self, 'import summary' )
         
-        self._overall_status = ClientGUICommon.BetterStaticText( self._import_queue_panel )
         self._current_action = ClientGUICommon.BetterStaticText( self._import_queue_panel )
-        self._overall_gauge = ClientGUICommon.Gauge( self._import_queue_panel )
-        
-        self._seed_cache_button = ClientGUICommon.BetterBitmapButton( self._import_queue_panel, CC.GlobalBMPs.seed_cache, self._SeedCache )
-        self._seed_cache_button.SetToolTipString( 'open detailed file import status' )
+        self._seed_cache_control = ClientGUISeedCache.SeedCacheStatusControl( self._import_queue_panel, self._controller )
         
         self._pause_button = wx.BitmapButton( self._import_queue_panel, bitmap = CC.GlobalBMPs.pause )
         self._pause_button.Bind( wx.EVT_BUTTON, self.EventPause )
+        
+        self._hdd_import = self._management_controller.GetVariable( 'hdd_import' )
+        
+        file_import_options = self._hdd_import.GetFileImportOptions()
+        
+        self._file_import_options = ClientGUIImport.FileImportOptionsButton( self._import_queue_panel, file_import_options, self._hdd_import.SetFileImportOptions )
         
         #
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._sort_by, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._sort_by, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         self._collect_by.Hide()
         
-        button_sizer = wx.BoxSizer( wx.HORIZONTAL )
+        self._import_queue_panel.Add( self._current_action, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._import_queue_panel.Add( self._seed_cache_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._import_queue_panel.Add( self._pause_button, CC.FLAGS_LONE_BUTTON )
+        self._import_queue_panel.Add( self._file_import_options, CC.FLAGS_EXPAND_PERPENDICULAR )
         
-        button_sizer.AddF( self._seed_cache_button, CC.FLAGS_VCENTER )
-        button_sizer.AddF( self._pause_button, CC.FLAGS_VCENTER )
-        
-        self._import_queue_panel.AddF( self._overall_status, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._import_queue_panel.AddF( self._current_action, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._import_queue_panel.AddF( self._overall_gauge, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._import_queue_panel.AddF( button_sizer, CC.FLAGS_BUTTON_SIZER )
-        
-        vbox.AddF( self._import_queue_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._import_queue_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         self._MakeCurrentSelectionTagsBox( vbox )
         
@@ -1773,83 +1652,39 @@ class ManagementPanelImporterHDD( ManagementPanelImporter ):
         
         #
         
-        self._hdd_import = self._management_controller.GetVariable( 'hdd_import' )
+        seed_cache = self._hdd_import.GetSeedCache()
+        
+        self._seed_cache_control.SetSeedCache( seed_cache )
         
         self._UpdateStatus()
         
     
-    def _SeedCache( self ):
-        
-        seed_cache = self._hdd_import.GetSeedCache()
-        
-        title = 'file import status'
-        frame_key = 'file_import_status'
-        
-        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
-        
-        panel = ClientGUISeedCache.EditSeedCachePanel( frame, self._controller, seed_cache )
-        
-        frame.SetPanel( panel )
-        
-    
     def _UpdateStatus( self ):
         
-        ( ( overall_status, ( overall_value, overall_range ) ), paused ) = self._hdd_import.GetStatus()
-        
-        if self._overall_status.GetLabelText() != overall_status:
-            
-            self._overall_status.SetLabelText( overall_status )
-            
-        
-        self._overall_gauge.SetRange( overall_range )
-        self._overall_gauge.SetValue( overall_value )
+        ( current_action, paused ) = self._hdd_import.GetStatus()
         
         if paused:
             
-            current_action = 'paused at ' + HydrusData.ConvertValueRangeToPrettyString( overall_value + 1, overall_range )
-            
-            if self._pause_button.GetBitmap() != CC.GlobalBMPs.play:
-                
-                self._pause_button.SetBitmap( CC.GlobalBMPs.play )
-                
+            ClientGUICommon.SetBitmapButtonBitmap( self._pause_button, CC.GlobalBMPs.play )
             
         else:
             
-            current_action = 'processing ' + HydrusData.ConvertValueRangeToPrettyString( overall_value + 1, overall_range )
+            ClientGUICommon.SetBitmapButtonBitmap( self._pause_button, CC.GlobalBMPs.pause )
             
-            if self._pause_button.GetBitmap() != CC.GlobalBMPs.pause:
+        
+        if paused:
+            
+            if current_action == '':
                 
-                self._pause_button.SetBitmap( CC.GlobalBMPs.pause )
+                current_action = 'paused'
+                
+            else:
+                
+                current_action = 'pausing - ' + current_action
                 
             
         
-        if overall_value < overall_range:
-            
-            if not self._pause_button.IsShown():
-                
-                self._pause_button.Show()
-                self._current_action.Show()
-                self._overall_gauge.Show()
-                
-                self.Layout()
-                
-            
-        else:
-            
-            if self._pause_button.IsShown():
-                
-                self._pause_button.Hide()
-                self._current_action.Hide()
-                self._overall_gauge.Hide()
-                
-                self.Layout()
-                
-            
-        
-        if self._current_action.GetLabelText() != current_action:
-            
-            self._current_action.SetLabelText( current_action )
-            
+        self._current_action.SetLabelText( current_action )
         
     
     def EventPause( self, event ):
@@ -1866,9 +1701,7 @@ class ManagementPanelImporterHDD( ManagementPanelImporter ):
     
     def TestAbleToClose( self ):
         
-        ( ( overall_status, ( overall_value, overall_range ) ), paused ) = self._hdd_import.GetStatus()
-        
-        if overall_value < overall_range and not paused:
+        if self._hdd_import.CurrentlyWorking():
             
             with ClientGUIDialogs.DialogYesNo( self, 'This page is still importing. Are you sure you want to close it?' ) as dlg:
                 
@@ -1890,18 +1723,23 @@ class ManagementPanelImporterPageOfImages( ManagementPanelImporter ):
         
         self._page_of_images_panel = ClientGUICommon.StaticBox( self, 'page of images downloader' )
         
-        self._pause_button = wx.BitmapButton( self._page_of_images_panel, bitmap = CC.GlobalBMPs.pause )
-        self._pause_button.Bind( wx.EVT_BUTTON, self.EventPause )
-        
         #
         
         self._import_queue_panel = ClientGUICommon.StaticBox( self._page_of_images_panel, 'imports' )
+        
+        self._pause_files_button = wx.BitmapButton( self._import_queue_panel, bitmap = CC.GlobalBMPs.pause )
+        self._pause_files_button.Bind( wx.EVT_BUTTON, self.EventPauseFiles )
         
         self._current_action = ClientGUICommon.BetterStaticText( self._import_queue_panel )
         self._seed_cache_control = ClientGUISeedCache.SeedCacheStatusControl( self._import_queue_panel, self._controller )
         self._file_download_control = ClientGUIControls.NetworkJobControl( self._import_queue_panel )
         
+        #
+        
         self._pending_page_urls_panel = ClientGUICommon.StaticBox( self._page_of_images_panel, 'pending page urls' )
+        
+        self._pause_queue_button = wx.BitmapButton( self._pending_page_urls_panel, bitmap = CC.GlobalBMPs.pause )
+        self._pause_queue_button.Bind( wx.EVT_BUTTON, self.EventPauseQueue )
         
         self._parser_status = ClientGUICommon.BetterStaticText( self._pending_page_urls_panel )
         
@@ -1918,77 +1756,69 @@ class ManagementPanelImporterPageOfImages( ManagementPanelImporter ):
         self._delay_button = wx.Button( self._pending_page_urls_panel, label = u'\u2193' )
         self._delay_button.Bind( wx.EVT_BUTTON, self.EventDelay )
         
-        self._page_url_input = wx.TextCtrl( self._pending_page_urls_panel, style = wx.TE_PROCESS_ENTER )
-        self._page_url_input.Bind( wx.EVT_KEY_DOWN, self.EventKeyDown )
-        
-        self._page_url_paste = wx.Button( self._pending_page_urls_panel, label = 'paste urls' )
-        self._page_url_paste.Bind( wx.EVT_BUTTON, self.EventPaste )
+        self._page_url_input = ClientGUICommon.TextAndPasteCtrl( self._pending_page_urls_panel, self._PendPageURLs )
         
         self._download_image_links = wx.CheckBox( self._page_of_images_panel, label = 'download image links' )
         self._download_image_links.Bind( wx.EVT_CHECKBOX, self.EventDownloadImageLinks )
-        self._download_image_links.SetToolTipString( 'i.e. download the href url of an <a> tag if there is an <img> tag nested beneath it' )
+        self._download_image_links.SetToolTip( 'i.e. download the href url of an <a> tag if there is an <img> tag nested beneath it' )
         
         self._download_unlinked_images = wx.CheckBox( self._page_of_images_panel, label = 'download unlinked images' )
         self._download_unlinked_images.Bind( wx.EVT_CHECKBOX, self.EventDownloadUnlinkedImages )
-        self._download_unlinked_images.SetToolTipString( 'i.e. download the src url of an <img> tag if there is no parent <a> tag' )
+        self._download_unlinked_images.SetToolTip( 'i.e. download the src url of an <img> tag if there is no parent <a> tag' )
         
-        self._import_file_options = ClientGUICollapsible.CollapsibleOptionsImportFiles( self._page_of_images_panel )
+        self._page_of_images_import = self._management_controller.GetVariable( 'page_of_images_import' )
+        
+        ( file_import_options, download_image_links, download_unlinked_images ) = self._page_of_images_import.GetOptions()
+        
+        self._file_import_options = ClientGUIImport.FileImportOptionsButton( self._page_of_images_panel, file_import_options, self._page_of_images_import.SetFileImportOptions )
         
         #
+        
+        self._import_queue_panel.Add( self._current_action, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._import_queue_panel.Add( self._seed_cache_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._import_queue_panel.Add( self._file_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._import_queue_panel.Add( self._pause_files_button, CC.FLAGS_LONE_BUTTON )
         
         queue_buttons_vbox = wx.BoxSizer( wx.VERTICAL )
         
-        queue_buttons_vbox.AddF( self._advance_button, CC.FLAGS_VCENTER )
-        queue_buttons_vbox.AddF( self._delete_button, CC.FLAGS_VCENTER )
-        queue_buttons_vbox.AddF( self._delay_button, CC.FLAGS_VCENTER )
+        queue_buttons_vbox.Add( self._advance_button, CC.FLAGS_VCENTER )
+        queue_buttons_vbox.Add( self._delete_button, CC.FLAGS_VCENTER )
+        queue_buttons_vbox.Add( self._delay_button, CC.FLAGS_VCENTER )
         
         queue_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        queue_hbox.AddF( self._pending_page_urls_listbox, CC.FLAGS_EXPAND_BOTH_WAYS )
-        queue_hbox.AddF( queue_buttons_vbox, CC.FLAGS_VCENTER )
+        queue_hbox.Add( self._pending_page_urls_listbox, CC.FLAGS_EXPAND_BOTH_WAYS )
+        queue_hbox.Add( queue_buttons_vbox, CC.FLAGS_VCENTER )
         
-        input_hbox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        input_hbox.AddF( self._page_url_input, CC.FLAGS_EXPAND_BOTH_WAYS )
-        input_hbox.AddF( self._page_url_paste, CC.FLAGS_VCENTER )
-        
-        self._pending_page_urls_panel.AddF( self._parser_status, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._pending_page_urls_panel.AddF( self._page_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._pending_page_urls_panel.AddF( queue_hbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        self._pending_page_urls_panel.AddF( input_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._pending_page_urls_panel.Add( self._parser_status, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._pending_page_urls_panel.Add( self._page_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._pending_page_urls_panel.Add( queue_hbox, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        self._pending_page_urls_panel.Add( self._page_url_input, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._pending_page_urls_panel.Add( self._pause_queue_button, CC.FLAGS_LONE_BUTTON )
         
         #
         
-        self._import_queue_panel.AddF( self._current_action, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._import_queue_panel.AddF( self._seed_cache_control, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._import_queue_panel.AddF( self._file_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
-        
-        self._page_of_images_panel.AddF( self._pause_button, CC.FLAGS_LONE_BUTTON )
-        self._page_of_images_panel.AddF( self._import_queue_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._page_of_images_panel.AddF( self._pending_page_urls_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._page_of_images_panel.AddF( self._download_image_links, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._page_of_images_panel.AddF( self._download_unlinked_images, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._page_of_images_panel.AddF( self._import_file_options, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._page_of_images_panel.Add( self._import_queue_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._page_of_images_panel.Add( self._pending_page_urls_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._page_of_images_panel.Add( self._download_image_links, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._page_of_images_panel.Add( self._download_unlinked_images, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._page_of_images_panel.Add( self._file_import_options, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         #
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._sort_by, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._sort_by, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         self._collect_by.Hide()
         
-        vbox.AddF( self._page_of_images_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._page_of_images_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         self._MakeCurrentSelectionTagsBox( vbox )
         
         self.SetSizer( vbox )
         
         #
-        
-        self.Bind( wx.EVT_MENU, self.EventMenu )
-        
-        self._page_of_images_import = self._management_controller.GetVariable( 'page_of_images_import' )
         
         seed_cache = self._page_of_images_import.GetSeedCache()
         
@@ -1997,12 +1827,20 @@ class ManagementPanelImporterPageOfImages( ManagementPanelImporter ):
         self._page_of_images_import.SetDownloadControlFile( self._file_download_control )
         self._page_of_images_import.SetDownloadControlPage( self._page_download_control )
         
-        ( import_file_options, download_image_links, download_unlinked_images ) = self._page_of_images_import.GetOptions()
-        
-        self._import_file_options.SetOptions( import_file_options )
-        
         self._download_image_links.SetValue( download_image_links )
         self._download_unlinked_images.SetValue( download_unlinked_images )
+        
+        self._UpdateStatus()
+        
+    
+    def _PendPageURLs( self, urls ):
+        
+        urls = [ url for url in urls if url.startswith( 'http' ) ]
+        
+        for url in urls:
+            
+            self._page_of_images_import.PendPageURL( url )
+            
         
         self._UpdateStatus()
         
@@ -2023,7 +1861,7 @@ class ManagementPanelImporterPageOfImages( ManagementPanelImporter ):
     
     def _UpdateStatus( self ):
         
-        ( pending_page_urls, parser_status, current_action, paused ) = self._page_of_images_import.GetStatus()
+        ( pending_page_urls, parser_status, current_action, queue_paused, files_paused ) = self._page_of_images_import.GetStatus()
         
         if self._pending_page_urls_listbox.GetStrings() != pending_page_urls:
             
@@ -2039,33 +1877,36 @@ class ManagementPanelImporterPageOfImages( ManagementPanelImporter ):
                 
             
         
-        if paused:
+        if queue_paused:
             
             parser_status = 'paused'
             
         
         self._parser_status.SetLabelText( parser_status )
         
-        if current_action == '' and paused:
+        if current_action == '' and files_paused:
             
             current_action = 'paused'
             
         
         self._current_action.SetLabelText( current_action )
         
-        if paused:
+        if queue_paused:
             
-            if self._pause_button.GetBitmap() != CC.GlobalBMPs.play:
-                
-                self._pause_button.SetBitmap( CC.GlobalBMPs.play )
-                
+            ClientGUICommon.SetBitmapButtonBitmap( self._pause_queue_button, CC.GlobalBMPs.play )
             
         else:
             
-            if self._pause_button.GetBitmap() != CC.GlobalBMPs.pause:
-                
-                self._pause_button.SetBitmap( CC.GlobalBMPs.pause )
-                
+            ClientGUICommon.SetBitmapButtonBitmap( self._pause_queue_button, CC.GlobalBMPs.pause )
+            
+        
+        if files_paused:
+            
+            ClientGUICommon.SetBitmapButtonBitmap( self._pause_files_button, CC.GlobalBMPs.play )
+            
+        else:
+            
+            ClientGUICommon.SetBitmapButtonBitmap( self._pause_files_button, CC.GlobalBMPs.pause )
             
         
     
@@ -2121,85 +1962,16 @@ class ManagementPanelImporterPageOfImages( ManagementPanelImporter ):
         self._page_of_images_import.SetDownloadUnlinkedImages( self._download_unlinked_images.GetValue() )
         
     
-    def EventKeyDown( self, event ):
+    def EventPauseQueue( self, event ):
         
-        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
+        self._page_of_images_import.PausePlayQueue()
         
-        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
-            
-            page_url = self._page_url_input.GetValue()
-            
-            if page_url != '':
-                
-                self._page_of_images_import.PendPageURL( page_url )
-                
-                self._page_url_input.SetValue( '' )
-                
-                self._UpdateStatus()
-                
-            
-        else:
-            
-            event.Skip()
-            
+        self._UpdateStatus()
         
     
-    def EventMenu( self, event ):
+    def EventPauseFiles( self, event ):
         
-        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
-        
-        if action is not None:
-            
-            ( command, data ) = action
-            
-            if command == 'import_file_options_changed':
-                
-                import_file_options = self._import_file_options.GetOptions()
-                
-                self._page_of_images_import.SetImportFileOptions( import_file_options )
-                
-            else: event.Skip()
-            
-        
-    
-    def EventPaste( self, event ):
-    
-        if wx.TheClipboard.Open():
-            
-            data = wx.TextDataObject()
-            
-            wx.TheClipboard.GetData( data )
-            
-            wx.TheClipboard.Close()
-            
-            raw_text = data.GetText()
-            
-            try:
-                
-                for page_url in HydrusData.SplitByLinesep( raw_text ):
-                    
-                    if page_url != '':
-                        
-                        self._page_of_images_import.PendPageURL( page_url )
-                        
-                    
-                
-                self._UpdateStatus()
-                
-            except:
-                
-                wx.MessageBox( 'I could not understand what was in the clipboard' )
-                
-            
-        else:
-            
-            wx.MessageBox( 'I could not get permission to access the clipboard.' )
-            
-        
-    
-    def EventPause( self, event ):
-        
-        self._page_of_images_import.PausePlay()
+        self._page_of_images_import.PausePlayFiles()
         
         self._UpdateStatus()
         
@@ -2238,17 +2010,19 @@ class ManagementPanelImporterThreadWatcher( ManagementPanelImporter ):
         
         self._thread_watcher_panel = ClientGUICommon.StaticBox( self, 'thread watcher' )
         
+        self._thread_subject = ClientGUICommon.BetterStaticText( self._thread_watcher_panel )
+        
         self._thread_input = wx.TextCtrl( self._thread_watcher_panel, style = wx.TE_PROCESS_ENTER )
         self._thread_input.Bind( wx.EVT_KEY_DOWN, self.EventKeyDown )
         
         self._options_panel = wx.Panel( self._thread_watcher_panel )
         
-        self._pause_button = wx.BitmapButton( self._options_panel, bitmap = CC.GlobalBMPs.pause )
-        self._pause_button.Bind( wx.EVT_BUTTON, self.EventPause )
-        
         #
         
-        imports_panel = ClientGUICommon.StaticBox( self._options_panel, 'imports' )
+        imports_panel = ClientGUICommon.StaticBox( self._options_panel, 'file imports' )
+        
+        self._files_pause_button = wx.BitmapButton( imports_panel, bitmap = CC.GlobalBMPs.pause )
+        self._files_pause_button.Bind( wx.EVT_BUTTON, self.EventPauseFiles )
         
         self._current_action = ClientGUICommon.BetterStaticText( imports_panel )
         self._seed_cache_control = ClientGUISeedCache.SeedCacheStatusControl( imports_panel, self._controller )
@@ -2258,84 +2032,86 @@ class ManagementPanelImporterThreadWatcher( ManagementPanelImporter ):
         
         checker_panel = ClientGUICommon.StaticBox( self._options_panel, 'checker' )
         
+        self._file_velocity_status = ClientGUICommon.BetterStaticText( checker_panel )
+        
+        self._thread_pause_button = wx.BitmapButton( checker_panel, bitmap = CC.GlobalBMPs.pause )
+        self._thread_pause_button.Bind( wx.EVT_BUTTON, self.EventPauseThread )
+        
         self._watcher_status = ClientGUICommon.BetterStaticText( checker_panel )
-        self._thread_download_control = ClientGUIControls.NetworkJobControl( checker_panel )
-        
-        ( times_to_check, check_period ) = HC.options[ 'thread_checker_timings' ]
-        
-        self._thread_times_to_check = wx.SpinCtrl( checker_panel, size = ( 80, -1 ), min = 0, max = 65536 )
-        self._thread_times_to_check.SetValue( times_to_check )
-        self._thread_times_to_check.Bind( wx.EVT_SPINCTRL, self.EventTimesToCheck )
-        
-        self._thread_check_period = ClientGUICommon.TimeDeltaButton( checker_panel, min = 30, days = True, hours = True, minutes = True, seconds = True )
-        self._thread_check_period.SetValue( check_period )
-        self._thread_check_period.Bind( ClientGUICommon.EVT_TIME_DELTA, self.EventCheckPeriod )
         
         self._thread_check_now_button = wx.Button( checker_panel, label = 'check now' )
         self._thread_check_now_button.Bind( wx.EVT_BUTTON, self.EventCheckNow )
         
+        self._checker_options_button = ClientGUICommon.BetterButton( checker_panel, 'edit check timings', self._EditCheckerOptions )
+        
+        self._thread_download_control = ClientGUIControls.NetworkJobControl( checker_panel )
+        
         #
         
-        self._import_file_options = ClientGUICollapsible.CollapsibleOptionsImportFiles( self._thread_watcher_panel )
-        self._import_tag_options = ClientGUICollapsible.CollapsibleOptionsTags( self._thread_watcher_panel, namespaces = [ 'filename' ] )
+        self._thread_watcher_import = self._management_controller.GetVariable( 'thread_watcher_import' )
+        
+        ( thread_url, file_import_options, tag_import_options ) = self._thread_watcher_import.GetOptions()
+        
+        ( namespaces, search_value ) = ClientDefaults.GetDefaultNamespacesAndSearchValue( ClientDownloading.GalleryIdentifier( HC.SITE_TYPE_THREAD_WATCHER ) )
+        
+        self._file_import_options = ClientGUIImport.FileImportOptionsButton( self._thread_watcher_panel, file_import_options, self._thread_watcher_import.SetFileImportOptions )
+        self._tag_import_options = ClientGUIImport.TagImportOptionsButton( self._thread_watcher_panel, namespaces, tag_import_options, self._thread_watcher_import.SetTagImportOptions )
         
         #
         
-        imports_panel.AddF( self._current_action, CC.FLAGS_EXPAND_PERPENDICULAR )
-        imports_panel.AddF( self._seed_cache_control, CC.FLAGS_EXPAND_PERPENDICULAR )
-        imports_panel.AddF( self._file_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        hbox_1 = wx.BoxSizer( wx.HORIZONTAL )
+        hbox.Add( self._current_action, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
         
-        hbox_1.AddF( ClientGUICommon.BetterStaticText( checker_panel, label = 'check ' ), CC.FLAGS_VCENTER )
-        hbox_1.AddF( self._thread_times_to_check, CC.FLAGS_VCENTER )
-        hbox_1.AddF( ClientGUICommon.BetterStaticText( checker_panel, label = ' more times' ), CC.FLAGS_VCENTER )
+        hbox.Add( self._files_pause_button, CC.FLAGS_LONE_BUTTON )
         
-        hbox_2 = wx.BoxSizer( wx.HORIZONTAL )
+        imports_panel.Add( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        imports_panel.Add( self._seed_cache_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        imports_panel.Add( self._file_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
         
-        hbox_2.AddF( ClientGUICommon.BetterStaticText( checker_panel, label = 'check every ' ), CC.FLAGS_VCENTER )
-        hbox_2.AddF( self._thread_check_period, CC.FLAGS_VCENTER )
+        #
         
-        checker_panel.AddF( self._watcher_status, CC.FLAGS_EXPAND_PERPENDICULAR )
-        checker_panel.AddF( self._thread_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
-        checker_panel.AddF( hbox_1, CC.FLAGS_LONE_BUTTON )
-        checker_panel.AddF( hbox_2, CC.FLAGS_LONE_BUTTON )
-        checker_panel.AddF( self._thread_check_now_button, CC.FLAGS_LONE_BUTTON )
+        gridbox = wx.FlexGridSizer( 2 )
+        
+        gridbox.AddGrowableCol( 0, 1 )
+        
+        gridbox.Add( self._file_velocity_status, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
+        gridbox.Add( self._thread_pause_button, CC.FLAGS_LONE_BUTTON )
+        gridbox.Add( self._watcher_status, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
+        gridbox.Add( self._thread_check_now_button, CC.FLAGS_VCENTER )
+        
+        checker_panel.Add( gridbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        checker_panel.Add( self._checker_options_button, CC.FLAGS_EXPAND_PERPENDICULAR )
+        checker_panel.Add( self._thread_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._pause_button, CC.FLAGS_LONE_BUTTON )
-        vbox.AddF( imports_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( checker_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( imports_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( checker_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         self._options_panel.SetSizer( vbox )
         
-        self._thread_watcher_panel.AddF( self._thread_input, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._thread_watcher_panel.AddF( self._options_panel, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
-        self._thread_watcher_panel.AddF( self._import_file_options, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._thread_watcher_panel.AddF( self._import_tag_options, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._thread_watcher_panel.Add( self._thread_subject, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._thread_watcher_panel.Add( self._thread_input, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._thread_watcher_panel.Add( self._options_panel, CC.FLAGS_EXPAND_SIZER_BOTH_WAYS )
+        self._thread_watcher_panel.Add( self._file_import_options, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._thread_watcher_panel.Add( self._tag_import_options, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         #
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._sort_by, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._sort_by, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         self._collect_by.Hide()
         
-        vbox.AddF( self._thread_watcher_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._thread_watcher_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         self._MakeCurrentSelectionTagsBox( vbox )
         
         self.SetSizer( vbox )
         
         #
-        
-        self.Bind( wx.EVT_MENU, self.EventMenu )
-        
-        self._controller.sub( self, 'DecrementTimesToCheck', 'decrement_times_to_check' )
-        
-        self._thread_watcher_import = self._management_controller.GetVariable( 'thread_watcher_import' )
         
         seed_cache = self._thread_watcher_import.GetSeedCache()
         
@@ -2344,17 +2120,30 @@ class ManagementPanelImporterThreadWatcher( ManagementPanelImporter ):
         self._thread_watcher_import.SetDownloadControlFile( self._file_download_control )
         self._thread_watcher_import.SetDownloadControlThread( self._thread_download_control )
         
-        ( thread_url, import_file_options, import_tag_options, times_to_check, check_period ) = self._thread_watcher_import.GetOptions()
-        
         self._thread_input.SetValue( thread_url )
         
-        self._import_file_options.SetOptions( import_file_options )
-        self._import_tag_options.SetOptions( import_tag_options )
-        
-        self._thread_times_to_check.SetValue( times_to_check )
-        self._thread_check_period.SetValue( check_period )
-        
         self._UpdateStatus()
+        
+    
+    def _EditCheckerOptions( self ):
+        
+        checker_options = self._thread_watcher_import.GetCheckerOptions()
+        
+        with ClientGUITopLevelWindows.DialogEdit( self._checker_options_button, 'edit check timings' ) as dlg:
+            
+            panel = ClientGUITime.EditCheckerOptions( dlg, checker_options )
+            
+            dlg.SetPanel( panel )
+            
+            if dlg.ShowModal() == wx.ID_OK:
+                
+                new_checker_options = panel.GetValue()
+                
+                self._thread_watcher_import.SetCheckerOptions( new_checker_options )
+                
+                self._UpdateStatus()
+                
+            
         
     
     def _UpdateStatus( self ):
@@ -2365,6 +2154,8 @@ class ManagementPanelImporterThreadWatcher( ManagementPanelImporter ):
             
             if not self._options_panel.IsShown():
                 
+                self._thread_subject.Show()
+                
                 self._options_panel.Show()
                 
                 self.Layout()
@@ -2374,42 +2165,78 @@ class ManagementPanelImporterThreadWatcher( ManagementPanelImporter ):
             
             if self._options_panel.IsShown():
                 
+                self._thread_subject.Hide()
+                
                 self._options_panel.Hide()
                 
                 self.Layout()
                 
             
         
-        ( current_action, watcher_status, check_now, paused ) = self._thread_watcher_import.GetStatus()
+        ( current_action, files_paused, file_velocity_status, next_check_time, watcher_status, thread_subject, thread_status, check_now, thread_paused ) = self._thread_watcher_import.GetStatus()
+        
+        if files_paused:
+            
+            if current_action == '':
+                
+                current_action = 'paused'
+                
+            else:
+                
+                current_action = 'pausing, ' + current_action
+                
+            
+            ClientGUICommon.SetBitmapButtonBitmap( self._files_pause_button, CC.GlobalBMPs.play )
+            
+        else:
+            
+            ClientGUICommon.SetBitmapButtonBitmap( self._files_pause_button, CC.GlobalBMPs.pause )
+            
         
         self._current_action.SetLabelText( current_action )
         
-        if paused:
+        self._file_velocity_status.SetLabelText( file_velocity_status )
+        
+        if thread_paused:
             
-            if self._thread_times_to_check.GetValue() > 0 or check_now:
+            if watcher_status == '':
                 
                 watcher_status = 'paused'
                 
             
-            if self._pause_button.GetBitmap() != CC.GlobalBMPs.play:
-                
-                self._pause_button.SetBitmap( CC.GlobalBMPs.play )
-                
+            ClientGUICommon.SetBitmapButtonBitmap( self._thread_pause_button, CC.GlobalBMPs.play )
             
         else:
             
-            if self._pause_button.GetBitmap() != CC.GlobalBMPs.pause:
+            if watcher_status == '':
                 
-                self._pause_button.SetBitmap( CC.GlobalBMPs.pause )
+                watcher_status = 'next check ' + HydrusData.ConvertTimestampToPrettyPending( next_check_time )
                 
+            
+            ClientGUICommon.SetBitmapButtonBitmap( self._thread_pause_button, CC.GlobalBMPs.pause )
             
         
         self._watcher_status.SetLabelText( watcher_status )
         
-        if current_action == '' and paused:
+        if thread_status == ClientImporting.CHECKER_STATUS_404:
             
-            current_action = 'paused'
+            self._thread_pause_button.Disable()
             
+        elif thread_status == ClientImporting.CHECKER_STATUS_DEAD:
+            
+            self._thread_pause_button.Disable()
+            
+        else:
+            
+            self._thread_pause_button.Enable()
+            
+        
+        if thread_subject in ( '', 'unknown subject' ):
+            
+            thread_subject = 'no subject'
+            
+        
+        self._thread_subject.SetLabelText( thread_subject )
         
         if check_now:
             
@@ -2421,18 +2248,6 @@ class ManagementPanelImporterThreadWatcher( ManagementPanelImporter ):
             
         
     
-    def DecrementTimesToCheck( self, page_key ):
-        
-        if page_key == self._page_key:
-            
-            current_value = self._thread_times_to_check.GetValue()
-            
-            new_value = max( 0, current_value - 1 )
-            
-            self._thread_times_to_check.SetValue( new_value )
-            
-        
-    
     def EventCheckNow( self, event ):
         
         self._thread_watcher_import.CheckNow()
@@ -2440,11 +2255,18 @@ class ManagementPanelImporterThreadWatcher( ManagementPanelImporter ):
         self._UpdateStatus()
         
     
-    def EventCheckPeriod( self, event ):
+    def EventPauseFiles( self, event ):
         
-        check_period = self._thread_check_period.GetValue()
+        self._thread_watcher_import.PausePlayFiles()
         
-        self._thread_watcher_import.SetCheckPeriod( check_period )
+        self._UpdateStatus()
+        
+    
+    def EventPauseThread( self, event ):
+        
+        self._thread_watcher_import.PausePlayThread()
+        
+        self._UpdateStatus()
         
     
     def EventKeyDown( self, event ):
@@ -2455,15 +2277,7 @@ class ManagementPanelImporterThreadWatcher( ManagementPanelImporter ):
             
             thread_url = self._thread_input.GetValue()
             
-            if thread_url == '': return
-            
-            try:
-                
-                ( thread_url, host, board, thread_id ) = ClientDownloading.ParseImageboardThreadURL( thread_url )
-                
-            except Exception as e:
-                
-                HydrusData.ShowException( e )
+            if thread_url == '':
                 
                 return
                 
@@ -2478,44 +2292,6 @@ class ManagementPanelImporterThreadWatcher( ManagementPanelImporter ):
             
             event.Skip()
             
-        
-    
-    def EventMenu( self, event ):
-        
-        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
-        
-        if action is not None:
-            
-            ( command, data ) = action
-            
-            if command == 'import_file_options_changed':
-                
-                import_file_options = self._import_file_options.GetOptions()
-                
-                self._thread_watcher_import.SetImportFileOptions( import_file_options )
-                
-            elif command == 'import_tag_options_changed':
-                
-                import_tag_options = self._import_tag_options.GetOptions()
-                
-                self._thread_watcher_import.SetImportTagOptions( import_tag_options )
-                
-            else: event.Skip()
-            
-        
-    
-    def EventPause( self, event ):
-        
-        self._thread_watcher_import.PausePlay()
-        
-        self._UpdateStatus()
-        
-    
-    def EventTimesToCheck( self, event ):
-        
-        times_to_check = self._thread_times_to_check.GetValue()
-        
-        self._thread_watcher_import.SetTimesToCheck( times_to_check )
         
     
     def SetSearchFocus( self, page_key ):
@@ -2571,42 +2347,37 @@ class ManagementPanelImporterURLs( ManagementPanelImporter ):
         self._file_download_control = ClientGUIControls.NetworkJobControl( self._url_panel )
         self._overall_gauge = ClientGUICommon.Gauge( self._url_panel )
         
-        self._seed_cache_button = ClientGUICommon.BetterBitmapButton( self._url_panel, CC.GlobalBMPs.seed_cache, self._SeedCache )
-        self._seed_cache_button.SetToolTipString( 'open detailed file import status' )
+        self._urls_import = self._management_controller.GetVariable( 'urls_import' )
         
-        self._url_input = wx.TextCtrl( self._url_panel, style = wx.TE_PROCESS_ENTER )
-        self._url_input.Bind( wx.EVT_KEY_DOWN, self.EventKeyDown )
+        # replace all this with a seed cache panel sometime
+        self._seed_cache_button = ClientGUISeedCache.SeedCacheButton( self._url_panel, self._controller, self._urls_import.GetSeedCache )
         
-        self._url_paste = wx.Button( self._url_panel, label = 'paste urls' )
-        self._url_paste.Bind( wx.EVT_BUTTON, self.EventPaste )
+        self._url_input = ClientGUICommon.TextAndPasteCtrl( self._url_panel, self._PendURLs )
         
-        self._import_file_options = ClientGUICollapsible.CollapsibleOptionsImportFiles( self._url_panel )
+        file_import_options = self._urls_import.GetOptions()
+        
+        self._file_import_options = ClientGUIImport.FileImportOptionsButton( self._url_panel, file_import_options, self._urls_import.SetFileImportOptions )
         
         #
         
-        input_hbox = wx.BoxSizer( wx.HORIZONTAL )
-        
-        input_hbox.AddF( self._url_input, CC.FLAGS_EXPAND_BOTH_WAYS )
-        input_hbox.AddF( self._url_paste, CC.FLAGS_VCENTER )
-        
-        self._url_panel.AddF( self._pause_button, CC.FLAGS_LONE_BUTTON )
-        self._url_panel.AddF( self._overall_status, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._url_panel.AddF( self._current_action, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._url_panel.AddF( self._overall_gauge, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._url_panel.AddF( self._seed_cache_button, CC.FLAGS_LONE_BUTTON )
-        self._url_panel.AddF( self._file_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._url_panel.AddF( input_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        self._url_panel.AddF( self._import_file_options, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._url_panel.Add( self._pause_button, CC.FLAGS_LONE_BUTTON )
+        self._url_panel.Add( self._overall_status, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._url_panel.Add( self._current_action, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._url_panel.Add( self._overall_gauge, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._url_panel.Add( self._seed_cache_button, CC.FLAGS_LONE_BUTTON )
+        self._url_panel.Add( self._file_download_control, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._url_panel.Add( self._url_input, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._url_panel.Add( self._file_import_options, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         #
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._sort_by, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._sort_by, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
         
         self._collect_by.Hide()
         
-        vbox.AddF( self._url_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._url_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         self._MakeCurrentSelectionTagsBox( vbox )
         
@@ -2614,33 +2385,20 @@ class ManagementPanelImporterURLs( ManagementPanelImporter ):
         
         #
         
-        self.Bind( wx.EVT_MENU, self.EventMenu )
-        
-        self._urls_import = self._management_controller.GetVariable( 'urls_import' )
-        
         self._urls_import.SetDownloadControlFile( self._file_download_control )
-        
-        import_file_options = self._urls_import.GetOptions()
-        
-        self._import_file_options.SetOptions( import_file_options )
         
         self._UpdateStatus()
         
-        HG.client_controller.sub( self, 'SetURLInput', 'set_page_url_input' )
+        HG.client_controller.sub( self, 'PendURL', 'pend_raw_url' )
         
     
-    def _SeedCache( self ):
+    def _PendURLs( self, urls ):
         
-        seed_cache = self._urls_import.GetSeedCache()
+        urls = [ url for url in urls if url.startswith( 'http' ) ]
         
-        title = 'file import status'
-        frame_key = 'file_import_status'
+        self._urls_import.PendURLs( urls )
         
-        frame = ClientGUITopLevelWindows.FrameThatTakesScrollablePanel( self, title, frame_key )
-        
-        panel = ClientGUISeedCache.EditSeedCachePanel( frame, self._controller, seed_cache )
-        
-        frame.SetPanel( panel )
+        self._UpdateStatus()
         
     
     def _UpdateStatus( self ):
@@ -2678,95 +2436,11 @@ class ManagementPanelImporterURLs( ManagementPanelImporter ):
         
         if paused:
             
-            if self._pause_button.GetBitmap() != CC.GlobalBMPs.play:
-                
-                self._pause_button.SetBitmap( CC.GlobalBMPs.play )
-                
+            ClientGUICommon.SetBitmapButtonBitmap( self._pause_button, CC.GlobalBMPs.play )
             
         else:
             
-            if self._pause_button.GetBitmap() != CC.GlobalBMPs.pause:
-                
-                self._pause_button.SetBitmap( CC.GlobalBMPs.pause )
-                
-            
-        
-    
-    def EventKeyDown( self, event ):
-        
-        ( modifier, key ) = ClientData.ConvertKeyEventToSimpleTuple( event )
-        
-        if key in ( wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER ):
-            
-            url = self._url_input.GetValue()
-            
-            if url != '':
-                
-                self._urls_import.PendURLs( ( url, ) )
-                
-                self._url_input.SetValue( '' )
-                
-                self._UpdateStatus()
-                
-            
-        else:
-            
-            event.Skip()
-            
-        
-    
-    def EventMenu( self, event ):
-        
-        action = ClientCaches.MENU_EVENT_ID_TO_ACTION_CACHE.GetAction( event.GetId() )
-        
-        if action is not None:
-            
-            ( command, data ) = action
-            
-            if command == 'import_file_options_changed':
-                
-                import_file_options = self._import_file_options.GetOptions()
-                
-                self._urls_import.SetImportFileOptions( import_file_options )
-                
-            else:
-                
-                event.Skip()
-                
-            
-        
-    
-    def EventPaste( self, event ):
-    
-        if wx.TheClipboard.Open():
-            
-            data = wx.TextDataObject()
-            
-            wx.TheClipboard.GetData( data )
-            
-            wx.TheClipboard.Close()
-            
-            raw_text = data.GetText()
-            
-            try:
-                
-                urls = HydrusData.SplitByLinesep( raw_text )
-                
-                if len( urls ) > 0:
-                    
-                    self._urls_import.PendURLs( urls )
-                    
-                
-                self._UpdateStatus()
-                
-            except:
-                
-                wx.MessageBox( 'I could not understand what was in the clipboard' )
-                
-            
-        else:
-            
-            wx.MessageBox( 'I could not get permission to access the clipboard.' )
+            ClientGUICommon.SetBitmapButtonBitmap( self._pause_button, CC.GlobalBMPs.pause )
             
         
     
@@ -2777,19 +2451,17 @@ class ManagementPanelImporterURLs( ManagementPanelImporter ):
         self._UpdateStatus()
         
     
-    def SetSearchFocus( self, page_key ):
+    def PendURL( self, page_key, url ):
         
         if page_key == self._page_key:
             
-            self._url_input.SetFocus()
+            self._PendURLs( ( url, ) )
             
         
     
-    def SetURLInput( self, page_key, url ):
+    def SetSearchFocus( self, page_key ):
         
         if page_key == self._page_key:
-            
-            self._url_input.SetValue( url )
             
             self._url_input.SetFocus()
             
@@ -2856,8 +2528,8 @@ class ManagementPanelPetitions( ManagementPanel ):
             
             hbox = wx.BoxSizer( wx.HORIZONTAL )
             
-            hbox.AddF( st, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
-            hbox.AddF( button, CC.FLAGS_VCENTER )
+            hbox.Add( st, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
+            hbox.Add( button, CC.FLAGS_VCENTER )
             
             content_type_hboxes.append( hbox )
             
@@ -2890,70 +2562,40 @@ class ManagementPanelPetitions( ManagementPanel ):
         
         #
         
-        self._petitions_info_panel.AddF( self._refresh_num_petitions_button, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._petitions_info_panel.Add( self._refresh_num_petitions_button, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         for hbox in content_type_hboxes:
             
-            self._petitions_info_panel.AddF( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+            self._petitions_info_panel.Add( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
             
         
         check_hbox = wx.BoxSizer( wx.HORIZONTAL )
         
-        check_hbox.AddF( check_all, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
-        check_hbox.AddF( flip_selected, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
-        check_hbox.AddF( check_none, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
+        check_hbox.Add( check_all, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
+        check_hbox.Add( flip_selected, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
+        check_hbox.Add( check_none, CC.FLAGS_VCENTER_EXPAND_DEPTH_ONLY )
         
-        self._petition_panel.AddF( ClientGUICommon.BetterStaticText( self._petition_panel, label = 'Double-click a petition to see its files, if it has them.' ), CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._petition_panel.AddF( self._action_text, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._petition_panel.AddF( self._reason_text, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._petition_panel.AddF( check_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
-        self._petition_panel.AddF( self._contents, CC.FLAGS_EXPAND_BOTH_WAYS )
-        self._petition_panel.AddF( self._process, CC.FLAGS_EXPAND_PERPENDICULAR )
-        self._petition_panel.AddF( self._modify_petitioner, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._petition_panel.Add( ClientGUICommon.BetterStaticText( self._petition_panel, label = 'Double-click a petition to see its files, if it has them.' ), CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._petition_panel.Add( self._action_text, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._petition_panel.Add( self._reason_text, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._petition_panel.Add( check_hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        self._petition_panel.Add( self._contents, CC.FLAGS_EXPAND_BOTH_WAYS )
+        self._petition_panel.Add( self._process, CC.FLAGS_EXPAND_PERPENDICULAR )
+        self._petition_panel.Add( self._modify_petitioner, CC.FLAGS_EXPAND_PERPENDICULAR )
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._sort_by, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._collect_by, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._sort_by, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        vbox.Add( self._collect_by, CC.FLAGS_EXPAND_PERPENDICULAR )
         
-        vbox.AddF( self._petitions_info_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._petition_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
+        vbox.Add( self._petitions_info_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._petition_panel, CC.FLAGS_EXPAND_BOTH_WAYS )
         
         self._MakeCurrentSelectionTagsBox( vbox )
         
         self.SetSizer( vbox )
         
         self._controller.sub( self, 'RefreshQuery', 'refresh_query' )
-        
-    
-    def _BreakApprovedContentsIntoChunks( self, approved_contents ):
-        
-        chunks_of_approved_contents = []
-        chunk_of_approved_contents = []
-        weight = 0
-        
-        for content in approved_contents:
-            
-            chunk_of_approved_contents.append( content )
-            
-            weight += content.GetVirtualWeight()
-            
-            if weight > 50:
-                
-                chunks_of_approved_contents.append( chunk_of_approved_contents )
-                
-                chunk_of_approved_contents = []
-                
-                weight = 0
-                
-            
-        
-        if len( chunk_of_approved_contents ) > 0:
-            
-            chunks_of_approved_contents.append( chunk_of_approved_contents )
-            
-        
-        return chunks_of_approved_contents
         
     
     def _CheckAll( self ):
@@ -3030,7 +2672,9 @@ class ManagementPanelPetitions( ManagementPanel ):
             
             for content in contents:
                 
-                self._contents.Append( content.ToString(), content )
+                content_string = self._contents.EscapeMnemonics( content.ToString() )
+                
+                self._contents.Append( content_string, content )
                 
             
             self._contents.SetChecked( range( self._contents.GetCount() ) )
@@ -3081,45 +2725,87 @@ class ManagementPanelPetitions( ManagementPanel ):
     
     def _FetchNumPetitions( self ):
         
-        def do_it():
+        def do_it( service ):
+            
+            def wx_draw( n_p_i ):
+                
+                if not self:
+                    
+                    return
+                    
+                
+                self._num_petition_info = n_p_i
+                
+                self._DrawNumPetitions()
+                
+            
+            def wx_reset():
+                
+                if not self:
+                    
+                    return
+                    
+                
+                self._refresh_num_petitions_button.SetLabelText( 'refresh counts' )
+                
             
             try:
                 
-                response = self._service.Request( HC.GET, 'num_petitions' )
+                response = service.Request( HC.GET, 'num_petitions' )
                 
-                self._num_petition_info = response[ 'num_petitions' ]
+                num_petition_info = response[ 'num_petitions' ]
                 
-                wx.CallAfter( self._DrawNumPetitions )
+                wx.CallAfter( wx_draw, num_petition_info )
                 
             finally:
                 
-                self._refresh_num_petitions_button.SetLabelText( 'refresh counts' )
+                wx.CallAfter( wx_reset )
                 
             
         
         self._refresh_num_petitions_button.SetLabelText( u'Fetching\u2026' )
         
-        self._controller.CallToThread( do_it )
+        self._controller.CallToThread( do_it, self._service )
         
     
     def _FetchPetition( self, content_type, status ):
         
         ( st, button ) = self._petition_types_to_controls[ ( content_type, status ) ]
         
-        def do_it():
+        def wx_setpet( petition ):
+            
+            if not self:
+                
+                return
+                
+            
+            self._current_petition = petition
+            
+            self._DrawCurrentPetition()
+            
+        
+        def wx_done():
+            
+            if not self:
+                
+                return
+                
+            
+            button.Enable()
+            button.SetLabelText( 'fetch ' + HC.content_status_string_lookup[ status ] + ' ' + HC.content_type_string_lookup[ content_type ] + ' petition' )
+            
+        
+        def do_it( service ):
             
             try:
                 
-                response = self._service.Request( HC.GET, 'petition', { 'content_type' : content_type, 'status' : status } )
+                response = service.Request( HC.GET, 'petition', { 'content_type' : content_type, 'status' : status } )
                 
-                self._current_petition = response[ 'petition' ]
-                
-                wx.CallAfter( self._DrawCurrentPetition )
+                wx.CallAfter( wx_setpet, response[ 'petition' ] )
                 
             finally:
                 
-                wx.CallAfter( button.Enable )
-                wx.CallAfter( button.SetLabelText, 'fetch ' + HC.content_status_string_lookup[ status ] + ' ' + HC.content_type_string_lookup[ content_type ] + ' petition' )
+                wx.CallAfter( wx_done )
                 
             
         
@@ -3133,7 +2819,7 @@ class ManagementPanelPetitions( ManagementPanel ):
         button.Disable()
         button.SetLabelText( u'Fetching\u2026' )
         
-        self._controller.CallToThread( do_it )
+        self._controller.CallToThread( do_it, self._service )
         
     
     def _FlipSelected( self ):
@@ -3159,9 +2845,9 @@ class ManagementPanelPetitions( ManagementPanel ):
         
         panel.Collect( self._page_key, self._collect_by.GetChoice() )
         
-        panel.Sort( self._page_key, self._sort_by.GetChoice() )
+        panel.Sort( self._page_key, self._sort_by.GetSort() )
         
-        self._controller.pub( 'swap_media_panel', self._page_key, panel )
+        self._page.SwapMediaPanel( panel )
         
     
     def EventContentDoubleClick( self, event ):
@@ -3183,7 +2869,37 @@ class ManagementPanelPetitions( ManagementPanel ):
     
     def EventProcess( self, event ):
         
-        def do_it( approved_contents, denied_contents, petition ):
+        def break_approved_contents_into_chunks( approved_contents ):
+            
+            chunks_of_approved_contents = []
+            chunk_of_approved_contents = []
+            weight = 0
+            
+            for content in approved_contents:
+                
+                chunk_of_approved_contents.append( content )
+                
+                weight += content.GetVirtualWeight()
+                
+                if weight > 50:
+                    
+                    chunks_of_approved_contents.append( chunk_of_approved_contents )
+                    
+                    chunk_of_approved_contents = []
+                    
+                    weight = 0
+                    
+                
+            
+            if len( chunk_of_approved_contents ) > 0:
+                
+                chunks_of_approved_contents.append( chunk_of_approved_contents )
+                
+            
+            return chunks_of_approved_contents
+            
+        
+        def do_it( controller, service, petition_service_key, approved_contents, denied_contents, petition ):
             
             try:
                 
@@ -3208,7 +2924,7 @@ class ManagementPanelPetitions( ManagementPanel ):
                     job_key = None
                     
                 
-                chunks_of_approved_contents = self._BreakApprovedContentsIntoChunks( approved_contents )
+                chunks_of_approved_contents = break_approved_contents_into_chunks( approved_contents )
                 
                 for chunk_of_approved_contents in chunks_of_approved_contents:
                     
@@ -3226,9 +2942,9 @@ class ManagementPanelPetitions( ManagementPanel ):
                     
                     ( update, content_updates ) = petition.GetApproval( chunk_of_approved_contents )
                     
-                    self._service.Request( HC.POST, 'update', { 'client_to_server_update' : update } )
+                    service.Request( HC.POST, 'update', { 'client_to_server_update' : update } )
                     
-                    self._controller.WriteSynchronous( 'content_updates', { self._petition_service_key : content_updates } )
+                    controller.WriteSynchronous( 'content_updates', { petition_service_key : content_updates } )
                     
                     num_done += len( chunk_of_approved_contents )
                     
@@ -3247,7 +2963,7 @@ class ManagementPanelPetitions( ManagementPanel ):
                     
                     update = petition.GetDenial( denied_contents )
                     
-                    self._service.Request( HC.POST, 'update', { 'client_to_server_update' : update } )
+                    service.Request( HC.POST, 'update', { 'client_to_server_update' : update } )
                     
                 
             finally:
@@ -3257,7 +2973,17 @@ class ManagementPanelPetitions( ManagementPanel ):
                     job_key.Delete()
                     
                 
-                wx.CallAfter( self._FetchNumPetitions )
+                def wx_fetch():
+                    
+                    if not self:
+                        
+                        return
+                        
+                    
+                    self._FetchNumPetitions()
+                    
+                
+                wx.CallAfter( wx_fetch )
                 
             
         
@@ -3278,7 +3004,7 @@ class ManagementPanelPetitions( ManagementPanel ):
                 
             
         
-        HG.client_controller.CallToThread( do_it, approved_contents, denied_contents, self._current_petition )
+        HG.client_controller.CallToThread( do_it, self._controller, self._service, self._petition_service_key, approved_contents, denied_contents, self._current_petition )
         
         self._current_petition = None
         
@@ -3319,6 +3045,8 @@ class ManagementPanelQuery( ManagementPanel ):
         
         self._query_job_key = ClientThreading.JobKey( cancellable = True )
         
+        self._query_job_key.Finish()
+        
         initial_predicates = file_search_context.GetPredicates()
         
         if self._search_enabled:
@@ -3330,16 +3058,29 @@ class ManagementPanelQuery( ManagementPanel ):
             synchronised = self._management_controller.GetVariable( 'synchronised' )
             
             self._searchbox = ClientGUIACDropdown.AutoCompleteDropdownTagsRead( self._search_panel, self._page_key, file_search_context, media_callable = self._page.GetMedia, synchronised = synchronised )
-            self._search_panel.AddF( self._current_predicates_box, CC.FLAGS_EXPAND_PERPENDICULAR )
-            self._search_panel.AddF( self._searchbox, CC.FLAGS_EXPAND_PERPENDICULAR )
+            
+            self._cancel_search_button = ClientGUICommon.BetterBitmapButton( self._search_panel, CC.GlobalBMPs.stop, self._CancelSearch )
+            
+            self._cancel_search_button.Hide()
+            
+            hbox = wx.BoxSizer( wx.HORIZONTAL )
+            
+            hbox.Add( self._searchbox, CC.FLAGS_EXPAND_BOTH_WAYS )
+            hbox.Add( self._cancel_search_button, CC.FLAGS_VCENTER )
+            
+            self._search_panel.Add( self._current_predicates_box, CC.FLAGS_EXPAND_PERPENDICULAR )
+            self._search_panel.Add( hbox, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
             
         
         vbox = wx.BoxSizer( wx.VERTICAL )
         
-        vbox.AddF( self._sort_by, CC.FLAGS_EXPAND_PERPENDICULAR )
-        vbox.AddF( self._collect_by, CC.FLAGS_EXPAND_PERPENDICULAR )
+        vbox.Add( self._sort_by, CC.FLAGS_EXPAND_SIZER_PERPENDICULAR )
+        vbox.Add( self._collect_by, CC.FLAGS_EXPAND_PERPENDICULAR )
         
-        if self._search_enabled: vbox.AddF( self._search_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+        if self._search_enabled:
+            
+            vbox.Add( self._search_panel, CC.FLAGS_EXPAND_PERPENDICULAR )
+            
         
         self._MakeCurrentSelectionTagsBox( vbox )
         
@@ -3347,48 +3088,15 @@ class ManagementPanelQuery( ManagementPanel ):
         
         self._controller.sub( self, 'AddMediaResultsFromQuery', 'add_media_results_from_query' )
         self._controller.sub( self, 'SearchImmediately', 'notify_search_immediately' )
-        self._controller.sub( self, 'ShowQuery', 'file_query_done' )
         self._controller.sub( self, 'RefreshQuery', 'refresh_query' )
         self._controller.sub( self, 'ChangeFileServicePubsub', 'change_file_service' )
         
     
-    def _DoQuery( self ):
-        
-        self._controller.ResetIdleTimer()
+    def _CancelSearch( self ):
         
         self._query_job_key.Cancel()
         
-        self._query_job_key = ClientThreading.JobKey()
-        
-        if self._management_controller.GetVariable( 'search_enabled' ) and self._management_controller.GetVariable( 'synchronised' ):
-            
-            try:
-                
-                file_search_context = self._searchbox.GetFileSearchContext()
-                
-                current_predicates = self._current_predicates_box.GetPredicates()
-                
-                file_search_context.SetPredicates( current_predicates )
-                
-                self._management_controller.SetVariable( 'file_search_context', file_search_context )
-                
-                file_service_key = file_search_context.GetFileServiceKey()
-                
-                if len( current_predicates ) > 0:
-                    
-                    self._controller.StartFileQuery( self._page_key, self._query_job_key, file_search_context )
-                    
-                    panel = ClientGUIMedia.MediaPanelLoading( self._page, self._page_key, file_service_key )
-                    
-                else:
-                    
-                    panel = ClientGUIMedia.MediaPanelThumbnails( self._page, self._page_key, file_service_key, [] )
-                    
-                
-                self._controller.pub( 'swap_media_panel', self._page_key, panel )
-                
-            except: wx.MessageBox( traceback.format_exc() )
-            
+        self._UpdateCancelButton()
         
     
     def _MakeCurrentSelectionTagsBox( self, sizer ):
@@ -3412,7 +3120,89 @@ class ManagementPanelQuery( ManagementPanel ):
         
         tags_box.SetTagsBox( t )
         
-        sizer.AddF( tags_box, CC.FLAGS_EXPAND_BOTH_WAYS )
+        sizer.Add( tags_box, CC.FLAGS_EXPAND_BOTH_WAYS )
+        
+    
+    def _RefreshQuery( self ):
+        
+        self._controller.ResetIdleTimer()
+        
+        self._query_job_key.Cancel()
+        
+        if self._management_controller.GetVariable( 'search_enabled' ):
+            
+            if self._management_controller.GetVariable( 'synchronised' ):
+                
+                file_search_context = self._searchbox.GetFileSearchContext()
+                
+                current_predicates = self._current_predicates_box.GetPredicates()
+                
+                file_search_context.SetPredicates( current_predicates )
+                
+                self._management_controller.SetVariable( 'file_search_context', file_search_context )
+                
+                file_service_key = file_search_context.GetFileServiceKey()
+                
+                if len( current_predicates ) > 0:
+                    
+                    self._query_job_key = ClientThreading.JobKey()
+                    
+                    self._controller.CallToThread( self.THREADDoQuery, self._controller, self._page_key, self._query_job_key, file_search_context )
+                    
+                    panel = ClientGUIMedia.MediaPanelLoading( self._page, self._page_key, file_service_key )
+                    
+                else:
+                    
+                    panel = ClientGUIMedia.MediaPanelThumbnails( self._page, self._page_key, file_service_key, [] )
+                    
+                
+                self._page.SwapMediaPanel( panel )
+                
+            
+        else:
+            
+            self._sort_by.BroadcastSort()
+            
+        
+    
+    def _UpdateCancelButton( self ):
+        
+        if self._search_enabled:
+            
+            do_layout = False
+            
+            if self._query_job_key.IsDone():
+                
+                if self._cancel_search_button.IsShown():
+                    
+                    self._cancel_search_button.Hide()
+                    
+                    do_layout = True
+                    
+                
+            else:
+                
+                # don't show it immediately to save on flickeriness on short queries
+                
+                WAIT_PERIOD = 3.0
+                
+                can_show = HydrusData.TimeHasPassedFloat( self._query_job_key.GetCreationTime() + WAIT_PERIOD )
+                
+                if can_show and not self._cancel_search_button.IsShown():
+                    
+                    self._cancel_search_button.Show()
+                    
+                    do_layout = True
+                    
+                
+            
+            if do_layout:
+                
+                self.Layout()
+                
+                self._searchbox.ForceSizeCalcNow()
+                
+            
         
     
     def AddMediaResultsFromQuery( self, query_job_key, media_results ):
@@ -3454,7 +3244,7 @@ class ManagementPanelQuery( ManagementPanel ):
         
         if page_key == self._page_key:
             
-            self._DoQuery()
+            self._RefreshQuery()
             
         
     
@@ -3464,7 +3254,7 @@ class ManagementPanelQuery( ManagementPanel ):
             
             self._management_controller.SetVariable( 'synchronised', value )
             
-            self._DoQuery()
+            self._RefreshQuery()
             
         
     
@@ -3477,11 +3267,9 @@ class ManagementPanelQuery( ManagementPanel ):
             
         
     
-    def ShowQuery( self, page_key, query_job_key, media_results ):
+    def ShowFinishedQuery( self, query_job_key, media_results ):
         
-        if page_key == self._page_key and query_job_key == self._query_job_key:
-            
-            current_predicates = self._current_predicates_box.GetPredicates()
+        if query_job_key == self._query_job_key:
             
             file_service_key = self._management_controller.GetKey( 'file_service' )
             
@@ -3489,9 +3277,9 @@ class ManagementPanelQuery( ManagementPanel ):
             
             panel.Collect( self._page_key, self._collect_by.GetChoice() )
             
-            panel.Sort( self._page_key, self._sort_by.GetChoice() )
+            panel.Sort( self._page_key, self._sort_by.GetSort() )
             
-            self._controller.pub( 'swap_media_panel', self._page_key, panel )
+            self._page.SwapMediaPanel( panel )
             
         
     
@@ -3503,8 +3291,59 @@ class ManagementPanelQuery( ManagementPanel ):
         
         if len( initial_predicates ) > 0 and not file_search_context.IsComplete():
             
-            wx.CallAfter( self._DoQuery )
+            wx.CallAfter( self._RefreshQuery )
             
         
-
+    
+    def THREADDoQuery( self, controller, page_key, query_job_key, search_context ):
+        
+        def wx_code():
+            
+            query_job_key.Finish()
+            
+            if not self:
+                
+                return
+                
+            
+            self.ShowFinishedQuery( query_job_key, media_results )
+            
+        
+        QUERY_CHUNK_SIZE = 256
+        
+        query_hash_ids = controller.Read( 'file_query_ids', search_context, query_job_key )
+        
+        if query_job_key.IsCancelled():
+            
+            return
+            
+        
+        media_results = []
+        
+        for sub_query_hash_ids in HydrusData.SplitListIntoChunks( query_hash_ids, QUERY_CHUNK_SIZE ):
+            
+            if query_job_key.IsCancelled():
+                
+                return
+                
+            
+            more_media_results = controller.Read( 'media_results_from_ids', sub_query_hash_ids )
+            
+            media_results.extend( more_media_results )
+            
+            controller.pub( 'set_num_query_results', page_key, len( media_results ), len( query_hash_ids ) )
+            
+            controller.WaitUntilViewFree()
+            
+        
+        search_context.SetComplete()
+        
+        wx.CallAfter( wx_code )
+        
+    
+    def TIMERPageUpdate( self ):
+        
+        self._UpdateCancelButton()
+        
+    
 management_panel_types_to_classes[ MANAGEMENT_TYPE_QUERY ] = ManagementPanelQuery

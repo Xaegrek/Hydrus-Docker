@@ -16,45 +16,59 @@ import wx
 
 def DAEMONCheckExportFolders( controller ):
     
-    options = controller.GetOptions()
-    
-    if not options[ 'pause_export_folders_sync' ]:
+    if not controller.options[ 'pause_export_folders_sync' ]:
         
-        export_folders = controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER )
+        HG.export_folders_running = True
         
-        for export_folder in export_folders:
+        try:
             
-            if options[ 'pause_export_folders_sync' ]:
+            export_folder_names = controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER )
+            
+            for name in export_folder_names:
                 
-                break
+                export_folder = controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_EXPORT_FOLDER, name )
+                
+                if controller.options[ 'pause_export_folders_sync' ] or HydrusThreading.IsThreadShuttingDown():
+                    
+                    break
+                    
+                
+                export_folder.DoWork()
                 
             
-            export_folder.DoWork()
+        finally:
+            
+            HG.export_folders_running = False
             
         
     
 def DAEMONCheckImportFolders( controller ):
     
-    options = controller.GetOptions()
-    
-    if not options[ 'pause_import_folders_sync' ]:
+    if not controller.options[ 'pause_import_folders_sync' ]:
         
-        import_folders = controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_FOLDER )
+        HG.import_folders_running = True
         
-        for import_folder in import_folders:
+        try:
             
-            if options[ 'pause_import_folders_sync' ]:
+            import_folder_names = controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_FOLDER )
+            
+            for name in import_folder_names:
                 
-                break
+                import_folder = controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_IMPORT_FOLDER, name )
+                
+                if controller.options[ 'pause_import_folders_sync' ] or HydrusThreading.IsThreadShuttingDown():
+                    
+                    break
+                    
+                
+                import_folder.DoWork()
                 
             
-            import_folder.DoWork()
+        finally:
+            
+            HG.import_folders_running = False
             
         
-    
-def DAEMONCheckMouseIdle( controller ):
-    
-    wx.CallAfter( controller.CheckMouseIdle )
     
 def DAEMONDownloadFiles( controller ):
     
@@ -112,16 +126,23 @@ def DAEMONDownloadFiles( controller ):
                                 
                                 file_repository.Request( HC.GET, 'file', { 'hash' : hash }, temp_path = temp_path )
                                 
-                                controller.WaitUntilPubSubsEmpty()
+                                controller.WaitUntilModelFree()
                                 
-                                automatic_archive = False
                                 exclude_deleted = False # this is the important part here
+                                allow_decompression_bombs = True
                                 min_size = None
+                                max_size = None
+                                max_gif_size = None
                                 min_resolution = None
+                                max_resolution = None
+                                automatic_archive = False
                                 
-                                import_file_options = ClientData.ImportFileOptions( automatic_archive = automatic_archive, exclude_deleted = exclude_deleted, min_size = min_size, min_resolution = min_resolution )
+                                file_import_options = ClientImporting.FileImportOptions()
                                 
-                                file_import_job = ClientImporting.FileImportJob( temp_path, import_file_options )
+                                file_import_options.SetPreImportOptions( exclude_deleted, allow_decompression_bombs, min_size, max_size, max_gif_size, min_resolution, max_resolution )
+                                file_import_options.SetPostImportOptions( automatic_archive )
+                                
+                                file_import_job = ClientImporting.FileImportJob( temp_path, file_import_options )
                                 
                                 client_files_manager.ImportFile( file_import_job )
                                 
@@ -209,11 +230,13 @@ def DAEMONMaintainTrash( controller ):
             
             service_keys_to_content_updates = { CC.TRASH_SERVICE_KEY : [ content_update ] }
             
-            controller.WaitUntilPubSubsEmpty()
+            controller.WaitUntilModelFree()
             
             controller.WriteSynchronous( 'content_updates', service_keys_to_content_updates )
             
             service_info = controller.Read( 'service_info', CC.TRASH_SERVICE_KEY )
+            
+            time.sleep( 2 )
             
         
     
@@ -234,11 +257,13 @@ def DAEMONMaintainTrash( controller ):
             
             service_keys_to_content_updates = { CC.TRASH_SERVICE_KEY : [ content_update ] }
             
-            controller.WaitUntilPubSubsEmpty()
+            controller.WaitUntilModelFree()
             
             controller.WriteSynchronous( 'content_updates', service_keys_to_content_updates )
             
             hashes = controller.Read( 'trash_hashes', limit = 10, minimum_age = max_age )
+            
+            time.sleep( 2 )
             
         
     
@@ -252,50 +277,79 @@ def DAEMONSynchroniseAccounts( controller ):
     
     for service in services:
         
+        if HydrusThreading.IsThreadShuttingDown():
+            
+            return
+            
+        
         service.SyncAccount()
         
     
 def DAEMONSynchroniseRepositories( controller ):
     
-    options = controller.GetOptions()
-    
-    if not options[ 'pause_repo_sync' ]:
+    if not controller.options[ 'pause_repo_sync' ]:
         
         services = controller.services_manager.GetServices( HC.REPOSITORIES )
         
         for service in services:
             
-            if options[ 'pause_repo_sync' ]:
+            if HydrusThreading.IsThreadShuttingDown():
                 
-                break
+                return
+                
+            
+            if controller.options[ 'pause_repo_sync' ]:
+                
+                return
                 
             
             service.Sync( only_process_when_idle = True )
             
-        
-        time.sleep( 5 )
+            if HydrusThreading.IsThreadShuttingDown():
+                
+                return
+                
+            
+            time.sleep( 3 )
+            
         
     
 
 def DAEMONSynchroniseSubscriptions( controller ):
     
-    options = controller.GetOptions()
+    subscription_names = list( controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION ) )
     
-    subscription_names = controller.Read( 'serialisable_names', HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION )
+    if controller.new_options.GetBoolean( 'process_subs_in_random_order' ):
+        
+        random.shuffle( subscription_names )
+        
+    else:
+        
+        subscription_names.sort()
+        
     
-    for name in subscription_names:
+    HG.subscriptions_running = True
+    
+    try:
         
-        p1 = options[ 'pause_subs_sync' ]
-        p2 = controller.ViewIsShutdown()
-        
-        if p1 or p2:
+        for name in subscription_names:
             
-            return
+            p1 = controller.options[ 'pause_subs_sync' ]
+            p2 = HydrusThreading.IsThreadShuttingDown()
+            
+            if p1 or p2:
+                
+                return
+                
+            
+            subscription = controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION, name )
+            
+            subscription.Sync()
             
         
-        subscription = controller.Read( 'serialisable_named', HydrusSerialisable.SERIALISABLE_TYPE_SUBSCRIPTION, name )
+    finally:
         
-        subscription.Sync()
+        HG.subscriptions_running = False
         
     
 def DAEMONUPnP( controller ):

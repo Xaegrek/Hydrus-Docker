@@ -1,7 +1,9 @@
 import gc
 import HydrusConstants as HC
 import HydrusData
+import HydrusExceptions
 import HydrusGlobals as HG
+import HydrusThreading
 import os
 import psutil
 import send2trash
@@ -13,6 +15,9 @@ import sys
 import tempfile
 import threading
 import traceback
+
+TEMP_PATH_LOCK = threading.Lock()
+IN_USE_TEMP_PATHS = set()
 
 def AppendPathUntilNoConflicts( path ):
     
@@ -59,18 +64,41 @@ def CleanUpTempPath( os_file_handle, temp_path ):
         
     except OSError:
         
-        gc.collect()
-        
-        try:
+        with TEMP_PATH_LOCK:
             
-            os.remove( temp_path )
-            
-        except OSError:
-            
-            HydrusData.Print( 'Could not delete the temporary file ' + temp_path )
+            IN_USE_TEMP_PATHS.add( ( HydrusData.GetNow(), temp_path ) )
             
         
     
+def CleanUpOldTempPaths():
+    
+    with TEMP_PATH_LOCK:
+        
+        data = list( IN_USE_TEMP_PATHS )
+        
+        for row in data:
+            
+            ( time_failed, temp_path ) = row
+            
+            if HydrusData.TimeHasPassed( time_failed + 60 ):
+                
+                try:
+                    
+                    os.remove( temp_path )
+                    
+                    IN_USE_TEMP_PATHS.discard( row )
+                    
+                except OSError:
+                    
+                    if HydrusData.TimeHasPassed( time_failed + 600 ):
+                        
+                        IN_USE_TEMP_PATHS.discard( row )
+                        
+                    
+                
+            
+        
+
 def ConvertAbsPathToPortablePath( abs_path, base_dir_override = None ):
     
     try:
@@ -214,25 +242,54 @@ def DeletePath( path ):
             
         
     
+def DirectoryIsWritable( path ):
+    
+    try:
+        
+        t = tempfile.TemporaryFile( dir = path )
+        
+        t.close()
+        
+        return True
+        
+    except:
+        
+        return False
+        
+    
 def FilterFreePaths( paths ):
     
     free_paths = []
     
     for path in paths:
         
-        try:
+        if HydrusThreading.IsThreadShuttingDown():
             
-            os.rename( path, path ) # rename a path to itself
+            raise HydrusExceptions.ShutdownException()
+            
+        
+        if PathIsFree( path ):
             
             free_paths.append( path )
-            
-        except OSError as e: # 'already in use by another process'
-            
-            HydrusData.Print( 'Already in use: ' + path )
             
         
     
     return free_paths
+    
+def GetDefaultLaunchPath():
+    
+    if HC.PLATFORM_WINDOWS:
+        
+        return 'windows is called directly'
+        
+    elif HC.PLATFORM_OSX:
+        
+        return 'open "%path%"'
+        
+    elif HC.PLATFORM_LINUX:
+        
+        return 'xdg-open "%path%"'
+        
     
 def GetDevice( path ):
     
@@ -263,8 +320,18 @@ def GetFreeSpace( path ):
     
     return disk_usage.free
     
-def GetTempFile(): return tempfile.TemporaryFile()
-def GetTempFileQuick(): return tempfile.SpooledTemporaryFile( max_size = 1024 * 1024 * 4 )
+def GetTempFile():
+    
+    return tempfile.TemporaryFile()
+    
+def GetTempFileQuick():
+    
+    return tempfile.SpooledTemporaryFile( max_size = 1024 * 1024 * 4 )
+    
+def GetTempDir():
+    
+    return tempfile.mkdtemp( prefix = 'hydrus' )
+    
 def GetTempPath( suffix = '' ):
     
     return tempfile.mkstemp( suffix = suffix, prefix = 'hydrus' )
@@ -325,11 +392,9 @@ def LaunchDirectory( path ):
                 cmd = 'xdg-open'
                 
             
-            cmd += ' "' + path + '"'
-            
             # setsid call un-childs this new process
             
-            process = subprocess.Popen( shlex.split( cmd ), preexec_fn = os.setsid, startupinfo = HydrusData.GetHideTerminalSubprocessStartupInfo() )
+            process = subprocess.Popen( [ cmd, path ], preexec_fn = os.setsid, startupinfo = HydrusData.GetHideTerminalSubprocessStartupInfo() )
             
             process.wait()
             
@@ -343,38 +408,54 @@ def LaunchDirectory( path ):
     
     thread.start()
     
-def LaunchFile( path ):
+def LaunchFile( path, launch_path = None ):
     
-    def do_it():
+    def do_it( launch_path ):
         
-        if HC.PLATFORM_WINDOWS:
+        if HC.PLATFORM_WINDOWS and launch_path is None:
             
             os.startfile( path )
             
         else:
             
-            if HC.PLATFORM_OSX:
+            if launch_path is None:
                 
-                cmd = 'open'
-                
-            elif HC.PLATFORM_LINUX:
-                
-                cmd = 'xdg-open'
+                launch_path = GetDefaultLaunchPath()
                 
             
-            cmd += ' "' + path + '"'
+            cmd = launch_path.replace( '%path%', path )
             
-            # setsid call un-childs this new process
+            if HC.PLATFORM_WINDOWS:
+                
+                preexec_fn = None
+                
+            else:
+                
+                # setsid call un-childs this new process
+                
+                preexec_fn = os.setsid
+                
+                cmd = shlex.split( cmd )
+                
             
-            process = subprocess.Popen( shlex.split( cmd ), preexec_fn = os.setsid, startupinfo = HydrusData.GetHideTerminalSubprocessStartupInfo() )
-            
-            process.wait()
-            
-            process.communicate()
+            try:
+                
+                process = subprocess.Popen( cmd, preexec_fn = preexec_fn, startupinfo = HydrusData.GetHideTerminalSubprocessStartupInfo() )
+                
+                process.wait()
+                
+                process.communicate()
+                
+            except Exception as e:
+                
+                HydrusData.ShowText( 'Could not launch a file! Command used was:' + os.linesep + HydrusData.ToUnicode( cmd ) )
+                
+                HydrusData.ShowException( e )
+                
             
         
     
-    thread = threading.Thread( target = do_it )
+    thread = threading.Thread( target = do_it, args = ( launch_path, ) )
     
     thread.daemon = True
     
@@ -413,6 +494,11 @@ def MakeFileWritable( path ):
     
 def MergeFile( source, dest ):
     
+    if not os.path.isdir( source ):
+        
+        MakeFileWritable( source )
+        
+    
     if PathsHaveSameSizeAndDate( source, dest ):
         
         DeletePath( source )
@@ -436,60 +522,93 @@ def MergeFile( source, dest ):
     
     return True
     
-def MergeTree( source, dest ):
+def MergeTree( source, dest, text_update_hook = None ):
     
     pauser = HydrusData.BigJobPauser()
     
     if not os.path.exists( dest ):
         
-        shutil.move( source, dest )
+        try:
+            
+            shutil.move( source, dest )
+            
+        except OSError:
+            
+            # if there were read only files in source and this was partition to partition, the copy2 goes ok but the subsequent source unlink fails
+            # so, if it seems this has happened, let's just try a walking mergetree, which should be able to deal with these readonlies on a file-by-file basis
+            if os.path.exists( dest ):
+                
+                MergeTree( source, dest, text_update_hook = text_update_hook )
+                
+            
         
     else:
         
-        MakeSureDirectoryExists( dest )
-        
-        num_errors = 0
-        
-        for ( root, dirnames, filenames ) in os.walk( source ):
+        if len( os.listdir( dest ) ) == 0:
             
-            dest_root = root.replace( source, dest )
-            
-            for dirname in dirnames:
+            for filename in os.listdir( source ):
                 
-                pauser.Pause()
+                source_path = os.path.join( source, filename )
+                dest_path = os.path.join( dest, filename )
                 
-                source_path = os.path.join( root, dirname )
-                dest_path = os.path.join( dest_root, dirname )
-                
-                MakeSureDirectoryExists( dest_path )
-                
-                shutil.copystat( source_path, dest_path )
-                
-            
-            for filename in filenames:
-                
-                if num_errors > 5:
+                if not os.path.isdir( source_path ):
                     
-                    raise Exception( 'Too many errors, directory move abandoned.' )
+                    MakeFileWritable( source_path )
                     
                 
-                pauser.Pause()
+                shutil.move( source_path, dest_path )
                 
-                source_path = os.path.join( root, filename )
-                dest_path = os.path.join( dest_root, filename )
+            
+        else:
+            
+            num_errors = 0
+            
+            for ( root, dirnames, filenames ) in os.walk( source ):
                 
-                ok = MergeFile( source_path, dest_path )
-                
-                if not ok:
+                if text_update_hook is not None:
                     
-                    num_errors += 1
+                    text_update_hook( 'Copying ' + root + '.' )
+                    
+                
+                dest_root = root.replace( source, dest )
+                
+                for dirname in dirnames:
+                    
+                    pauser.Pause()
+                    
+                    source_path = os.path.join( root, dirname )
+                    dest_path = os.path.join( dest_root, dirname )
+                    
+                    MakeSureDirectoryExists( dest_path )
+                    
+                    shutil.copystat( source_path, dest_path )
+                    
+                
+                for filename in filenames:
+                    
+                    if num_errors > 5:
+                        
+                        raise Exception( 'Too many errors, directory move abandoned.' )
+                        
+                    
+                    pauser.Pause()
+                    
+                    source_path = os.path.join( root, filename )
+                    dest_path = os.path.join( dest_root, filename )
+                    
+                    ok = MergeFile( source_path, dest_path )
+                    
+                    if not ok:
+                        
+                        num_errors += 1
+                        
                     
                 
             
-        
-        if num_errors == 0:
-            
-            DeletePath( source )
+            if num_errors == 0:
+                
+                DeletePath( source )
+                
             
         
     
@@ -597,7 +716,7 @@ def OpenFileLocation( path ):
             
         elif HC.PLATFORM_LINUX:
             
-            raise NotImplementedError()
+            raise NotImplementedError( 'Linux cannot open file locations!' )
             
         
         process = subprocess.Popen( shlex.split( cmd ) )
@@ -624,6 +743,21 @@ def PathsHaveSameSizeAndDate( path1, path2 ):
             
             return True
             
+        
+    
+    return False
+    
+def PathIsFree( path ):
+    
+    try:
+        
+        os.rename( path, path ) # rename a path to itself
+        
+        return True
+        
+    except OSError as e: # 'already in use by another process'
+        
+        HydrusData.Print( 'Already in use: ' + path )
         
     
     return False

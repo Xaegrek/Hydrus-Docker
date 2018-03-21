@@ -1,6 +1,4 @@
 import collections
-import hashlib
-import httplib
 import HydrusConstants as HC
 import HydrusExceptions
 import os
@@ -11,7 +9,6 @@ import sys
 import threading
 import time
 import traceback
-import urllib
 import HydrusData
 import HydrusGlobals as HG
 

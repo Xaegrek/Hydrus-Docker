@@ -1,6 +1,7 @@
 import HydrusConstants as HC
 import HydrusData
 import HydrusExceptions
+import HydrusText
 import os
 import shlex
 import socket
@@ -44,14 +45,17 @@ def GetExternalIP():
         
         ( output, error ) = p.communicate()
         
-        if error is not None and len( error ) > 0: raise Exception( 'Problem while trying to fetch External IP:' + os.linesep * 2 + HydrusData.ToUnicode( error ) )
+        if error is not None and len( error ) > 0:
+            
+            raise Exception( 'Problem while trying to fetch External IP:' + os.linesep * 2 + HydrusData.ToUnicode( error ) )
+            
         else:
             
             try:
                 
-                lines = HydrusData.SplitByLinesep( output )
+                lines = HydrusText.DeserialiseNewlinedTexts( output )
                 
-                i = lines.index( ' i protocol exPort->inAddr:inPort description remoteHost leaseTime' )
+                i = lines.index( 'i protocol exPort->inAddr:inPort description remoteHost leaseTime' )
                 
                 '''ExternalIPAddress = ip'''
                 
@@ -128,9 +132,9 @@ def GetUPnPMappings():
         
         try:
             
-            lines = HydrusData.SplitByLinesep( output )
+            lines = HydrusText.DeserialiseNewlinedTexts( output )
             
-            i = lines.index( ' i protocol exPort->inAddr:inPort description remoteHost leaseTime' )
+            i = lines.index( 'i protocol exPort->inAddr:inPort description remoteHost leaseTime' )
             
             data_lines = []
             
@@ -175,7 +179,10 @@ def GetUPnPMappings():
             
         except Exception as e:
             
+            HydrusData.Print( 'UPnP problem:' )
             HydrusData.Print( traceback.format_exc() )
+            HydrusData.Print( 'Full response follows:' )
+            HydrusData.Print( output )
             
             raise Exception( 'Problem while trying to parse UPnP mappings:' + os.linesep * 2 + HydrusData.ToUnicode( e ) )
             
