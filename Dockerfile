@@ -2,13 +2,13 @@ FROM blott/hydrus-base:latest
 
 WORKDIR /hydrus/
 
-COPY ./bin/ /hydrus/bin/
-COPY ./db/ /hydrus/db/
-COPY ./help/ /hydrus/help/
-COPY ./include/ /hydrus/include/
-COPY ./static/ /hydrus/static/
-COPY ./client.py /hydrus/client.py
-COPY ./server.py /hydrus/server.py
+COPY ./hydrus/bin/ /hydrus/bin/
+COPY ./hydrus/db/ /hydrus/db/
+COPY ./hydrus/help/ /hydrus/help/
+COPY ./hydrus/include/ /hydrus/include/
+COPY ./hydrus/static/ /hydrus/static/
+COPY ./hydrus/client.py /hydrus/client.py
+COPY ./hydrus/server.py /hydrus/server.py
 
 VOLUME /hydrus/db/
 
