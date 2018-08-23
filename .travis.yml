@@ -7,12 +7,12 @@ env:
 - SUFFIX=-arm
 branches:
   only:
-  - /^v.+\-blott?.+/
+  - /^v.+\-Xaegrek?.+/
 script:
 - if [ -z "$TRAVIS_TAG" ]; then exit 0; fi
 - docker run --rm --privileged multiarch/qemu-user-static:register --reset
-- docker build -f Dockerfile${SUFFIX} -t blott/hydrus:build .
+- docker build -f Dockerfile${SUFFIX} -t Xaegrek/Hydrus-Docker:build .
 - docker login -u="$DOCKER_USER" -p="$DOCKER_PASS"
 - TAG=${TRAVIS_TAG}${SUFFIX}
-- docker tag blott/hydrus:build blott/hydrus:$TAG
-- docker push blott/hydrus:$TAG
+- docker tag Xaegrek/Hydrus-Docker:build Xaegrek/Hydrus-Docker:$TAG
+- docker push Xaegrek/Hydrus-Docker:$TAG
