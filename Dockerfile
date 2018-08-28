@@ -16,4 +16,4 @@ EXPOSE 45870 45871 45872
 
 ENTRYPOINT ["python"]
 
-CMD ["./hydrus/server.py -d="data/"]
+CMD ["/hydrus/server.py -d="data/"]
