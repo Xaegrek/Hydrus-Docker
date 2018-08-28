@@ -12,7 +12,7 @@ COPY ./hydrus/server.py ./hydrus/server.py
 
 VOLUME /hydrus/db/
 
-EXPOSE 45870
+EXPOSE 45870 45871 45872
 
 ENTRYPOINT ["python"]
 
