@@ -14,6 +14,6 @@ VOLUME /hydrus/db/
 
 EXPOSE 45870 45871 45872
 
-ENTRYPOINT ["python2"]
+ENTRYPOINT ["python2", "/hydrus/server.py"]
 
-CMD ["./hydrus/server.py -d="data/"]
+CMD ["-d "/data/"]
