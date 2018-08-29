@@ -7,7 +7,6 @@
 [a href='https://github.com/Xaegrek/Hydrus-Docker' target='_blank'Latest hydrus docker changes changes[/a]
   </Changes>
   <Name>Hydrus Server Docker</Name>
-  <Support>https://github.com/Xaegrek/Hydrus-Docker</Support>
   <Description>
     [b]Hydrus Server Docker[/b][br][br]
  
@@ -20,15 +19,12 @@
   <Privileged>true</Privileged>
   <Networking>
     <Mode>host</Mode>
-    <Publish/>
   </Networking>
   <Data>
     <Volume>
-      <HostDir></HostDir>
       <ContainerDir>/hydrus/db</ContainerDir>
       <Mode>rw</Mode>
     </Volume>
   </Data>
 <Icon>https://github.com/hydrusnetwork/hydrus/blob/c45aa2c9142202486dceb0b9fc42e3240e0c56bb/static/hydrus.png</Icon>
-<ExtraParams></ExtraParams>
 </Container>
