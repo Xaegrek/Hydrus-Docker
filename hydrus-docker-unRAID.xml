@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Container>
-  <Beta>False</Beta>
+  <Beta>True</Beta>
   <Category>MediaServer:Video MediaServer:Photos</Category>
   <Date>2018-08-27</Date>
   <Changes>
@@ -10,7 +10,7 @@
   <Description>
     [b]Hydrus Server Docker[/b][br][br]
  
-    A private local booru-style server.
+    A private local booru-style server. 
   </Description>
   <Project>https://github.com/Xaegrek/Hydrus-Docker</Project>
   <Registry>https://hub.docker.com/r/xaegrek/hydrus-docker/</Registry>
